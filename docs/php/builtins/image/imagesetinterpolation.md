@@ -2,7 +2,7 @@
 title: "imagesetinterpolation()"
 description: "Selects the interpolation method used when resampling."
 sidebar:
-  order: 530
+  order: 537
 ---
 
 ## imagesetinterpolation()

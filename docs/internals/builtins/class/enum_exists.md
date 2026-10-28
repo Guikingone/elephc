@@ -2,7 +2,7 @@
 title: "enum_exists() - internals"
 description: "Compiler internals for enum_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 84
+  order: 85
 ---
 
 ## `enum_exists()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/enum_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/enum_exists.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

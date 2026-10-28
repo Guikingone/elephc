@@ -9,7 +9,7 @@ echo "is_list(list):  " . (array_is_list($list) ? "true" : "false") . "\n";
 echo "is_list(hash):  " . (array_is_list($hash) ? "true" : "false") . "\n";
 echo "first key:      " . array_key_first($hash) . "\n";
 echo "last key:       " . array_key_last($hash) . "\n";
-// PHP 8.4: the edge VALUES directly, or null for an empty array.
+// PHP 8.5: the edge VALUES directly, or null for an empty array.
 echo "first value:    " . array_first($list) . "\n";
 echo "last value:     " . array_last($hash) . "\n";
 echo "empty first:    " . var_export(array_first([]), true) . "\n";

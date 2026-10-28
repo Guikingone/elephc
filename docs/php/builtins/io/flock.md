@@ -2,7 +2,7 @@
 title: "flock()"
 description: "Portable advisory file locking."
 sidebar:
-  order: 322
+  order: 328
 ---
 
 ## flock()

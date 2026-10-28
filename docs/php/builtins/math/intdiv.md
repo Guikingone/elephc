@@ -2,7 +2,7 @@
 title: "intdiv()"
 description: "Integer division."
 sidebar:
-  order: 583
+  order: 591
 ---
 
 ## intdiv()

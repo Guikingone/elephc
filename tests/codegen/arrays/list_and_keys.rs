@@ -1,6 +1,6 @@
 //! Purpose:
 //! Integration tests for the `array_is_list`, `array_key_first`, and `array_key_last` builtins,
-//! and for their PHP 8.4 value counterparts `array_first` and `array_last`.
+//! and for their PHP 8.5 value counterparts `array_first` and `array_last`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -112,7 +112,7 @@ echo (array_key_last([]) === null) ? "-last-null" : "-last-val";
     assert_eq!(out, "first-null-last-null");
 }
 
-// --- array_first / array_last (PHP 8.4) ---
+// --- array_first / array_last (PHP 8.5) ---
 
 /// Verifies array_first()/array_last() return the edge VALUES in insertion order.
 /// Fixture: int, string, nested, and heterogeneous lists; string-keyed, out-of-order int-keyed,
@@ -154,6 +154,24 @@ echo \ARRAY_FIRST(["z" => "zed"]), " ", Array_Last(["q", "r"]), "\n";
         out,
         "3 4\nalpha gamma\n1,2 3,4,5\n1 3.5\n1 3\nfive two\nten 1\n2 2\nNULL\nNULL\n7 9 10 20\nzed r\n"
     );
+}
+
+/// Value-edge reads preserve the internal pointer and follow live hash reference entries.
+#[test]
+fn test_array_first_last_preserve_pointer_and_follow_references() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["first" => "a", "middle" => "b", "last" => "c"];
+next($values);
+echo array_first($values), ":", array_last($values), ":", key($values), ":", current($values), "\n";
+foreach ($values as &$value) { $value .= "!"; }
+unset($value);
+echo array_first($values), ":", array_last($values), ":", key($values), ":", current($values), "\n";
+$empty = [];
+var_dump(array_first($empty), array_last($empty), key($empty));
+"#,
+    );
+    assert_eq!(out, "a:c:middle:b\na!:c!:middle:b!\nNULL\nNULL\nNULL\n");
 }
 
 /// Verifies array_first()/array_last() release every box they hand back.

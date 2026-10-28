@@ -2,7 +2,7 @@
 title: "cal_info()"
 description: "Returns a calendar's month names, abbreviations, and day count."
 sidebar:
-  order: 188
+  order: 189
 ---
 
 ## cal_info()

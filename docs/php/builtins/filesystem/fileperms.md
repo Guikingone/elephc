@@ -2,7 +2,7 @@
 title: "fileperms()"
 description: "Gets file permissions."
 sidebar:
-  order: 273
+  order: 274
 ---
 
 ## fileperms()

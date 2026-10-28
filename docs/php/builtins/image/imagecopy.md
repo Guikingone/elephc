@@ -2,7 +2,7 @@
 title: "imagecopy()"
 description: "Copies a rectangle from one image into another."
 sidebar:
-  order: 483
+  order: 490
 ---
 
 ## imagecopy()

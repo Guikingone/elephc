@@ -2,7 +2,7 @@
 title: "ob_get_level() - internals"
 description: "Compiler internals for ob_get_level(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 351
+  order: 358
 ---
 
 ## `ob_get_level()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_level.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_level.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

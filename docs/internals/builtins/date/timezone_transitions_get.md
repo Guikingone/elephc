@@ -2,7 +2,7 @@
 title: "timezone_transitions_get() - internals"
 description: "Compiler internals for timezone_transitions_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 253
+  order: 254
 ---
 
 ## `timezone_transitions_get()` - internals

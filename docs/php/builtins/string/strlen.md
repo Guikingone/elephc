@@ -2,7 +2,7 @@
 title: "strlen()"
 description: "Returns the length of a string."
 sidebar:
-  order: 925
+  order: 949
 ---
 
 ## strlen()

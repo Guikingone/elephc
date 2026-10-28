@@ -2,7 +2,7 @@
 title: "hrtime()"
 description: "Returns the current high-resolution time."
 sidebar:
-  order: 228
+  order: 229
 ---
 
 ## hrtime()

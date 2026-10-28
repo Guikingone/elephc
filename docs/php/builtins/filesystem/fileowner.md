@@ -2,7 +2,7 @@
 title: "fileowner()"
 description: "Gets file owner."
 sidebar:
-  order: 272
+  order: 273
 ---
 
 ## fileowner()

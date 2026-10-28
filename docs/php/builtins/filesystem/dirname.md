@@ -2,7 +2,7 @@
 title: "dirname()"
 description: "Returns a parent directory's path."
 sidebar:
-  order: 263
+  order: 264
 ---
 
 ## dirname()

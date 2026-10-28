@@ -2,7 +2,7 @@
 title: "copy()"
 description: "Copies a file."
 sidebar:
-  order: 262
+  order: 263
 ---
 
 ## copy()

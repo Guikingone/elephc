@@ -2,7 +2,7 @@
 title: "exif_tagname()"
 description: "Returns the name of an EXIF tag index."
 sidebar:
-  order: 451
+  order: 458
 ---
 
 ## exif_tagname()

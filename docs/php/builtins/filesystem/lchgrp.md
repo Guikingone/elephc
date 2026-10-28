@@ -2,7 +2,7 @@
 title: "lchgrp()"
 description: "Changes group ownership of a symlink."
 sidebar:
-  order: 287
+  order: 288
 ---
 
 ## lchgrp()

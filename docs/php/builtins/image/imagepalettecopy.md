@@ -2,7 +2,7 @@
 title: "imagepalettecopy()"
 description: "Copies one image's palette onto another."
 sidebar:
-  order: 521
+  order: 528
 ---
 
 ## imagepalettecopy()

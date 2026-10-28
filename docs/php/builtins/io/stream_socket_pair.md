@@ -2,7 +2,7 @@
 title: "stream_socket_pair()"
 description: "Creates a pair of connected, indistinguishable socket streams."
 sidebar:
-  order: 391
+  order: 398
 ---
 
 ## stream_socket_pair()

@@ -2,7 +2,7 @@
 title: "fgets()"
 description: "Gets line from file pointer."
 sidebar:
-  order: 318
+  order: 319
 ---
 
 ## fgets()

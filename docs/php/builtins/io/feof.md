@@ -2,7 +2,7 @@
 title: "feof()"
 description: "Tests for end-of-file on a file pointer."
 sidebar:
-  order: 314
+  order: 315
 ---
 
 ## feof()

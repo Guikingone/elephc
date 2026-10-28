@@ -2,7 +2,7 @@
 title: "opcache_reset() - internals"
 description: "Compiler internals for opcache_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 645
+  order: 664
 ---
 
 ## `opcache_reset()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:153](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L153) (`opcache_reset`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:231](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L231) (`opcache_reset`)
 - **Function symbol**: `opcache_reset()`
 
 
@@ -38,7 +38,7 @@ function opcache_reset(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+Calls prefer the program's native OPcache prelude declarations, which carry the configured directives, live cache, and API restrictions. Dedicated interpreter handlers cover programs without those declarations ([`crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/registry/dispatch/mod.rs)). This route does not use an `eval_builtin!` binding.
 
 ## Cross-references
 

@@ -32,6 +32,17 @@ pub(super) fn lower_arg_with_signature(
     arg: &Expr,
 ) -> crate::ir::ValueId {
     if sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(&arg.kind, ExprKind::ArrayAccess { array, .. }
+            if instance_object_class_for_ir(ctx, array)
+                .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
+    {
+        let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+        lower_ref_assign_array_elem(ctx, &alias, arg, arg.span);
+        publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
+        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        return lower_arg_with_signature(ctx, sig, index, &variable);
+    }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(
             &arg.kind,
             ExprKind::ArrayAccess { array, .. }
@@ -56,8 +67,66 @@ pub(super) fn lower_arg_with_signature(
     if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
         return lowered.value;
     }
-    let lowered = lower_expr(ctx, arg);
+    let lowered = match sig.params.get(index) {
+        Some((_, param_ty)) => lower_expr_for_parameter(ctx, arg, param_ty),
+        None => lower_expr(ctx, arg),
+    };
+    record_pointer_reference_argument(ctx, sig, index, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Records a local passed to a pointer by-reference parameter for the final storage check.
+fn record_pointer_reference_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let Some((_, param_ty)) = sig.params.get(index) else {
+        return;
+    };
+    if !matches!(param_ty.codegen_repr(), PhpType::Pointer(_)) {
+        return;
+    }
+    // `@$x` and `p: $x` still bind `$x`'s own storage.
+    let mut place = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind {
+        place = value;
+    }
+    if let ExprKind::Variable(name) = &place.kind {
+        retype_local_for_pointer_reference(ctx, name, param_ty);
+        ctx.record_pointer_reference_binding(name, place.span, param_ty);
+    }
+}
+
+/// Gives a plain frame local bound to a pointer by-reference parameter a pointer-word type.
+///
+/// The callee reads and writes a raw pointer word through the reference. A local that holds only
+/// `null` leaves the call as the parameter's `?ptr<T>` (the callee may store an address, which
+/// is also the type the checker records for it), and one that holds a packed record address
+/// becomes that record's `ptr<T>`. The retype widens the frame slot to a pointer word, where a
+/// `null` already stored is address 0 (`pointer_word_storage` in `crate::ir::builder`). Pointer
+/// locals keep their own type, and a global, static or reference-bound name keeps its storage,
+/// which `LoweringContext::refuse_pointer_reference_bindings` then refuses.
+fn retype_local_for_pointer_reference(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    param_ty: &PhpType,
+) {
+    if !ctx.local_is_plain_frame_slot(name) {
+        return;
+    }
+    let retyped = match ctx.local_type(name) {
+        PhpType::Void | PhpType::Never if crate::types::is_nullable_pointer_type(param_ty) => {
+            param_ty.clone()
+        }
+        PhpType::Packed(class) => PhpType::Pointer(Some(class)),
+        _ => return,
+    };
+    ctx.set_local_type(name, retyped);
 }
 
 /// Captures a by-value runtime-parser argument while preserving by-reference places.
@@ -93,6 +162,25 @@ pub(super) fn promote_captured_reference_argument(ctx: &mut LoweringContext<'_, 
         },
         ExprKind::NamedArg { value, .. } => promote_captured_reference_argument(ctx, value),
         _ => {},
+    }
+}
+
+/// Prepares a write-only output in source order without changing later pre-call reads.
+pub(super) fn prepare_captured_output_argument(
+    ctx: &mut LoweringContext<'_, '_>, arg: &Expr, output_type: &PhpType,
+) -> Option<(String, PhpType)> {
+    let ExprKind::Variable(name) = &arg.kind else { return None; };
+    let previous = ctx.local_type(name);
+    if ctx.local_slots.get(name).is_some_and(|slot| ctx.slot_is_initialized(*slot)) {
+        // Existing aliases already share the final boxed frame representation.
+        // Reboxing their payload here would replace that shared cell's value.
+        if previous.codegen_repr() != output_type.codegen_repr() {
+            ctx.set_local_type(name, PhpType::Mixed);
+        }
+        Some((name.clone(), previous))
+    } else {
+        promote_captured_reference_argument(ctx, arg);
+        None
     }
 }
 
@@ -348,6 +436,12 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_callable_param_storage(ctx, value, Some(arg.span));
     }
+    if param_ty == PhpType::Iterable
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return unbox_iterable_param_storage(ctx, value, Some(arg.span));
+    }
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
@@ -357,6 +451,53 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         }
     }
     value
+}
+
+/// Extracts a statically checked array whose source storage is a boxed Mixed cell.
+///
+/// A parameter compiled for RAW array storage — `array: Heap(Array)`, which is what the SPL and
+/// prelude classes declare — receives a cell POINTER when the argument came out of a property,
+/// because `prop_get` on a declared `array` yields `Heap(Mixed)`. Nothing converted between the
+/// two, so the callee read the cell's header words as the array's:
+///
+/// ```text
+/// class Holder { public array $items = [3, 4]; }
+/// $ai = new ArrayIterator((new Holder())->items);
+/// echo $ai->count();                        // php: 2, elephc: 4 — and foreach yielded nothing
+/// ```
+///
+/// The checker admits the call because a declared `array` is
+/// `array<mixed>|array<mixed, mixed>` and every member is assignable to `array<mixed>`; the
+/// disagreement is purely one of STORAGE, which is why only the lowering can answer it. A user
+/// function is unaffected and always was: its parameter slot is `Heap(Mixed)` too, so both sides
+/// already agreed.
+///
+/// The unbox is a plain `Op::MixedUnbox`, the instruction the `Callable` case below uses, and it
+/// has to stay one: it is the only conversion here that does not care which LAYOUT the payload
+/// has. A declared `array` property holds a packed array or a hash depending on what was stored,
+/// while the SPL parameter says `array<mixed>` either way. The shared container conversion
+/// merge temps and `??` use (`coerce_container_to_mixed_payload`) looks tempting — it also
+/// canonicalizes slots and carries the boxed-element-slot guard — but it trusts the STATIC layout:
+/// routed through it, `new ArrayObject($h->pairs)` ran the indexed-array conversion over a hash
+/// and died with SIGBUS, where this unbox prints `a1b2`. That conversion is right where the static
+/// type came from a real array; at this boundary it came from a declaration.
+///
+/// No guard is needed, because only a `mixed`-element contract can reach this arm. The checker
+/// admits a declared `array` at `array<mixed>` (each member of `array<mixed>|array<mixed, mixed>`
+/// is assignable to it) but refuses it at `array<int>`: the `array<mixed, mixed>` member is not an
+/// `array<int>`. Under a `mixed`-element contract the callee reads the payload through its own
+/// value_type tag, so raw and boxed slots are both read correctly. If a typed contract ever becomes
+/// reachable here, the guard has to come with it — and so does a layout check.
+pub(super) fn unbox_array_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    param_ty: PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let effects = Op::mixed_unbox_effects(&param_ty);
+    let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, param_ty, effects, span);
+    release_coerced_source_if_owned(ctx, value, span);
+    result
 }
 
 /// Extracts a statically checked callable whose merge storage became a Mixed cell.
@@ -373,6 +514,21 @@ pub(super) fn unbox_callable_param_storage(
         PhpType::Callable,
         Op::mixed_unbox_effects(&PhpType::Callable),
         span,
+    );
+    release_coerced_source_if_owned(ctx, value, span);
+    result
+}
+
+/// Extracts a checked iterable's raw array, hash or Traversable pointer from a Mixed cell.
+/// The layout-neutral unbox acquires its payload before retiring the cell's source lease.
+fn unbox_iterable_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let result = ctx.emit_owned_value(
+        Op::MixedUnbox, vec![value.value], None, PhpType::Iterable,
+        Op::mixed_unbox_effects(&PhpType::Iterable), span,
     );
     release_coerced_source_if_owned(ctx, value, span);
     result
@@ -461,6 +617,20 @@ pub(super) fn coerce_operands_to_params(
             let coerced = unbox_callable_param_storage(ctx, lowered, None);
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if param_ty == PhpType::Iterable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+            let coerced = unbox_iterable_param_storage(ctx, lowered, None);
+            operands[index] =
+                root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+            let coerced = unbox_array_param_storage(ctx, lowered, param_ty.clone(), None);
+            operands[index] =
+                root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
@@ -500,6 +670,10 @@ fn operand_needs_param_coercion(
         || (param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (param_ty == PhpType::Callable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || (param_ty == PhpType::Iterable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (sig.declared_params.get(index).copied().unwrap_or(false)
             && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
@@ -720,20 +894,27 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     args: &[Expr],
     trim_trailing_defaults: bool,
     capture_values: bool,
-    capture_output_index: Option<usize>,
+    capture_output_index: Option<(usize, PhpType)>,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
+    if crate::func_args::sig_collects_surplus_args(sig) {
+        if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, "", false) {
+            return operands;
+        }
+    }
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         );
         return coerce_operands_to_params(ctx, sig, operands);
     }
-    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None, capture_values) {
+    if let Some(operands) = lower_positional_spread_args_with_signature(
+        ctx, sig, args, None, capture_values, capture_output_index.as_ref(),
+    ) {
         return operands;
     }
     let static_spread_args = if has_static_call_spread_args(args) {
@@ -769,10 +950,12 @@ pub(super) fn lower_args_with_signature_options_for_capture(
             .iter()
             .enumerate()
             .map(|(index, arg)| {
-                if capture_output_index == Some(index) {
-                    promote_captured_reference_argument(ctx, arg);
-                }
+                let previous = capture_output_index.as_ref().filter(|(output, _)| *output == index)
+                    .and_then(|(_, ty)| if capture_values {
+                        promote_captured_reference_argument(ctx, arg); None
+                    } else { prepare_captured_output_argument(ctx, arg, ty) });
                 let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+                if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
                 if !capture_values && index + 1 < args.len() {
                     root_prior_argument_preserving_reference_place(
                         ctx, sig, index, arg, value,
@@ -788,11 +971,17 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         .iter()
         .enumerate()
         .map(|(index, arg)| {
-            if capture_output_index == Some(index) {
-                promote_captured_reference_argument(ctx, arg);
-            }
+            let previous = capture_output_index.as_ref().filter(|(output, _)| *output == index)
+                .and_then(|(_, ty)| if capture_values {
+                    promote_captured_reference_argument(ctx, arg); None
+                } else { prepare_captured_output_argument(ctx, arg, ty) });
             let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
-            if !capture_values && index + 1 < args.len() {
+            if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
+            // Omitted defaults execute after every caller expression, including the last one.
+            let deferred_default = !trim_trailing_defaults
+                && sig.defaults.iter().take(regular_param_count).skip(fixed_arg_count)
+                    .flatten().any(crate::types::deferred_defaults::contains_deferred_error);
+            if !capture_values && (index + 1 < args.len() || deferred_default) {
                 root_prior_argument_preserving_reference_place(
                     ctx, sig, index, arg, value,
                 )

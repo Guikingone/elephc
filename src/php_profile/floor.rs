@@ -83,11 +83,11 @@ const NEW_FUNCTIONS: &[NewFunction] = &[
     },
     NewFunction {
         name: "array_first",
-        profile: PhpVersion::Php84,
+        profile: PhpVersion::Php85,
     },
     NewFunction {
         name: "array_last",
-        profile: PhpVersion::Php84,
+        profile: PhpVersion::Php85,
     },
 ];
 
@@ -313,14 +313,14 @@ mod tests {
         assert_eq!(found.construct, "array_find");
     }
 
-    /// `array_first()` and `array_last()` are PHP 8.4 functions, so calling either sets an 8.4
+    /// `array_first()` and `array_last()` are PHP 8.5 functions, so calling either sets an 8.5
     /// floor, while a `function_exists()` guard for them is still not a requirement.
     #[test]
-    fn array_first_and_last_require_84() {
+    fn array_first_and_last_require_85() {
         for name in ["array_first", "array_last"] {
             let found = floor(&parse(&format!("<?php\n$v = {name}([1, 2]);\n")))
                 .unwrap_or_else(|| panic!("{name} must set a floor"));
-            assert_eq!(found.profile, PhpVersion::Php84);
+            assert_eq!(found.profile, PhpVersion::Php85);
             assert_eq!(found.construct, name);
             assert!(floor(&parse(&format!(
                 "<?php if (function_exists('{name}')) {{ echo 'y'; }}"

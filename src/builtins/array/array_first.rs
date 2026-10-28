@@ -1,5 +1,5 @@
 //! Purpose:
-//! Home of the PHP 8.4 `array_first` builtin: its single-source registry declaration and semantic target.
+//! Home of the PHP 8.5 `array_first` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
@@ -8,7 +8,7 @@
 //! - Returns the first VALUE in insertion order, boxed as `Mixed`, or `null` for an empty array.
 //! - The runtime helper reads the edge slot directly (no key lookup), so the array operand is
 //!   evaluated exactly once and a non-zero or string first key needs no special casing.
-//! - PHP 8.4 introduced the function; `crate::php_profile::floor` rejects a call to it under an
+//! - PHP 8.5 introduced the function; `crate::php_profile::floor` rejects a call to it under an
 //!   older `--php-version`, exactly as it does for `array_find`.
 
 use crate::builtins::spec::BuiltinCheckCtx;

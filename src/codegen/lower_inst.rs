@@ -31,12 +31,15 @@ use super::function_variants;
 use super::{CodegenIrError, Result};
 
 mod arithmetic;
+mod immediate_operands;
 mod arrays;
 mod buffers;
+mod packed_record_copy;
 mod call_argument_unpack;
 mod checked_int_to_int;
 mod checked_numeric_chain;
 mod runtime_functions;
+mod strength_reduction;
 pub(crate) mod builtins;
 pub(in crate::codegen) mod callables;
 mod callable_guards;
@@ -45,10 +48,12 @@ pub(super) use callable_argument_normalizer::emit_callable_argument_normalizer;
 pub(super) use callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER;
 mod comparisons;
 mod conversions;
+mod implicit_int_cast;
 mod enums;
 pub(super) mod exceptions;
-pub(super) use exceptions::emit_type_error;
 mod mixed_narrowing;
+mod numeric_payloads;
+mod numeric_comparisons;
 mod externs;
 mod floats;
 mod hashes;
@@ -57,11 +62,16 @@ mod iterators;
 mod objects;
 mod ownership;
 mod pointers;
+mod scalar_widths;
 mod predicates;
 mod property_values;
 mod receiver_place;
 mod runtime_calls;
+mod runtime_array_liveness;
+mod string_write_offsets;
 mod runtime_class_messages;
+mod literal_parameter_guards;
+pub(in crate::codegen) use literal_parameter_guards::emit_boxed_literal_parameter_guard;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;
@@ -89,6 +99,9 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+#[cfg(test)]
+#[path = "lower_inst/null_parameter_guard_tests.rs"]
+mod null_parameter_guard_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
@@ -138,10 +151,12 @@ pub(in crate::codegen) use conversions::{
     emit_mixed_string_dispatch_from_result, MixedStringContextMode,
 };
 pub(super) use core_closures::function_signature_from_eir;
+pub(in crate::codegen) use core_builtins::emit_function_frame_reader;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
 };
+pub(super) use floats::{emit_fused_float_compare, float_branch_condition_suffix};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
@@ -154,6 +169,28 @@ pub(super) use runtime_wrappers::{
 
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
+/// Emits a fused integer compare's flags for its block's `cond_br` and returns the predicate
+/// that holds when the branch's then-edge must be taken.
+pub(super) fn emit_fused_int_compare(
+    ctx: &mut FunctionContext<'_>,
+    inst_id: InstId,
+) -> Result<CmpPredicate> {
+    let inst = ctx
+        .function
+        .instruction(inst_id)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
+    immediate_operands::emit_int_compare(ctx, &inst)
+}
+
+/// Returns the target condition suffix (`lt` / `l`, ...) for an integer compare predicate.
+pub(super) fn int_condition_suffix(arch: Arch, predicate: CmpPredicate) -> Result<&'static str> {
+    match arch {
+        Arch::AArch64 => aarch64_condition(predicate),
+        Arch::X86_64 => x86_64_condition(predicate),
+    }
+}
+
 /// Lowers one EIR instruction by opcode.
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     ctx.begin_instruction(inst_id);
@@ -163,6 +200,13 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
     core_builtins::prepare_backtrace_call_site(ctx, &inst)?;
+    if inst.result.is_some_and(|value| ctx.allocation.rematerialized(value).is_some()) {
+        return Ok(());
+    }
+    if ctx.is_fused_compare(inst_id) {
+        // The block's `cond_br` emits this compare and branches on its flags directly.
+        return Ok(());
+    }
     match inst.op {
         Op::ConstI64 => lower_const_i64(ctx, &inst),
         Op::ConstF64 => floats::lower_const_f64(ctx, &inst),
@@ -256,9 +300,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
+        Op::ArrayToPointerWords => arrays::lower_array_to_pointer_words(ctx, &inst),
         Op::ArrayCloneShallow => arrays::lower_array_clone_shallow(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
-        Op::StrConcat => strings::lower_str_concat(ctx, &inst),
+        Op::StrConcat | Op::StrAppend => strings::lower_str_concat(ctx, &inst),
         Op::StrLen => strings::lower_str_len(ctx, &inst),
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
         Op::StrPersist => strings::lower_str_persist(ctx, &inst),
@@ -307,6 +352,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferNew => buffers::lower_buffer_new(ctx, &inst),
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
+        Op::BufferResolve => buffers::lower_buffer_resolve(ctx, &inst),
+        Op::BufferGetResolved => buffers::lower_buffer_get_resolved(ctx, &inst),
+        Op::BufferSetResolved => buffers::lower_buffer_set_resolved(ctx, &inst),
         Op::ObjectNew => objects::lower_object_new(ctx, &inst),
         Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
@@ -317,6 +365,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
         Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
         Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, &inst),
+        Op::DynamicClassIsAbstract => objects::lower_dynamic_class_is_abstract(ctx, &inst),
         Op::DynamicClassHasConstructor => {
             builtins::system::lower_elephc_class_has_constructor(ctx, &inst)
         }
@@ -353,6 +402,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, &inst),
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
+        Op::StaticLocalUninitialized => {
+            static_locals::lower_static_local_uninitialized(ctx, &inst)
+        }
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::LoadStaticPropertyRefCell => {
             static_properties::lower_load_static_property_ref_cell(ctx, &inst)
@@ -383,6 +435,16 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
+        Op::PackedFieldMixedToFloat => mixed_narrowing::lower_fixed_field_mixed_narrowing(
+            ctx,
+            &inst,
+            mixed_narrowing::FixedFieldScalar::Float,
+        ),
+        Op::PackedFieldMixedToBool => mixed_narrowing::lower_fixed_field_mixed_narrowing(
+            ctx,
+            &inst,
+            mixed_narrowing::FixedFieldScalar::Bool,
+        ),
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }
@@ -408,6 +470,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::GcControl => lower_gc_control(ctx, &inst),
         Op::CoreBuiltin => lower_core_builtin(ctx, &inst),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
+        Op::EnsureOwned => ownership::lower_ensure_owned(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
@@ -424,7 +487,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
-        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, &inst, true),
+        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, &inst, true, false),
         Op::GeneratorYield => lower_generator_yield(ctx, &inst),
         Op::GeneratorYieldFrom => lower_generator_yield_from(ctx, &inst),
         Op::ConcatReset => lower_concat_reset(ctx),

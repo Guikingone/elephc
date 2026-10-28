@@ -6,7 +6,7 @@
 //! - `crate::main()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - Only an exact `args[1] == "native"` selects native dependency commands.
+//! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
@@ -120,6 +120,9 @@ Arguments:
 
 Subcommands:
   native <COMMAND>        Native dependency management (see `elephc native --help`)
+  repl                    Interactive PHP through eval (see `elephc repl --help`)
+  test [PATH]             Compile and run the test suite under PATH, default `tests`
+                          (see `elephc test --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
                           source, a binary, or a running service's address
                           (see `elephc monitor --help`)
@@ -143,7 +146,7 @@ Target:
   --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
-  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
+  --heap-size=BYTES       Fixed heap size in bytes (default: 134217728)
   --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
@@ -173,6 +176,8 @@ Linking:
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
+  --report-generics       Summarize monomorphized generic instantiations per
+                          template on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
@@ -213,6 +218,8 @@ pub(crate) struct CliConfig {
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    /// Print a per-template summary of monomorphized generic instantiations on stderr.
+    pub(crate) report_generics: bool,
     pub(crate) emit_debug_info: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
@@ -256,23 +263,61 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// A fully parsed top-level invocation of either the compiler or native package manager.
+/// A fully parsed compiler, REPL, monitoring, or native package invocation.
 pub(crate) enum Command {
+    /// One interactive eval session, or its isolated host build subprocess.
+    Repl(crate::repl::ReplCommand),
     /// The existing PHP compilation command and all of its normalized options.
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
+    /// One validated `elephc extension` hosted-extension command.
+    PhpExt(crate::php_ext::cli::PhpExtCommand),
     /// One validated `elephc monitor` sampling invocation.
     Monitor(crate::monitor::MonitorCommand),
+    /// One `elephc test` run: compile the suite under a path and run it.
+    Test(crate::test_command::TestCommand),
 }
 
-/// Parses the exact top-level `native` selector before falling back to legacy compilation.
+/// Dispatches exact top-level subcommand selectors before falling back to compilation.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("repl") {
+        return match crate::repl::parse_args(&args[2..]) {
+            Ok(command) => Command::Repl(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::repl::HELP);
+                process::exit(1);
+            }
+        };
+    }
+    if args.get(1).map(String::as_str) == Some("test") {
+        return match crate::test_command::parse_args(&args[2..]) {
+            Ok(command) => Command::Test(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::test_command::HELP);
+                process::exit(1);
+            }
+        };
+    }
     if args.get(1).map(String::as_str) == Some("monitor") {
         return match crate::monitor::parse_monitor_args(&args[2..]) {
             Ok(command) => Command::Monitor(command),
             Err(error) => {
                 eprintln!("{error}\n\n{}", crate::monitor::MONITOR_USAGE);
+                process::exit(1);
+            }
+        };
+    }
+    if args.get(1).map(String::as_str) == Some("extension") {
+        use crate::php_ext::cli::{parse_php_ext_args, php_ext_help, PhpExtParseOutcome};
+        return match parse_php_ext_args(&args[2..]) {
+            Ok(PhpExtParseOutcome::Command(command)) => Command::PhpExt(command),
+            Ok(PhpExtParseOutcome::Help(help)) => {
+                print!("{help}");
+                process::exit(0);
+            }
+            Err(error) => {
+                eprintln!("{error}\n\n{}", php_ext_help());
                 process::exit(1);
             }
         };
@@ -295,7 +340,7 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
 }
 
 /// Parses legacy compilation arguments into a normalized configuration.
-fn parse_compile_args(args: &[String]) -> CliConfig {
+pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         fail("no source file given");
     }
@@ -312,7 +357,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         process::exit(0);
     }
 
-    let mut heap_size: usize = 8_388_608; // 8MB default
+    let mut heap_size: usize = 134_217_728; // 128 MB, PHP's default memory_limit
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -324,6 +369,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
+    let mut report_generics = false;
     let mut emit_debug_info = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
@@ -429,6 +475,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_timings = true;
         } else if arg == "--source-map" {
             emit_source_map = true;
+        } else if arg == "--report-generics" {
+            report_generics = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -613,6 +661,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,
@@ -638,7 +687,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 ///
 /// The monitoring bridges are excluded: they are how `--with-monitoring` is
 /// built, not something to ask for by mechanism.
-fn with_flag_is_known(name: &str) -> bool {
+pub(crate) fn with_flag_is_known(name: &str) -> bool {
     if MONITORING_BRIDGES.contains(&name) {
         return false;
     }

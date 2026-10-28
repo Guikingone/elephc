@@ -298,6 +298,7 @@ pub(super) fn lower_closure_with_context(
         })
         .collect::<Vec<_>>();
     let name = ctx.next_closure_name();
+    ctx.register_closure_display_name(&name, expr.span.line);
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
@@ -341,6 +342,8 @@ pub(super) fn lower_closure_with_context(
             .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
         variadic,
         by_ref_return,
+        // Closures keep the conservative summary.
+        None,
         body,
     );
     let closure_operands = captured_values
@@ -352,6 +355,8 @@ pub(super) fn lower_closure_with_context(
         signature,
         captures: captured_values,
         return_alias,
+        loop_guarded: false,
+        numeric_loop_guarded: false,
     });
     let closure = ctx.emit_value(
         Op::ClosureNew,
@@ -527,6 +532,7 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => call_args_write_local(None, args, name),
         ExprKind::ExprCall { callee, args } => {
             expr_writes_local(callee, name) || call_args_write_local(None, args, name)
@@ -667,6 +673,7 @@ fn expr_is_variable(expr: &Expr, name: &str) -> bool {
 fn instance_of_target_writes_local(target: &InstanceOfTarget, name: &str) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_writes_local(expr, name),
     }
 }
@@ -862,6 +869,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_contains_eval_call),
         ExprKind::ExprCall { callee, args } => {
             expr_contains_eval_call(callee) || args.iter().any(expr_contains_eval_call)
@@ -920,6 +928,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
 pub(super) fn instance_of_target_contains_eval_call(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_contains_eval_call(expr),
     }
 }

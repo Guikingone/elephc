@@ -2,7 +2,7 @@
 title: "unlink() - internals"
 description: "Compiler internals for unlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 310
+  order: 311
 ---
 
 ## `unlink()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/unlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/unlink.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

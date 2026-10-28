@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_array_edge_value` runtime helper assembly for PHP 8.4's
+//! Emits the `__rt_array_edge_value` runtime helper assembly for PHP 8.5's
 //! `array_first` / `array_last`. Returns the first or last VALUE of a PHP array, in
 //! insertion order, boxed as a Mixed cell.
 //!

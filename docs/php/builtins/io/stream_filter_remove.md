@@ -2,7 +2,7 @@
 title: "stream_filter_remove()"
 description: "Removes a filter from a stream."
 sidebar:
-  order: 371
+  order: 378
 ---
 
 ## stream_filter_remove()

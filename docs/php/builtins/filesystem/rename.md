@@ -2,7 +2,7 @@
 title: "rename()"
 description: "Renames a file or directory."
 sidebar:
-  order: 300
+  order: 301
 ---
 
 ## rename()

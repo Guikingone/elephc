@@ -31,6 +31,7 @@ pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
     }
+    crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_array_rand");
     store_if_result(ctx, inst)
 }
@@ -315,12 +316,12 @@ pub(super) fn lower_array_edge_key(
     store_if_result(ctx, inst)
 }
 
-/// Lowers PHP 8.4 `array_first()` through the shared edge-value helper with selector `0`.
+/// Lowers PHP 8.5 `array_first()` through the shared edge-value helper with selector `0`.
 pub(crate) fn lower_array_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_edge_value(ctx, inst, "array_first", 0)
 }
 
-/// Lowers PHP 8.4 `array_last()` through the shared edge-value helper with selector `1`.
+/// Lowers PHP 8.5 `array_last()` through the shared edge-value helper with selector `1`.
 pub(crate) fn lower_array_last(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_array_edge_value(ctx, inst, "array_last", 1)
 }
@@ -479,12 +480,14 @@ pub(super) fn lower_two_hash_arg_builtin(
             abi::emit_call_label(ctx.emitter, runtime_label);
             ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
+            // `__rt_decref_hash` takes its hash in `rax`, which still holds the result here: loading
+            // the temporary into `rdi` released the result instead, and the temporary leaked.
             if conv1 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer

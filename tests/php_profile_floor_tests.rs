@@ -166,27 +166,27 @@ fn new_function_call_under_82_is_rejected() {
     );
 }
 
-/// Calling PHP 8.4's `array_first()` / `array_last()` is rejected for the 8.3 profile and
-/// names the function, while the 8.4 profile builds the same program — the gating
-/// `array_find` already has.
+/// PHP 8.5 array value-edge calls reject every older supported profile and compile at 8.5.
 #[test]
-fn array_first_and_last_require_84() {
+fn array_first_and_last_require_85() {
     for name in ["array_first", "array_last"] {
         let source = format!("<?php\nvar_dump({name}([1, 2]));\n");
-        let out = compile(&format!("{name}83"), &source, Some("8.3"));
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            !out.status.success(),
-            "calling {name} for the 8.3 profile must fail, stderr:\n{stderr}"
-        );
-        assert!(
-            stderr.contains("needs PHP 8.4") && stderr.contains(name),
-            "the error must name the required profile and {name}, got:\n{stderr}"
-        );
-        let out = compile(&format!("{name}84"), &source, Some("8.4"));
+        for profile in ["8.2", "8.3", "8.4"] {
+            let out = compile(&format!("{name}{profile}"), &source, Some(profile));
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                !out.status.success(),
+                "calling {name} for the {profile} profile must fail, stderr:\n{stderr}"
+            );
+            assert!(
+                stderr.contains("needs PHP 8.5") && stderr.contains(name),
+                "the error must name the required profile and {name}, got:\n{stderr}"
+            );
+        }
+        let out = compile(&format!("{name}85"), &source, Some("8.5"));
         assert!(
             out.status.success(),
-            "{name} must compile for the 8.4 profile, stderr:\n{}",
+            "{name} must compile for the 8.5 profile, stderr:\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
     }

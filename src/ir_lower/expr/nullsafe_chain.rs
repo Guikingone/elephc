@@ -24,6 +24,7 @@ use super::{
     lower_property_probe_from_value, property_can_be_uninitialized,
     property_probe_needs_runtime_name_form_for_type, store_value_into_temp, take_owned_temp,
     value_is_definitely_null, value_is_nullable,
+    refine_member_receiver,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
@@ -32,7 +33,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<Lo
 }
 
 /// Reports the boxed representation shared by successful and short-circuited postfix chains.
-pub(super) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
+pub(in crate::ir_lower) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
     flatten_nullsafe_postfix_chain(expr).map(|_| PhpType::Mixed)
 }
 
@@ -275,6 +276,7 @@ fn lower_nullsafe_postfix_segment(
             property,
             nullsafe,
         } => {
+            let current = refine_member_receiver(ctx, current, expr);
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }
@@ -311,6 +313,7 @@ fn lower_nullsafe_postfix_segment(
             property,
             nullsafe,
         } => {
+            let current = refine_member_receiver(ctx, current, expr);
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }
@@ -428,6 +431,7 @@ fn guard_initialized_chain_property(
     true
 }
 
+/// Branches null receivers to the chain exit and releases an owning temporary on that path.
 fn guard_nullsafe_chain_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     current: LoweredValue,

@@ -2,7 +2,7 @@
 title: "fnmatch() - internals"
 description: "Compiler internals for fnmatch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 276
+  order: 277
 ---
 
 ## `fnmatch()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fnmatch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fnmatch.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

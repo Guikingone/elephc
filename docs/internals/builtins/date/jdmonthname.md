@@ -2,7 +2,7 @@
 title: "jdmonthname() - internals"
 description: "Compiler internals for jdmonthname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 231
+  order: 232
 ---
 
 ## `jdmonthname()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L716) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:890](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L890) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

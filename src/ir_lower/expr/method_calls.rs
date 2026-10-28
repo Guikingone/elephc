@@ -41,7 +41,29 @@ pub(super) fn lower_method_call(
         None
     };
     let object_expr = object;
-    let object = lower_expr(ctx, object_expr);
+    let object = lower_member_receiver(ctx, object_expr, expr);
+    if op == Op::MethodCall && args.is_empty()
+        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
+        && matches!(php_symbol_key(method).as_str(),
+            "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
+    {
+        if is_reflection_class_construction_receiver(ctx, object.value) {
+            let owns_receiver = ctx.value_is_owning_temporary(object)
+                && !ctx.value_is_owned_unboxed_local_load(object.value);
+            if owns_receiver {
+                ctx.begin_argument_guard_scope();
+                ctx.guard_call_argument(object, 0, expr.span);
+                ctx.end_argument_guard_scope();
+            }
+            // Inspect metadata without consuming an inline reflector needed by the real call.
+            let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
+                ctx.builder.value_php_type(object.value).clone(), Op::Borrow.default_effects(),
+                Some(expr.span));
+            let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
+            crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
+            if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
+        }
+    }
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
         return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
@@ -105,11 +127,14 @@ pub(super) fn lower_method_call(
             return value;
         }
     }
-    if op == Op::MethodCall {
-        if let Some(value) =
-            lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
-        {
-            return value;
+    if op == Op::MethodCall && reflection_property_reflected_target(ctx, object_expr).is_some() {
+        // Specialized property calls still evaluate a reflector receiver. Keep its
+        // independent owner through argument/guard throws and retire it on success.
+        let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+        let result = lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr);
+        unpin_in_flight_owners(ctx, pins, expr.span);
+        if let Some(value) = result {
+            return stabilize_borrowed_result_and_release_receiver(ctx, object, value, expr.span);
         }
     }
     if matches!(
@@ -122,6 +147,9 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
@@ -132,7 +160,6 @@ pub(super) fn lower_method_call(
         (method, args)
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
-    let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     // A by-reference-returning method transfers a lease that must outlive this caller's
@@ -147,6 +174,10 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    // A concrete local load may later unbox physical Mixed storage after eval widens
+    // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
+    let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
@@ -184,7 +215,11 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if let Some(owner) = receiver_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
@@ -286,6 +321,7 @@ pub(super) fn plan_scoped_closure_bind(
         signature,
         captures,
         return_alias,
+        ..
     } = binding
     else {
         return None;
@@ -376,6 +412,8 @@ pub(super) fn lower_planned_scoped_closure_bind(
         signature: plan.signature,
         captures,
         return_alias: plan.return_alias,
+        loop_guarded: false,
+        numeric_loop_guarded: false,
     });
     bound
 }

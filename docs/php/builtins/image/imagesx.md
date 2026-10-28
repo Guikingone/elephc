@@ -2,7 +2,7 @@
 title: "imagesx()"
 description: "Returns an image's width in pixels."
 sidebar:
-  order: 535
+  order: 542
 ---
 
 ## imagesx()

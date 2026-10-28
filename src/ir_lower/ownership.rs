@@ -83,6 +83,19 @@ pub(crate) fn acquire_lifetime_pin_if_refcounted(
     value
 }
 
+/// Gives a borrowed string-offset byte independent storage before later expressions can
+/// replace the string that owns the selected byte.
+pub(crate) fn persist_string_byte_view(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    if ctx.builder.value_defining_op(value.value) == Some(Op::StrCharAt) {
+        return acquire_lifetime_pin_if_refcounted(ctx, value, span);
+    }
+    value
+}
+
 /// Emits a type-gated release; the backend filters the value's ownership state.
 pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>) {
     let php_type = ctx.builder.value_php_type(value.value);

@@ -2,7 +2,7 @@
 title: "mb_encode_numericentity()"
 description: "Encodes mapped characters as decimal or hexadecimal numeric entities."
 sidebar:
-  order: 841
+  order: 864
 ---
 
 ## mb_encode_numericentity()

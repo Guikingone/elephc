@@ -2,7 +2,7 @@
 title: "mb_send_mail() - internals"
 description: "Compiler internals for mb_send_mail(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 871
+  order: 894
 ---
 
 ## `mb_send_mail()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_send_mail.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_send_mail.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L680) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

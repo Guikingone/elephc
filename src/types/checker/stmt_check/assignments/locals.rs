@@ -12,7 +12,8 @@ use crate::errors::CompileError;
 use crate::errors::CompileWarning;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
+    is_compound_assignment_self_read, BinOp, CallableTarget, Expr, ExprKind, StaticReceiver,
+    TypeExpr,
 };
 use crate::span::Span;
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
@@ -140,6 +141,7 @@ pub(super) fn check_assign(
             checker.warnings.push(CompileWarning {
                 span,
                 message: format!("Undefined variable: ${} (treated as null)", name),
+                kind: crate::errors::WarningKind::Warning,
             });
         }
     }
@@ -215,8 +217,17 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    let merged = merge_local_assignment_type(checker, name, &ty, span, env, stmt_form);
+    let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
     if merged.is_ok() {
+        if checker.local_conditional_depth == 0 {
+            let boxed_source = matches!(&value.kind, ExprKind::Variable(source)
+                if checker.boxed_parameter_locals.contains(source));
+            if boxed_source {
+                checker.boxed_parameter_locals.insert(name.to_string());
+            } else {
+                checker.boxed_parameter_locals.remove(name);
+            }
+        }
         // Whatever the environment holds for `name` from here on was put there by this store,
         // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
         // has already consulted the guard view, which is why this runs after it and not before.
@@ -239,6 +250,22 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if crate::names::append_update_alias_kind(target).is_some() {
+        if let ExprKind::ArrayAccess { array, .. } = &source.kind {
+            if let ExprKind::Variable(name) = &array.kind {
+                if let Some(ty) = env.get(name).cloned() {
+                    let widened = match ty {
+                        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+                        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+                            key, value: Box::new(PhpType::Mixed),
+                        },
+                        other => other,
+                    };
+                    env.insert(name.clone(), widened);
+                }
+            }
+        }
+    }
     let mut target_has_boxed_ref_provenance = match &source.kind {
         ExprKind::Variable(source_name) => {
             checker.boxed_ref_aliased_locals.contains(source_name)
@@ -252,7 +279,12 @@ pub(super) fn check_ref_assign(
     // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
     // that fails a later validation is still treated as an alias.
     checker.ref_aliased_locals.insert(target.to_string());
+    checker
+        .non_builtin_ref_aliased_locals
+        .insert(target.to_string());
+    checker.ref_assign_aliased_locals.insert(target.to_string());
     checker.record_reference_alias_root(source);
+    checker.record_ref_assign_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)
@@ -297,6 +329,7 @@ pub(super) fn check_ref_assign(
                 PhpType::Int | PhpType::Str | PhpType::Mixed
             );
             let supported_key = match array_ty.codegen_repr() {
+                PhpType::Object(ref name) if name.eq_ignore_ascii_case("WeakMap") => true,
                 PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
                     valid_php_key
                 }
@@ -331,6 +364,11 @@ pub(super) fn check_ref_assign(
     if let Err(error) = result {
         poison_unbound_local(env, target);
         return Err(error);
+    }
+    if crate::names::append_update_alias_kind(target).is_some() {
+        // The parser's writable-cell lease is representation-neutral, not a value snapshot.
+        env.insert(target.to_string(), PhpType::Mixed);
+        target_has_boxed_ref_provenance = true;
     }
     if target_has_boxed_ref_provenance {
         checker.boxed_ref_aliased_locals.insert(target.to_string());
@@ -783,7 +821,16 @@ fn resolve_static_receiver_class(
     receiver: &StaticReceiver,
     span: Span,
 ) -> Result<String, CompileError> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
@@ -834,10 +881,15 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 /// value is simply dropped — and it is only safe where the store definitely runs and no
 /// reference can still reach the old cell, which is exactly
 /// [`Checker::local_binding_is_killable`].
+///
+/// A COMPATIBLE merge between two different numeric types may re-bind as well, silently and
+/// for storage alone: see [`splits_numeric_binding`]. `value` is the assigned expression,
+/// which that decision inspects.
 fn merge_local_assignment_type(
     checker: &mut Checker,
     name: &str,
     ty: &PhpType,
+    value: &Expr,
     span: Span,
     env: &mut TypeEnv,
     stmt_form: bool,
@@ -855,6 +907,7 @@ fn merge_local_assignment_type(
     // that unrelated assignment — a `$x = …` in the main file would otherwise silently disarm
     // the retype of a `$w = …` at the same position in a library. Exactly ONE name leaves the
     // span's set of re-bound locals; the key itself goes only once the set is empty.
+    checker.numeric_region_retypes.remove(&(span, name.to_owned()));
     if checker
         .local_retype_sites
         .get(&span)
@@ -888,6 +941,25 @@ fn merge_local_assignment_type(
     // Everything above still runs (the retype-site re-decision, and the callable/reflection
     // metadata updates `check_assign` performed before calling in), so only the type merge is
     // short-circuited.
+    // All stores of a region-split name must remain numeric. A later nonnumeric store
+    // retracts earlier region decisions as well, before any lowering can consume them.
+    let numeric_region_value = super::super::super::numeric_regions::numeric_assignment(
+        checker, value, ty, env);
+    if !numeric_region_value {
+        let mut pending = vec![name.to_owned()];
+        let mut rejected = std::collections::HashSet::new();
+        while let Some(name) = pending.pop() {
+            if !rejected.insert(name.clone()) { continue; }
+            pending.extend(checker.numeric_region_dependents.get(&name).into_iter().flatten().cloned());
+            for (site, names) in &mut checker.numeric_region_sites {
+                if names.remove(&name) && checker.numeric_region_retypes.remove(&(*site, name.clone())) {
+                    if let Some(names) = checker.local_retype_sites.get_mut(site) { names.remove(&name); }
+                }
+            }
+        }
+        checker.local_retype_sites.retain(|_, names| !names.is_empty());
+        checker.numeric_region_sites.retain(|_, names| !names.is_empty());
+    }
     if checker.mixed_storage_locals.contains(name)
         || checker.boxed_ref_aliased_locals.contains(name)
     {
@@ -937,6 +1009,22 @@ fn merge_local_assignment_type(
                         .merged_assignment_type(&narrowing.origin, ty)
                         .is_some()
                 {
+                    env.insert(name.to_string(), ty.clone());
+                    return Ok(());
+                }
+            }
+            // A DECLARED local's contract is its declaration, not whatever a guard narrowed it
+            // to. `?Node $c = $head; while ($c !== null) { $c = $c->next; }` arrives here with
+            // `$c` bound `Node` — the guard's narrowing, inserted into the shared environment
+            // for the loop body — and the merge rejects the `?Node` the declaration always
+            // allowed. That rejected the cursor idiom every linked structure is written with.
+            //
+            // Same shape as the `mixed_storage_locals` re-assertion above, and for the same
+            // reason: flow narrowing falsified an invariant the declaration owns. Consulted only
+            // once the merge has FAILED, so no program that compiles today changes type here —
+            // this branch can only accept what was previously an error.
+            if let Some(declared) = checker.typed_local_names.get(name).cloned() {
+                if checker.type_accepts(&declared, ty) {
                     env.insert(name.to_string(), ty.clone());
                     return Ok(());
                 }
@@ -1007,6 +1095,32 @@ fn merge_local_assignment_type(
             ));
         }
         if let Some(merged_ty) = merged_ty {
+            // A storage-only re-bind (see `splits_numeric_binding`), at the eligibility the
+            // retype above uses. Nothing typing-visible changes: the environment still takes the
+            // merged type and no warning is filed, so the decision is only which frame slot the
+            // store writes. `--strict-locals` does not veto it for the same reason. A parameter
+            // keeps its one slot: backtrace frames read its current argument value by name from
+            // the first slot of that name (`debug_backtrace()[0]["args"]`).
+            let independent_split = splits_numeric_binding(existing, ty, value)
+                && checker.local_binding_is_killable(name);
+            let region_split = checker.numeric_region_sites.get(&span).is_some_and(|names| names.contains(name))
+                && (matches!(existing, PhpType::Int | PhpType::Float | PhpType::Mixed) || existing.is_int_float_union())
+                && numeric_region_value;
+            if stmt_form
+                && span.identifies_a_node()
+                && (independent_split || region_split)
+                && !checker.local_parameter_names.contains(name)
+                && !checker.top_level_binding_is_program_global(name)
+            {
+                checker
+                    .local_retype_sites
+                    .entry(span)
+                    .or_default()
+                    .insert(name.to_string());
+                if !independent_split {
+                    checker.numeric_region_retypes.insert((span, name.to_owned()));
+                }
+            }
             if &merged_ty != existing {
                 env.insert(name.to_string(), merged_ty);
             }
@@ -1022,6 +1136,45 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), ty.clone());
     }
     Ok(())
+}
+
+/// Returns whether a type-compatible reassignment should still start a FRESH binding, so two
+/// numeric bindings of one name get two frame slots instead of sharing one.
+///
+/// A slot is typed by everything ever stored into it. `for ($i = $n - 1; …; $i--)` stores a
+/// checked `int - int`, which is `mixed` until proven, so it used to widen the one slot an
+/// earlier `for ($i = 0; $i < $n; $i++)` also used, and the earlier loop, whose own updates are
+/// provably integer, ran boxed too. With a binding per assignment each loop keeps the storage
+/// its own stores need. PHP cannot observe the difference: the assignment drops the old value
+/// either way.
+///
+/// Only numeric bindings qualify (`int`, `float`, the `int|float` an increment leaves behind,
+/// and `mixed`), and only when the assigned type differs from the binding's (two `mixed`
+/// bindings would share a representation anyway). The re-bind releases the old occupant
+/// BEFORE the store retains the new value, so the value must not be able to borrow the old
+/// cell: it is either a raw `int`/`float` or a fresh arithmetic result. `$i = $c ? $i : 0`
+/// keeps the shared slot.
+fn splits_numeric_binding(existing: &PhpType, incoming: &PhpType, value: &Expr) -> bool {
+    let raw_scalar = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
+    let numeric = |ty: &PhpType| raw_scalar(ty) || ty.is_int_float_union() || *ty == PhpType::Mixed;
+    existing != incoming
+        && numeric(existing)
+        && numeric(incoming)
+        && (raw_scalar(incoming) || is_fresh_arithmetic_result(value))
+}
+
+/// Returns whether an expression evaluates to a freshly computed arithmetic result.
+///
+/// The arithmetic operators always produce a new value (an integer, a float, a boxed numeric
+/// result or an operator-overloaded object), never a view of one of their operands.
+fn is_fresh_arithmetic_result(value: &Expr) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::BinaryOp {
+            op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow,
+            ..
+        }
+    )
 }
 
 /// Type-checks a typed local variable declaration with a type hint (`Type $name = value`).
@@ -1074,7 +1227,9 @@ pub(super) fn check_typed_assign(
     }
     // A declared type is a programmer contract: the local is never kill/retype eligible, in
     // either mode. The binding depth is still recorded so the name has one authority.
-    checker.typed_local_names.insert(name.to_string());
+    checker
+        .typed_local_names
+        .insert(name.to_string(), declared_ty.clone());
     checker
         .local_binding_depth
         .entry(name.to_string())
