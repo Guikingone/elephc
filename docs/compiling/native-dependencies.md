@@ -142,6 +142,11 @@ schema = 1
 pcre2 = "10.47"
 ```
 
+The `[native]` section is optional: `elephc.toml` also holds a project's INI
+directives under `[ini]` (see the
+[CLI reference](cli-reference.md#in-the-project-file)), and a file with only
+those declares no native dependency. The first `native add` writes `[native]`.
+
 Manifest edits preserve comments, formatting, and unrelated top-level
 sections. Native dependency values are exact catalog versions; version ranges,
 arbitrary URLs, Git repositories, local paths, package-manager names, and
@@ -184,7 +189,7 @@ runner. A minimal GitHub Actions shape for the native-runner subset is:
 strategy:
   matrix:
     include:
-      - { runner: macos-14, target: macos-aarch64 }
+      - { runner: macos-15, target: macos-aarch64 }
       - { runner: ubuntu-24.04-arm, target: linux-aarch64 }
       - { runner: ubuntu-24.04, target: linux-x86_64 }
 env:

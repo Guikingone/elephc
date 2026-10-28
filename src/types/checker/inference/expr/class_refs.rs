@@ -28,15 +28,17 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        let mut class_names: Vec<String> = self
-            .classes
-            .keys()
-            .filter(|name| self.class_is_same_or_descends_from(name, base_class))
-            .cloned()
-            .collect();
+        // Every registered class at or below `base_class`, from the children index rather than a
+        // parent-chain walk from every class in the table (`new static` sits in hot factories).
+        let mut class_names: Vec<String> = self.class_and_descendants(base_class);
         class_names.sort();
 
         for class_name in class_names {
+            // Abstract receivers fail at runtime. Their concrete descendants still need
+            // constructor validation, but an abstract candidate is never instantiated here.
+            if self.classes.get(&class_name).is_some_and(|class| class.is_abstract) {
+                continue;
+            }
             let constructor = self
                 .classes
                 .get(&class_name)
@@ -73,22 +75,6 @@ impl Checker {
         }
 
         Ok(())
-    }
-
-    /// Checks whether `class_name` is either `base_class` itself or a descendant of it
-    /// by walking the parent chain.
-    fn class_is_same_or_descends_from(&self, class_name: &str, base_class: &str) -> bool {
-        let mut current = Some(class_name);
-        while let Some(name) = current {
-            if name == base_class {
-                return true;
-            }
-            current = self
-                .classes
-                .get(name)
-                .and_then(|info| info.parent.as_deref());
-        }
-        false
     }
 
     /// Infers the type of a class constant or enum case accessed via scope resolution
@@ -216,7 +202,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<String, CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
             StaticReceiver::Self_ | StaticReceiver::Static => self
                 .current_class
@@ -247,7 +242,16 @@ impl Checker {
         receiver: &StaticReceiver,
         span: Span,
     ) -> Result<(), CompileError> {
+        // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+        // it, and this pass can run on a generic function's template body — which is
+        // walked and then stripped, never instantiated.
+        let receiver = &receiver.written_class_receiver();
         match receiver {
+            // A generic receiver is instantiated into an ordinary named one before type checking;
+            // a template has no class to reach through.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Named(_) => Ok(()),
             StaticReceiver::Self_ | StaticReceiver::Static => {
                 if self.current_class.is_some() {

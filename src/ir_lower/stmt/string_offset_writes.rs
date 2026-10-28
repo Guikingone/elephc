@@ -11,8 +11,8 @@
 //!   updated string and the ordinary local store takes ownership of it, retiring the old
 //!   value. Another variable that shares the old string keeps it, which is PHP's
 //!   copy-on-write behaviour for strings.
-//! - The offset resolves exactly like a string offset read (`coerce_string_offset_index`), and
-//!   the value converts to a string like any string context. The runtime helper owns the
+//! - The offset uses the typed `StringWriteOffset` conversion shared with nested writes,
+//!   and the value converts to a string like any string context. The runtime helper owns the
 //!   illegal-offset warning, the first-byte warning, the space padding, and the empty-value
 //!   `Error`.
 //! - A boxed local that holds a string at run time keeps going through the boxed writer
@@ -82,9 +82,11 @@ pub(in crate::ir_lower) fn lower_string_offset_write(
     span: Span,
     want_result: bool,
 ) -> Option<StringOffsetWriteResult> {
-    let (index_value, value_value) = lower_write_key_and_value(ctx, index, value);
-    let offset = crate::ir_lower::expr::coerce_string_offset_index(ctx, index_value, index.span);
+    let (index_value, value_value, index_pins) = lower_write_key_and_value(ctx, index, value);
+    let value_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_value.value], span);
+    let offset = lower_string_write_offset(ctx, index_value, index.span);
     let value_str = crate::ir_lower::expr::coerce_to_string_at_span(ctx, value_value, Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
     let subject = ctx.load_local(name, Some(span));
     // Only an offset still before the start after counting back from the end writes nothing,
     // and the subject length is what that is measured against: `offset + strlen >= 0`.
@@ -104,7 +106,9 @@ pub(in crate::ir_lower) fn lower_string_offset_write(
         Some(span),
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
     let byte = want_result.then(|| first_byte(ctx, value_str, span));
+    crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(span));
     release_persisted_string_operand(ctx, value_str, span);
     ctx.store_local(name, updated, PhpType::Str, Some(span));
     Some(StringOffsetWriteResult { wrote: wrote?, byte: byte? })
@@ -126,24 +130,106 @@ pub(in crate::ir_lower) fn lower_boxed_string_offset_write(
     span: Span,
 ) -> StringOffsetWriteResult {
     let cell = load_array_local_for_write(ctx, name, span);
-    let (index_value, value_value) = lower_write_key_and_value(ctx, index, value);
-    let offset = crate::ir_lower::expr::coerce_string_offset_index(ctx, index_value, index.span);
+    let (cell, cell_owner) = super::nested_array_writes::root_static_update_receiver(ctx, cell, span);
+    let (index_value, value_value, index_pins) = lower_write_key_and_value(ctx, index, value);
+    let value_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_value.value], span);
+    let offset = lower_string_write_offset(ctx, index_value, index.span);
     let value_str = crate::ir_lower::expr::coerce_to_string_at_span(ctx, value_value, Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
     let subject = crate::ir_lower::expr::coerce_to_string_at_span(ctx, cell, Some(span));
-    let wrote = offset_reaches_string(ctx, offset, subject, span);
+    let reaches = offset_reaches_string(ctx, offset, subject, span);
+    let live = boxed_receiver_has_owner(ctx, cell, span);
+    let wrote = ctx.emit_value(Op::IBitAnd, vec![reaches.value, live.value], None,
+        PhpType::Bool, Op::IBitAnd.default_effects(), Some(span));
     release_persisted_string_operand(ctx, subject, span);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_str.value], span);
-    ctx.emit_void(
-        Op::RuntimeCall,
-        vec![cell.value, offset.value, value_str.value],
-        None,
-        Op::RuntimeCall.default_effects(),
-        Some(span),
-    );
+    emit_boxed_string_set(ctx, cell, offset, value_str, live, span);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
     let byte = first_byte(ctx, value_str, span);
+    crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(span));
     release_persisted_string_operand(ctx, value_str, span);
+    if let Some(owner) = cell_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
     StringOffsetWriteResult { wrote, byte }
+}
+
+/// Normalizes a write offset through the same typed EIR operation as nested string writes.
+fn lower_string_write_offset(
+    ctx: &mut LoweringContext<'_, '_>, index: LoweredValue, span: Span,
+) -> LoweredValue {
+    ctx.emit_value(
+        Op::RuntimeCall, vec![index.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::StringWriteOffset)), PhpType::Int,
+        crate::ir::Effects::all(), Some(span),
+    )
+}
+
+/// Keeps string keys out of array-key normalization when a boxed receiver holds a string.
+pub(super) fn lower_boxed_set(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
+    key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
+) {
+    let string = ctx.emit_value(
+        Op::TypePredicate, vec![receiver.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span),
+    );
+    let string_block = ctx.builder.create_named_block("string.offset.store", Vec::new());
+    let array_block = ctx.builder.create_named_block("array.offset.store", Vec::new());
+    let merge = ctx.builder.create_named_block("offset.store.done", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: string.value, then_target: string_block, then_args: Vec::new(),
+        else_target: array_block, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(string_block);
+    let offset = lower_string_write_offset(ctx, key, span);
+    let live = boxed_receiver_has_owner(ctx, receiver, span);
+    emit_boxed_string_set(ctx, receiver, offset, value, live, span);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(array_block);
+    ctx.restore_initialized_slots(initialized.clone());
+    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
+        Op::RuntimeCall.default_effects(), Some(span));
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(initialized);
+}
+
+/// Tests whether the selected cell still belongs to PHP after key conversion ran user code.
+fn boxed_receiver_has_owner(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, span: Span,
+) -> LoweredValue {
+    let live = ctx.emit_value(Op::RuntimeCall, vec![receiver.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellHasOtherOwner)), PhpType::Int,
+        crate::ir::Effects::READS_HEAP, Some(span));
+    let zero = ctx.builder.emit_const_i64(0);
+    ctx.emit_value(Op::ICmp, vec![live.value, zero],
+        Some(Immediate::CmpPredicate(CmpPredicate::Ne)), PhpType::Bool,
+        Op::ICmp.default_effects(), Some(span))
+}
+
+/// Abandons a detached write before converting its RHS or producing another warning.
+fn emit_boxed_string_set(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, offset: LoweredValue,
+    value: LoweredValue, live: LoweredValue, span: Span,
+) {
+    let write = ctx.builder.create_named_block("string.offset.live", Vec::new());
+    let done = ctx.builder.create_named_block("string.offset.done", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: live.value, then_target: write, then_args: Vec::new(),
+        else_target: done, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(write);
+    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, offset.value, value.value], None,
+        Op::RuntimeCall.default_effects(), Some(span));
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(initialized);
 }
 
 /// Emits `offset + strlen(subject) >= 0`: whether a resolved string offset reaches the string.

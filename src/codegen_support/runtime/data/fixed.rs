@@ -9,7 +9,7 @@
 //! - Fixed symbols are cached across compilations, with target and PHP-profile inputs covered by the cache key.
 
 use super::{
-    ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
+    ALLOC_OVERFLOW_MSG, CONCAT_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
@@ -19,8 +19,8 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
-    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX,
-    POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
@@ -29,7 +29,8 @@ use super::{
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
-    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_PROPERTY_ASSIGN_PREFIX,
+    UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -37,7 +38,7 @@ use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
 use crate::codegen_support::data_section::comm_directive_aligned;
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::platform::{Platform, Target};
 use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
@@ -68,8 +69,21 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(&comm_directive("_concat_buf", 65536, target));
+    out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive(
+        "_itoa_spill_ring",
+        32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
+        target,
+    ));
+    out.push_str(&comm_directive("_itoa_spill_index", 8, target));
+    out.push_str(&comm_directive(
+        "_float_spill_ring",
+        crate::codegen_support::runtime::strings::FLOAT_WINDOW_BYTES
+            * crate::codegen_support::runtime::strings::FLOAT_SPILL_SLOTS,
+        target,
+    ));
+    out.push_str(&comm_directive("_float_spill_index", 8, target));
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
@@ -79,6 +93,17 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _serialize_return_array_msg\n_serialize_return_array_msg:\n    .ascii \"{}\"\n",
         super::SERIALIZE_RETURN_ARRAY_MSG,
     ));
+    for (symbol, message) in [
+        ("_debuginfo_fatal_msg", super::DEBUGINFO_FATAL_MSG),
+        ("_debuginfo_warning_prefix", super::DEBUGINFO_WARNING_PREFIX),
+        ("_debuginfo_null_prefix", super::DEBUGINFO_NULL_PREFIX),
+        ("_debuginfo_null_suffix", super::DEBUGINFO_NULL_SUFFIX),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            message.replace('\n', "\\n"),
+        ));
+    }
     out.push_str(&comm_directive("_unser_depth", 8, target));
     for (symbol, message) in [
         ("_sleep_warning_prefix", super::SLEEP_WARNING_PREFIX),
@@ -118,6 +143,13 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
     ));
+    out.push_str(&format!(".globl _serializable_result_suffix\n_serializable_result_suffix:\n    .ascii {SERIALIZABLE_RESULT_SUFFIX:?}\n"));
+    out.push_str(&format!(
+        ".globl _unserialization_denied_prefix\n_unserialization_denied_prefix:\n    .ascii {UNSERIALIZATION_DENIED_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _closure_class_name\n_closure_class_name:\n    .ascii {CLOSURE_CLASS_NAME:?}\n"
+    ));
     out.push_str(&format!(
         ".globl _named_parameter_overwrite_prefix\n_named_parameter_overwrite_prefix:\n    .ascii {NAMED_PARAMETER_OVERWRITE_PREFIX:?}\n"
     ));
@@ -154,7 +186,28 @@ pub(crate) fn emit_runtime_data_fixed(
             ".globl {label}\n{label}:\n    .ascii {name:?}\n"
         ));
     }
+    // A hydrated property TypeError spells a bool value as its literal `true`/`false`
+    // (unlike the argument-type diagnostics, which spell the type as `bool`).
+    out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
+    out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(
+        ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
+    ));
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    // `{pointer, length}` rows naming a rejected SPL offset's type, the shape of
+    // `_class_name_entries`; see `runtime::spl::offset_convert`.
+    out.push_str(".p2align 3\n.globl _spl_offset_type_rows\n_spl_offset_type_rows:\n");
+    for (symbol, len) in crate::codegen_support::runtime::spl::SPL_OFFSET_TYPE_ROWS {
+        out.push_str(&format!("    .quad {symbol}\n    .quad {len}\n"));
+    }
+    out.push_str(&format!(
+        ".globl _spl_float_string_prefix\n_spl_float_string_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
+    ));
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
@@ -182,6 +235,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_print_r_mode", 8, target));
     out.push_str(&comm_directive("_print_r_off", 8, target));
     out.push_str(&comm_directive("_print_r_buf", 65536, target));
+    // _print_r_base / _print_r_cap: the grown capture block (0 = the static buffer above, capacity 65536).
+    out.push_str(&comm_directive("_print_r_base", 8, target));
+    out.push_str(&comm_directive("_print_r_cap", 8, target));
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
@@ -281,12 +337,25 @@ pub(crate) fn emit_runtime_data_fixed(
     // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
     // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
+    out.push_str(&comm_directive("_ser_legacy_active", 8, target));
+    out.push_str(&comm_directive("_unser_legacy_active", 8, target));
+    // The active serialize() output stream: a pointer to the `__rt_strbuf_*` descriptor in the
+    // frame of the innermost `__rt_serialize_call_value`, which saves and restores it around itself and
+    // every hook call that can re-enter serialize().
+    out.push_str(&comm_directive("_ser_stream", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
     out.push_str(&comm_directive("_unser_count", 8, target));
     out.push_str(&comm_directive("_unser_values", 524288, target));
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
+    // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
+    // fixed-offset ISO parser reads it (see `system::strtotime::iso_date`).
+    out.push_str(&comm_directive(
+        "_strtotime_iso_buf",
+        system::STRTOTIME_ISO_PAD_BUF_LEN,
+        target,
+    ));
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.
@@ -353,6 +422,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
+    // _elephc_eval_inventory_context holds the eval context handle while the
+    // module-level inventory helper registers the AOT metadata into it. The
+    // helper's frame is the fixed one the shared-helper prologue builds, with
+    // no room for a local slot, so the handle is parked here instead.
+    out.push_str(&comm_directive("_elephc_eval_inventory_context", 8, target));
     out.push_str(&comm_directive("_elephc_eval_object_gc_child_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_object_release_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_array_reference_retire_fn", 8, target));
@@ -457,9 +531,28 @@ pub(crate) fn emit_runtime_data_fixed(
     // Heap headers and object-handle side-table indices use 16-byte granules.
     // Keep payload alignment stable when preceding runtime symbols change.
     out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
+    // One bit per 8-byte heap granule records live payload bases. String persistence uses this
+    // authoritative side table to reject forged headers in interior byte views in constant time.
+    out.push_str(&comm_directive(
+        "_heap_live_bases",
+        heap_size.div_ceil(64).max(1),
+        target,
+    ));
     out.push_str(&comm_directive("_heap_off", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive("_heap_small_bins", 32, target));
+    out.push_str(&comm_directive(
+        "_heap_small_bins",
+        super::super::arrays::HEAP_BIN_TABLE_BYTES as usize,
+        target,
+    ));
+    // One byte per heap granule: set while a guarded free parks the block in a bin.
+    out.push_str(&comm_directive(
+        "_heap_bin_marks",
+        super::super::arrays::heap_bin_mark_bytes(heap_size),
+        target,
+    ));
+    // `_gc_frees` at the end of the allocator's last consolidation pass (see `__rt_heap_alloc`).
+    out.push_str(&comm_directive("_heap_consolidated_frees", 8, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
     // Generation-safe buffer descriptor registry. Public Buffer values are
@@ -488,6 +581,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive(
         "_obj_handle_index",
         crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 4,
+        target,
+    ));
+    out.push_str(&comm_directive(
+        "_obj_weak_reference_index",
+        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 8,
         target,
     ));
     out.push_str(&comm_directive(
@@ -573,9 +671,15 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_json_validate_len", 8, target));
     out.push_str(&comm_directive("_json_decode_assoc", 8, target));
     out.push_str(&comm_directive("_json_error_source_ptr", 8, target));
+    out.push_str(&comm_directive("_json_error_source_len", 8, target));
+    out.push_str(&comm_directive("_json_error_candidate_ptr", 8, target));
     out.push_str(&comm_directive("_json_error_location_active", 8, target));
     out.push_str(&comm_directive("_json_error_line", 8, target));
     out.push_str(&comm_directive("_json_error_column", 8, target));
+    // Diagnostic counters for the deferred location scan. Valid decodes leave
+    // both at zero; a recorded decode error increments them once.
+    out.push_str(&comm_directive("_json_error_scan_count", 8, target));
+    out.push_str(&comm_directive("_json_error_scan_bytes", 8, target));
     // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
     // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
     // "this block never acquired a handle".
@@ -632,6 +736,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _alloc_overflow_msg\n_alloc_overflow_msg:\n    .ascii {:?}\n",
         ALLOC_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _concat_overflow_msg\n_concat_overflow_msg:\n    .ascii {:?}\n",
+        CONCAT_OVERFLOW_MSG
     ));
     out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
@@ -704,6 +812,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),
         ("_spl_dll_peek_empty_msg", "Can't peek at an empty datastructure"),
         (
+            "_spl_dll_frozen_mode_msg",
+            "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen",
+        ),
+        (
             "_spl_dll_add_range_msg",
             "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range",
         ),
@@ -720,20 +832,20 @@ pub(crate) fn emit_runtime_data_fixed(
             "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) is out of range",
         ),
         (
-            "_spl_dll_offset_exists_type_msg",
-            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_exists_type_prefix",
+            "SplDoublyLinkedList::offsetExists(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_get_type_msg",
-            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_get_type_prefix",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, ",
         ),
         (
-            "_spl_dll_offset_set_type_msg",
-            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, non-int given",
+            "_spl_dll_offset_set_type_prefix",
+            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, ",
         ),
         (
-            "_spl_dll_offset_unset_type_msg",
-            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, non-int given",
+            "_spl_dll_offset_unset_type_prefix",
+            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, ",
         ),
         (
             "_spl_fixed_construct_size_msg",
@@ -743,10 +855,8 @@ pub(crate) fn emit_runtime_data_fixed(
             "_spl_fixed_set_size_msg",
             "SplFixedArray::setSize(): Argument #1 ($size) must be greater than or equal to 0",
         ),
-        (
-            "_spl_fixed_offset_type_msg",
-            "Cannot access offset of type non-int on SplFixedArray",
-        ),
+        ("_spl_fixed_offset_type_prefix", "Cannot access offset of type "),
+        ("_spl_fixed_offset_type_suffix", " on SplFixedArray"),
         ("_spl_fixed_offset_range_msg", "Index invalid or out of range"),
         (
             "_spl_fixed_from_array_keys_msg",
@@ -767,6 +877,16 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    for (symbol, text) in [
+        ("_uncaught_exc_stack_trace", "\\nStack trace:\\n"),
+        ("_uncaught_exc_next", "\\n\\nNext "),
+        ("_uncaught_exc_hash", "#"),
+        ("_uncaught_exc_main", " {main}"),
+        ("_uncaught_exc_thrown_in", "\\n  thrown in "),
+        ("_uncaught_exc_on_line", " on line "),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{text}\"\n"));
+    }
     // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
     // sentinel, which no correct build should reach — see that helper for why it aborts there
     // instead of answering "no match".
@@ -887,6 +1007,14 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_peak", 8, target));
     out.push_str(&comm_directive("_cstr_buf", 4096, target));
     out.push_str(&comm_directive("_cstr_buf2", 4096, target));
+    // C-string conversions need a NUL-terminated copy for libc. The 4 KiB inline
+    // buffers stay as the common case; these pointers let the helpers grow into an
+    // owned block when a path, pattern, or command is longer than that, instead of
+    // copying past the buffer into adjacent runtime state.
+    out.push_str(".p2align 3\n.globl _cstr_base\n_cstr_base:\n    .quad _cstr_buf\n");
+    out.push_str(".p2align 3\n.globl _cstr_cap\n_cstr_cap:\n    .quad 4096\n");
+    out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
+    out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
     out.push_str(&comm_directive("_eof_flags", 256, target));
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));
@@ -924,6 +1052,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_iconv_handles", 2048, target));
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
+    // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
+    // each write filter's own option bits per fd (256 fds x 1B) for the fwrite helper to
+    // restore before converting; glibc keeps them per descriptor and needs no table.
+    if target.platform == Platform::MacOS {
+        out.push_str(&comm_directive("_iconv_write_options", 256, target));
+    }
     out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
     // _ftp_use_tls: set to 1 by fopen("ftps://...") before __rt_ftp_open is
@@ -954,6 +1088,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_last_error_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_clear_error_fn", 8, target));
+    out.push_str(&comm_directive("_stream_error_code", 8, target));
+    out.push_str(&comm_directive("_stream_close_silent", 8, target));
+    out.push_str(&comm_directive("_stream_error_tls", 8, target));
+    out.push_str(&comm_directive("_stream_empty_error", 1, target));
     // _elephc_tls_attach_fd_fn: indirect pointer to elephc_tls_attach_fd,
     // used by stream_socket_enable_crypto to promote an existing TCP fd to
     // a TLS session without re-establishing the TCP connection. Same
@@ -1029,6 +1169,20 @@ pub(crate) fn emit_runtime_data_fixed(
     // helpers call through these slots so unrelated programs never reference the
     // optional elephc-bcmath archive.
     for slot in [
+        "_elephc_bcmath_number_add_fn",
+        "_elephc_bcmath_number_ceil_fn",
+        "_elephc_bcmath_number_comp_fn",
+        "_elephc_bcmath_number_create_fn",
+        "_elephc_bcmath_number_div_fn",
+        "_elephc_bcmath_number_divmod_fn",
+        "_elephc_bcmath_number_floor_fn",
+        "_elephc_bcmath_number_mod_fn",
+        "_elephc_bcmath_number_mul_fn",
+        "_elephc_bcmath_number_pow_fn",
+        "_elephc_bcmath_number_powmod_fn",
+        "_elephc_bcmath_number_round_fn",
+        "_elephc_bcmath_number_sqrt_fn",
+        "_elephc_bcmath_number_sub_fn",
         "_elephc_bcmath_add_fn",
         "_elephc_bcmath_sub_fn",
         "_elephc_bcmath_mul_fn",
@@ -1049,6 +1203,11 @@ pub(crate) fn emit_runtime_data_fixed(
     ] {
         out.push_str(&comm_directive(slot, 8, target));
     }
+    // _elephc_random_mt_uniform_fn: indirect pointer to elephc_random_mt_uniform, published
+    // only at array_rand()/shuffle() call sites so the shared __rt_mt_uniform trampoline can
+    // consume the global Mt19937 state without a program that never shuffles linking the
+    // random bridge.
+    out.push_str(&comm_directive("_elephc_random_mt_uniform_fn", 8, target));
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.
@@ -1438,6 +1597,22 @@ pub(crate) fn emit_runtime_data_fixed(
     // a lookup that reaches the cap reports recursion, which is what bounds the walk.
     out.push_str(&comm_directive("_vd_seen", 2048, target));
     out.push_str(&comm_directive("_vd_seen_n", 8, target));
+    // _debuginfo_guard: `_exc_handler_top | 1` while a run-time `__debugInfo()` call is in
+    // flight (0 otherwise); a throw that finds no newer handler is reported as PHP's fatal.
+    out.push_str(&comm_directive("_debuginfo_guard", 8, target));
+    // _php_exit_hook: the hosted-extension shutdown routine (RSHUTDOWN, then MSHUTDOWN), stored
+    // by `main`'s prologue in a program that hosts PHP extensions, 0 otherwise. The runtime's own
+    // exit paths (the uncaught-exception report) call it; they cannot name the engine directly.
+    out.push_str(&comm_directive("_php_exit_hook", 8, target));
+    // _uncaught_report_mode: 1 once an exception escaping `__debugInfo()` selected the
+    // `Warning: Uncaught` + fatal flavour of the uncaught report.
+    out.push_str(&comm_directive("_uncaught_report_mode", 8, target));
+    // _debuginfo_call_line: source line of the dump call (var_dump/print_r/...) that fetched the
+    // `__debugInfo()` result in flight; PHP names it in the `__debuginfo() must return an array` fatal.
+    out.push_str(&comm_directive("_debuginfo_call_line", 8, target));
+    // _debuginfo_pad: 1 while a var_dump render is fetching `__debugInfo()` (PHP has already
+    // printed the nested value's indent when the fatal fires), 0 for print_r.
+    out.push_str(&comm_directive("_debuginfo_pad", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
@@ -1515,6 +1690,8 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_bt_arg_object_open", "Object("),
         ("_bt_arg_close", ")"),
         ("_bt_arg_quote", "'"),
+        ("_bt_arg_ellipsis", "..."),
+        ("_bt_arg_zero_frac", ".0"),
         ("_bt_arg_escape_slash", "\\\\"),
         ("_bt_arg_escape_n", "\\n"),
         ("_bt_arg_escape_t", "\\t"),
@@ -1754,6 +1931,24 @@ mod tests {
                 "expected the fixed runtime data to declare its usual common symbols, saw {}",
                 seen
             );
+        }
+    }
+
+    /// The per-fd `convert.iconv` write-filter option table exists only on Apple targets,
+    /// whose iconv shares `//TRANSLIT` and `//IGNORE` per charset pair (#811).
+    #[test]
+    fn test_iconv_write_options_table_is_apple_only() {
+        for (target, expected) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), true),
+            (
+                Target::new_apple(Arch::AArch64, crate::codegen_support::platform::AppleVariant::IOS),
+                true,
+            ),
+            (Target::new(Platform::Linux, Arch::AArch64), false),
+            (Target::new(Platform::Linux, Arch::X86_64), false),
+        ] {
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+            assert_eq!(asm.contains("_iconv_write_options"), expected, "{target:?}");
         }
     }
 

@@ -13,10 +13,13 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 mod assignments;
+mod array_access;
 mod basic;
+mod buffer_merges;
 mod class_refs;
 mod effects;
 mod calls_objects;
+mod null_coalesce;
 mod static_closure;
 use super::super::Checker;
 use super::syntactic::null_coalesce_merge_type;
@@ -73,6 +76,7 @@ impl Checker {
             | ExprKind::BinaryOp { .. }
             | ExprKind::InstanceOf { .. }
             | ExprKind::NewObject { .. }
+            | ExprKind::NewGeneric { .. }
             | ExprKind::Clone(_)
             | ExprKind::NewDynamic { .. }
             | ExprKind::NewDynamicObject { .. }
@@ -111,21 +115,39 @@ impl Checker {
     }
 
     /// Merges ordinary elements and spread values for a literal that may carry string keys.
-    fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
+    ///
+    /// `scanned_sources` holds, in order, the results for the spread sources the caller's
+    /// hash-spread scan typed already: always a leading run of the literal's spreads, up to the
+    /// first hash source. Those results are reused, so no spread source is typed twice; typing
+    /// it again doubled the work at every level of a nested literal.
+    fn assoc_spread_literal_value_type(
+        &mut self,
+        elems: &[Expr],
+        scanned_sources: Vec<Result<PhpType, CompileError>>,
+        env: &TypeEnv,
+    ) -> PhpType {
+        let mut scanned_sources = scanned_sources.into_iter();
         let mut value_ty = PhpType::Never;
         for elem in elems {
             let next = match &elem.kind {
-                ExprKind::Spread(inner) => match self.infer_type(inner, env) {
-                    Ok(PhpType::Array(elem)) => *elem,
-                    Ok(PhpType::AssocArray { value, .. }) => *value,
-                    _ => PhpType::Mixed,
-                },
+                ExprKind::Spread(inner) => {
+                    match scanned_sources
+                        .next()
+                        .unwrap_or_else(|| self.infer_type(inner, env))
+                    {
+                        Ok(PhpType::Array(elem)) => *elem,
+                        Ok(PhpType::AssocArray { value, .. }) => *value,
+                        _ => PhpType::Mixed,
+                    }
+                }
                 _ => self.infer_type(elem, env).unwrap_or(PhpType::Mixed),
             };
             if matches!(value_ty, PhpType::Never) {
                 value_ty = next;
             } else if value_ty != next {
-                value_ty = PhpType::Mixed;
+                // Pointers and `null` share one pointer-word element.
+                value_ty = crate::types::merge_pointer_elements(&value_ty, &next)
+                    .unwrap_or(PhpType::Mixed);
             }
         }
         if matches!(value_ty, PhpType::Never) {
@@ -180,7 +202,10 @@ impl Checker {
 pub(crate) fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
         || *idx_ty == PhpType::Float
-        || *idx_ty == PhpType::Mixed
+        // A boxed offset is decided at runtime, and a union IS boxed — `int|float`, what an
+        // incremented counter carries, reaches `$s[$i]` in several preludes. Refusing it while
+        // accepting `mixed` would make the narrower type the stricter one.
+        || matches!(idx_ty.codegen_repr(), PhpType::Mixed)
         || matches!(
             &index.kind,
             ExprKind::StringLiteral(value)
@@ -287,9 +312,15 @@ fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
 /// Object operands merge the way the two branches of a ternary do: `?Contract ?? new
 /// Implementation()` is a `Contract`, since one side already accepts the other, and two
 /// unrelated implementations stay a union of both rather than widening to `mixed` (#822).
+/// An arm that already mixes an object with a scalar keeps that union too, so
+/// `?(Contract|int) ?? new Implementation()` is `Contract|int` (#1463).
 fn merge_null_coalesce_result_type(checker: &Checker, value: PhpType, default: PhpType) -> PhpType {
     if object_union_match_arm_type(&value) && object_union_match_arm_type(&default) {
         return merge_object_union_match_arm_types(checker, value, default);
+    }
+    if let Some(merged) = null_coalesce::merge_object_scalar_union_types(checker, &value, &default)
+    {
+        return merged;
     }
     merge_null_coalesce_value_types(value, default)
 }
@@ -502,14 +533,24 @@ impl Checker {
         ))
     }
 
-    /// Records that `name` is a `string` local used as a `++` / `--` target in the
-    /// function-like scope currently being checked.
+    /// Records that `name` is a local whose `++` / `--` can RETYPE it, in the function-like
+    /// scope currently being checked.
+    ///
+    /// Two reasons, one contract. A `string` target changes type outright — `"9"++` is
+    /// `int(10)` — and an `int` target promotes at the overflow boundary, where
+    /// `PHP_INT_MAX++` is `float(9.223372036854776E+18)` in php-src and in elephc.
     ///
     /// EIR lowering reads this contract (through `CheckResult::string_incdec_locals`) and
     /// gives the local boxed `Mixed` frame storage from its first store. Without it the
-    /// slot only widens at the increment, and every earlier or later `string`-typed read
-    /// of the same slot has to detach an owned copy out of the boxed cell — one leaked
-    /// heap block per executed read, unbounded inside a loop.
+    /// slot only widens at the increment, and every earlier or later concretely typed read
+    /// of the same slot reads the wrong representation: the string case leaked one heap
+    /// block per read, and the int case TRUNCATED the promoted float back into the raw
+    /// slot, so `for ($i = PHP_INT_MAX - 1; …; $i++)` wrapped to the negative minimum.
+    ///
+    /// The cost is recovered by `checked_int_sink`, which narrows the slot back to `I64`
+    /// when every access to it observes an int — measured: an ordinary counter loop keeps a
+    /// raw slot and an `ichecked_add_to_int`, while a loop whose counter reaches `var_dump`
+    /// keeps the box and prints php's float.
     fn record_string_incdec_local(&mut self, name: &str) {
         self.string_incdec_locals
             .insert((self.current_loop_storage_scope.clone(), name.to_string()));

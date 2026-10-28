@@ -262,3 +262,57 @@ echo strlen($big), substr($big, 0, 2), '[', substr($big, -7), "]\n";
     );
     assert_eq!(out, "70006Az[z     E]\n");
 }
+
+/// Integrating direct writes preserves nested COW and catchable string-parent errors.
+#[test]
+fn test_string_offset_write_preserves_nested_contract() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$direct = 'abc'; $direct[1] = 'D';
+$items = ['abc']; $copy = $items;
+$items[0][1] = 'N'; $items[0][-1] = 'Z'; $items[0][5] = 'P';
+echo $direct, '|', json_encode($items), '|', json_encode($copy), '|';
+try { $direct[0][0] = 'X'; } catch (Error $error) { echo $error->getMessage(); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "aDc|[\"aNZ  P\"]|[\"abc\"]|Cannot use string offset as an array");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested integration also preserves its behavior with EIR optimization disabled.
+#[test]
+fn test_string_offset_write_preserves_nested_contract_no_ir_opt() {
+    without_ir_opt(test_string_offset_write_preserves_nested_contract);
+}
+
+/// Boxed writes share nested writes' runtime-key conversion instead of PHP array-key rules.
+#[test]
+fn test_string_offset_write_boxed_runtime_keys() {
+    let out = compile_and_run_capture(r#"<?php
+set_error_handler(function(int $level, string $message): bool { echo $message, '|'; return true; });
+function put(mixed $key, mixed $s): string {
+    $s[$key] = 'Z';
+    return $s;
+}
+foreach (['1x', '01', true, null, 1.5] as $key) { echo put($key, 'abc'), ';'; }
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "Illegal string offset \"1x\"|aZc;aZc;",
+        "String offset cast occurred|aZc;String offset cast occurred|Zbc;",
+        "String offset cast occurred|aZc;"));
+}
+
+/// An explicitly written RHS read remains valid beside the rejected update desugarings.
+#[test]
+fn test_string_offset_write_explicit_read_then_assign() {
+    let out = compile_and_run_capture(r#"<?php
+$s = 'abc';
+$s[0] = $s[0] . 'Z';
+$s[1] = (string)(strlen($s) + $argc);
+echo $s;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "a4c");
+    assert!(out.stderr.contains("Only the first byte will be assigned"), "{}", out.stderr);
+}

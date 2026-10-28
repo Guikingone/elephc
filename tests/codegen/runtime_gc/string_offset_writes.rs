@@ -238,3 +238,43 @@ echo $t, "\n";
         many.stderr
     );
 }
+
+/// Warning callbacks may replace a referenced RHS without invalidating its selected byte.
+#[test]
+fn test_string_offset_write_retains_rhs_across_handler() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function assign_byte(string &$subject, string &$value): string { return ($subject[0] = $value); }
+$subject = ''; $value = '';
+set_error_handler(function(int $level, string $message) use (&$value): bool {
+    $value = str_repeat('Z', 40);
+    return true;
+});
+$result = '';
+for ($i = 0; $i < 30; $i++) {
+    $subject = str_repeat('abc', 8);
+    $value = str_repeat('xy', 20);
+    $result = assign_byte($subject, $value);
+}
+restore_error_handler();
+echo $result, '|', substr($subject, 0, 3), '|', substr($value, 0, 3);
+"#);
+    assert_clean(out, "x|xbc|ZZZ");
+}
+
+/// A cast-warning callback can detach a global before the write converts or warns on its RHS.
+#[test]
+fn test_string_offset_write_key_callback_replaces_receiver() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$g = 'abc';
+function key_handler(int $level, string $message): bool {
+    global $g; $g = str_repeat('Z', 40); echo $message, '|'; return true;
+}
+function statement(): void { global $g; $g[1.5] = 'long'; }
+function expression(): mixed { global $g; return ($g[1.5] = 'long'); }
+set_error_handler('key_handler');
+statement(); echo substr($g, 0, 3), '|';
+$g = 'abc'; echo var_export(expression(), true), '|', substr($g, 0, 3);
+restore_error_handler(); $g = null;
+"#);
+    assert_clean(out, "String offset cast occurred|ZZZ|String offset cast occurred|NULL|ZZZ");
+}

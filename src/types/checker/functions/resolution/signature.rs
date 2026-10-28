@@ -34,6 +34,7 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
+        self.completed_function_signatures.remove(name);
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -94,36 +95,24 @@ impl Checker {
                 self.closure_return_types
                     .insert(pname.clone(), sig.return_type.clone());
                 self.callable_sigs.insert(pname.clone(), sig);
+            } else if let Some(sig) = param_types
+                .iter()
+                .position(|(name, _)| name == pname)
+                .and_then(|index| decl.param_types.get(index))
+                .and_then(|type_ann| type_ann.as_ref())
+                .and_then(|type_ann| self.declared_callable_signature(type_ann, decl.span))
+            {
+                // No call site told us what this callable is, but the DECLARATION did.
+                self.closure_return_types
+                    .insert(pname.clone(), sig.return_type.clone());
+                self.callable_sigs.insert(pname.clone(), sig);
             } else {
                 self.closure_return_types.remove(pname);
                 self.callable_sigs.remove(pname);
             }
         }
 
-        let provisional_sig = FunctionSig {
-            params: param_types.clone(),
-            param_type_exprs: decl
-                .param_types
-                .iter()
-                .cloned()
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
-                .collect(),
-            param_attributes: decl.param_attributes.clone(),
-            defaults: decl.defaults.clone(),
-            return_type: self.provisional_return_type(decl),
-            declared_return: decl.return_type.is_some(),
-            by_ref_return: decl.by_ref_return,
-            ref_params: decl.ref_params.clone(),
-            deprecation: None,
-            is_generator: false,
-            declared_params: decl
-                .param_types
-                .iter()
-                .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
-                .collect(),
-            variadic: decl.variadic.clone(),
-        };
+        let provisional_sig = self.provisional_function_sig(decl, param_types.clone());
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
@@ -149,8 +138,7 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &function_key);
+        self.clear_loop_storage_scope(&function_key);
         let previous_loop_storage_scope =
             std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());
@@ -169,6 +157,9 @@ impl Checker {
             pre_bound_own_storage,
             &decl.body,
             |checker| {
+                checker.boxed_parameter_locals.extend(decl.params.iter().enumerate()
+                    .filter(|(index, _)| decl.param_types.get(*index).is_none_or(Option::is_none))
+                    .map(|(_, name)| name.clone()));
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                         errors.extend(error.flatten());
@@ -332,7 +323,49 @@ impl Checker {
             self.callable_array_return_sigs.remove(name);
         }
 
+        self.completed_function_signatures.insert(name.to_string());
         Ok(return_type)
+    }
+
+    /// Builds the *provisional* signature published before a free function's body is walked.
+    ///
+    /// Shared by the two places that publish one: `resolve_function_signature` (under the
+    /// function's own name) and the variant-group path in
+    /// `crate::types::checker::driver::functions` (under the group's PHP-visible name, which is
+    /// what a recursive call inside an include-loaded variant spells). Keeping one builder keeps
+    /// one provisional policy: a variant group used to publish its own copy with a hardcoded
+    /// `Int` return, so a recursive include-loaded `: string` function was rejected with
+    /// `return type expects Str, got Int` although the same function compiled when declared in
+    /// the main file (issue #635).
+    pub(in crate::types::checker) fn provisional_function_sig(
+        &self,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> FunctionSig {
+        FunctionSig {
+            params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
+            defaults: decl.defaults.clone(),
+            return_type: self.provisional_return_type(decl),
+            declared_return: decl.return_type.is_some(),
+            by_ref_return: decl.by_ref_return,
+            ref_params: decl.ref_params.clone(),
+            deprecation: None,
+            is_generator: false,
+            declared_params: decl
+                .param_types
+                .iter()
+                .map(|type_ann| type_ann.is_some())
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
+                .collect(),
+            variadic: decl.variadic.clone(),
+        }
     }
 
     /// Picks the return type for the *provisional* signature published before a free

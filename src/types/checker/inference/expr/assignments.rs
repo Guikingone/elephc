@@ -50,7 +50,7 @@ impl Checker {
             refuse_string_offset_read_modify_write(array, index, prelude, span)?;
         }
         for stmt in prelude {
-            self.check_assignment_like_stmt(stmt, env)?;
+            self.check_stmt(stmt, env)?;
         }
         if let Some((array, index)) = string_offset_write {
             // PHP's `($s[$i] = $v)` evaluates to the one-byte string it stored, never to `$v`
@@ -135,7 +135,12 @@ impl Checker {
         };
 
         let stmt = Stmt::new(stmt_kind, span);
-        self.check_assignment_like_stmt(&stmt, env)?;
+        let compound_property_update = if let ExprKind::PropertyAccess { object, property } = &target.kind {
+            crate::parser::ast::is_compound_property_assignment_self_read(
+                value, object, property, span, prelude,
+            )
+        } else { false };
+        self.check_assignment_like_stmt_with_property_update(&stmt, env, compound_property_update)?;
         let result_expr = match result_target {
             Some(result_target) if result_target != target => result_target,
             _ => value,
@@ -162,6 +167,7 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(span, &obj_ty);
         if !matches!(
             obj_ty,
             PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed
@@ -173,6 +179,8 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
+        // See the read gate in `inference::objects::access`: relaxed for neither `mixed` nor
+        // `int|float`, because the lowering has no arm for a boxed runtime property name.
         if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
             return Err(CompileError::new(
                 property.span,

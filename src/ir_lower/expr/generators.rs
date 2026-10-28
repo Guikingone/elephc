@@ -12,13 +12,34 @@ use super::*;
 /// Lowers `yield`.
 pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>, value: Option<&Expr>, expr: &Expr) -> LoweredValue {
     let mut operands = Vec::new();
-    if let Some(key) = key {
-        operands.push(lower_expr(ctx, key).value);
-    }
+    let mut key_owner = if let Some(key) = key {
+        let key = lower_expr(ctx, key);
+        let (key, owner) = root_owned_call_operand(ctx, key, expr.span);
+        operands.push(key.value);
+        owner
+    } else {
+        None
+    };
     if let Some(value) = value {
         operands.push(lower_expr(ctx, value).value);
     }
-    ctx.emit_value(Op::GeneratorYield, operands, None, PhpType::Mixed, Op::GeneratorYield.default_effects(), Some(expr.span))
+    if key_owner.is_some() && ctx.builder.value_php_type(operands[0]).codegen_repr() == PhpType::Str {
+        let owner = key_owner.take().unwrap();
+        // The key's box must own its bytes before its source owner retires. Transfer this
+        // single-use box to the yield runtime so no new owner remains on a suspended stack.
+        let key = ctx.emit_value(
+            Op::MixedBox, vec![operands[0]], None, PhpType::Mixed,
+            Op::MixedBox.default_effects(), Some(expr.span),
+        );
+        retire_owned_call_operand(ctx, owner, expr.span);
+        operands[0] = key.value;
+    }
+    let result = ctx.emit_value(Op::GeneratorYield, operands, None, PhpType::Mixed,
+        Op::GeneratorYield.default_effects(), Some(expr.span));
+    if let Some(owner) = key_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    }
+    result
 }
 
 /// Lowers `yield from`.

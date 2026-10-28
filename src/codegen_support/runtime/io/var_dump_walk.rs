@@ -1086,6 +1086,7 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
     emitter.label_global("__rt_var_dump_value");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "x0", "x1", "x9", "__rt_var_dump_value_tag_ready");
 
     // Frame (48 bytes): [0]lo [8]hi [32]x29 [40]x30.
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
@@ -1175,12 +1176,16 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_push");                                // mark the object as being walked
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("bl __rt_vd_debuginfo_object");                         // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("cbnz x0, __rt_vd_val_obj_walked");                     // the whole block was written; only the guard pop remains
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_var_dump_open_object");                        // write `<indent>object(NAME) (N) {\n`
     emitter.instruction("bl __rt_vd_indent_push");                              // properties sit one level deeper
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_var_dump_object");                             // recurse into the property walker
     emitter.instruction("bl __rt_vd_indent_pop");                               // back to the value-line indent
     emitter.instruction("bl __rt_var_dump_close_container");                    // write `<indent>}\n`
+    emitter.label("__rt_vd_val_obj_walked");
     emitter.instruction("bl __rt_vd_seen_pop");                                 // the object is no longer on the walk stack
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
@@ -1214,6 +1219,7 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
     emitter.label_global("__rt_var_dump_value");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "rdi", "rsi", "r11", "__rt_var_dump_value_tag_ready");
 
     // rbp-relative frame: [-8]lo [-16]hi.
     emitter.instruction("push rbp");                                            // save caller frame pointer
@@ -1308,12 +1314,17 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_push");                              // mark the object as being walked
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("call __rt_vd_debuginfo_object");                       // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("test rax, rax");                                       // was the whole block written?
+    emitter.instruction("jnz __rt_vd_val_obj_walked_x86");                      // only the guard pop remains
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_var_dump_open_object");                      // write `<indent>object(NAME) (N) {\n`
     emitter.instruction("call __rt_vd_indent_push");                            // properties sit one level deeper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_var_dump_object");                           // recurse into the property walker
     emitter.instruction("call __rt_vd_indent_pop");                             // back to the value-line indent
     emitter.instruction("call __rt_var_dump_close_container");                  // write `<indent>}\n`
+    emitter.label("__rt_vd_val_obj_walked_x86");
     emitter.instruction("call __rt_vd_seen_pop");                               // the object is no longer on the walk stack
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 
@@ -1363,6 +1374,22 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+
+    // -- hand a run-time promoted array to the hash walker --
+    // A statically `Array(Mixed)` local can hold HASH storage at run time: the write helper
+    // `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+    // layout, and the static type does not move with it. Walking that as an indexed array
+    // reads hash internals — `var_dump` printed `[0]=> int(9)` for a one-entry `[5] => 3`.
+    // The probe is the uniform heap-kind byte, the same one `__rt_array_edge_key` dispatches
+    // on, and the hash walker takes its argument in the same register, so this is a tail
+    // jump. The conditional branch skips OVER an unconditional one because AArch64 cannot
+    // point a conditional branch at an external label.
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
+    emitter.instruction("b.ne __rt_var_dump_indexed_packed");                   // packed storage walks inline below
+    emitter.instruction("b __rt_var_dump_hash");                                // hash storage is the hash walker's job
+    emitter.label("__rt_var_dump_indexed_packed");
 
     // Frame (64 bytes): [0]arr [8]index [16]count [24]stamp [48]x29 [56]x30.
     emitter.instruction("sub sp, sp, #64");                                     // allocate the indexed-walk frame
@@ -1442,6 +1469,16 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+
+    // -- hand a run-time promoted array to the hash walker --
+    // Same runtime-promotion probe as the AArch64 path; see its comment for why a statically
+    // indexed argument can arrive holding hash storage.
+    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and rax, 0xff");                                       // isolate the low-byte heap kind
+    emitter.instruction("cmp rax, 3");                                          // kind 3 = associative hash storage
+    emitter.instruction("jne __rt_var_dump_indexed_packed");                    // packed storage walks inline below
+    emitter.instruction("jmp __rt_var_dump_hash");                              // hash storage is the hash walker's job
+    emitter.label("__rt_var_dump_indexed_packed");
 
     // rbp-relative frame: [-8]arr [-16]index [-24]count [-32]stamp.
     emitter.instruction("push rbp");                                            // save caller frame pointer

@@ -129,6 +129,17 @@ $csv = "one,two,three";
 $parts = explode(",", $csv);
 echo "explode: " . count($parts) . " parts\n";
 echo "implode: " . implode(" | ", $parts) . "\n";
+// implode() takes the array through any slot, including one whose shape is only known at run
+// time -- a ?array, a mixed, a union -- and renders each element type the way echo does:
+// ints and floats as their decimal text, true as "1" and false as the empty string.
+function joined(?array $values): string { return implode(",", $values); }
+echo "implode(?array ints): " . joined([1, 2, 3]) . "\n";
+echo "implode(?array floats): " . joined([1.5, 2.5]) . "\n";
+echo "implode(?array bools): [" . joined([true, false]) . "]\n";
+// Keys are ignored, values are joined in insertion order.
+echo "implode(?array hash): " . joined(["a" => 1, "b" => "x", "c" => 2.5]) . "\n";
+// A value that is not an array is PHP's TypeError, not a crash.
+try { joined(null); } catch (TypeError $e) { echo "implode(null): " . $e->getMessage() . "\n"; }
 
 // Character functions
 echo "\n--- Char ---\n";
@@ -187,6 +198,13 @@ echo "mb_strlen bytes: " . mb_strlen("héllo", "8bit") . "\n";
 $legacyName = "\x82\xA0\x82\xA2\x82\xA4";
 echo "mb_strlen Shift-JIS: " . mb_strlen($legacyName, "SJIS") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
+echo "strip_tags: " . strip_tags("<p>Hello <b>World</b></p>") . "\n";
+echo "strip_tags(allow): " . strip_tags("<p>Hello <b>World</b></p>", "<p>") . "\n";
+// Weak calls accept a Stringable allow-list; strict callers require the declared union.
+class HtmlAllowList {
+    public function __toString(): string { return "<p>"; }
+}
+echo "strip_tags(object): " . strip_tags("<p>Hello <b>World</b></p>", new HtmlAllowList()) . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";
 // base64_decode() skips whitespace and tolerates missing padding; $strict = true

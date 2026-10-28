@@ -123,6 +123,15 @@ impl Checker {
                 Err(CompileError::new(stmt.span, "Unresolved include statement"))
             }
             StmtKind::PackedClassDecl { .. } => Ok(()),
+            // An included file's `return`, rewritten into a `break` to the include's wrapper,
+            // may leave a `finally` as the `return` could. Its depth still has to hold.
+            StmtKind::Break(levels) if stmt.is_include_return_break() => {
+                if *levels <= self.break_continue_depth {
+                    Ok(())
+                } else {
+                    self.check_loop_exit(stmt.span, "break", *levels)
+                }
+            }
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
             StmtKind::ExprStmt(expr) => {
@@ -138,6 +147,7 @@ impl Checker {
                 let result = self.infer_type_with_assignment_effects(expr, env);
                 self.statement_position_expr = saved_statement_position;
                 result?;
+                super::core_attributes::check_discarded(self, expr, env);
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),

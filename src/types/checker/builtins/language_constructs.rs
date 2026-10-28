@@ -46,6 +46,8 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
+                // Not relaxed for `int|float`: `exit status for PHP type Mixed` is what the
+                // backend answers for any boxed status, so the checker keeps the clearer word.
                 if ty != PhpType::Int {
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }
@@ -96,6 +98,7 @@ fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         if isset_object_receiver_type(checker, &object_ty) {
             return Ok(());
         }
@@ -126,6 +129,7 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafePropertyAccess { object, property } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         crate::types::checker::clone_override_storage::record_property_unset_destination(
             checker,
             &object_ty,
@@ -139,6 +143,7 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafeDynamicPropertyAccess { object, property } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         let property_name = match &property.kind {
             ExprKind::StringLiteral(name) => Some(name.as_str()),
             _ => None,
