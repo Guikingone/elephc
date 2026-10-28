@@ -314,13 +314,15 @@ function e1() { $x = ($a[0] = $w); var_dump($x, count($a)); }
 e1();
 function e2() { echo ($a[0] = 7), "\n"; var_dump($a); }
 e2();
+function e3() { $res = $b[$undef] = 5; echo $res, count($b), "\n"; }
+e3();
 "#);
     assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
-    for warning in ["Undefined variable $v", "Undefined variable $w"] {
+    for warning in ["Undefined variable $v", "Undefined variable $w", "Undefined variable $undef"] {
         assert!(run.stdout_raw.contains(warning), "{warning}: {}", run.stdout_raw);
     }
     assert!(!run.stdout_raw.contains("Undefined variable $a"), "{}", run.stdout_raw);
-    assert_eq!(run.stdout, "NULL\nNULL\nint(1)\n7\narray(1) {\n  [0]=>\n  int(7)\n}\n");
+    assert_eq!(run.stdout, "NULL\nNULL\nint(1)\n7\narray(1) {\n  [0]=>\n  int(7)\n}\n51\n");
 }
 
 /// A boxed `?ArrayObject` local can never hold false, so its keyed write is a plain

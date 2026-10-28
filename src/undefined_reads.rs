@@ -749,8 +749,12 @@ fn rewrite_expr(expr: &mut Expr, facts: &ScopeFacts) {
         }
         // An element target's value is bound in the prelude (`$t = $v; $a[0] = $t`): its reads
         // are the assignment's own.
-        ExprKind::Assignment { value, prelude, result_target, .. } => {
+        ExprKind::Assignment { target, value, prelude, result_target, .. } => {
             rewrite_scope_stmts(prelude, facts);
+            // The target's dimensions (`$a[$undef] = v`) are reads; its root is the write.
+            if !matches!(target.kind, ExprKind::Variable(_)) {
+                rewrite_probe(target, facts);
+            }
             // A result read straight from the value (`$x = ($a[0] = $w)`) reads it a second
             // time: only the value's read warns, the result's is the silent null it produced.
             if let Some(result) = result_target.as_mut().filter(|result| result == &value) {
