@@ -50,6 +50,7 @@ pub(crate) mod spl;
 #[cfg(test)]
 mod sysv_call_alignment;
 mod strings;
+pub(crate) use strings::concat_scratch::scratch_capacity as concat_scratch_capacity;
 mod system;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
 mod zval;

@@ -37,6 +37,12 @@ pub(crate) const FLOAT_WINDOW_BYTES: usize = 64;
 /// with a mask.
 pub(crate) const FLOAT_SPILL_SLOTS: usize = 4;
 
+/// Keeps runtime helper bounds and the capacity read by nested host boundaries identical.
+pub(crate) fn scratch_capacity(heap_size: usize) -> usize {
+    // x86_64 helper comparisons need a signed 32-bit immediate; larger results use the heap.
+    heap_size.clamp(65_536, 1 << 30)
+}
+
 /// Emits `__rt_concat_reserve`, `__rt_concat_publish`, `__rt_concat_grow`, and
 /// `__rt_alloc_overflow`.
 ///
@@ -163,7 +169,7 @@ fn emit_float_window_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the current concat scratch write offset
     emitter.instruction(&format!("add x11, x10, #{}", FLOAT_WINDOW_BYTES));     // offset after reserving the formatter window
     abi::emit_load_int_immediate(emitter, "x9", emitter.concat_capacity as i64); // load the scratch arena capacity
-    emitter.instruction("cmp x11, x9");                                        // would the window cross the end of _concat_buf?
+    emitter.instruction("cmp x11, x9");                                         // would the window cross the end of _concat_buf?
     emitter.instruction("b.hi __rt_float_window_spill");                        // a full scratch formats into the spill ring instead
     abi::emit_symbol_address(emitter, "x9", "_concat_buf");
     emitter.instruction("add x0, x9, x10");                                     // the window starts at the scratch write offset
@@ -190,7 +196,7 @@ fn emit_float_window_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_float_window");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);
     emitter.instruction(&format!("lea r11, [r10 + {}]", FLOAT_WINDOW_BYTES));   // offset after reserving the formatter window
-    emitter.instruction(&format!("cmp r11, {}", emitter.concat_capacity));          // would the window cross the end of _concat_buf?
+    emitter.instruction(&format!("cmp r11, {}", emitter.concat_capacity));      // would the window cross the end of _concat_buf?
     emitter.instruction("ja __rt_float_window_spill_x86");                      // a full scratch formats into the spill ring instead
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("add r10, r9");                                         // the window starts at the scratch write offset

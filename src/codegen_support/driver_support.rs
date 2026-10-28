@@ -123,7 +123,7 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
     // larger scratch arena, so encoders are not capped at the historical 64 KiB.
     // Capped at 1 GiB so x86_64 can compare against it as a signed 32-bit immediate; a
     // writer that outgrows the arena moves to the heap (or fails closed) either way.
-    emitter.concat_capacity = heap_size.clamp(65_536, 1 << 30);
+    emitter.concat_capacity = runtime::concat_scratch_capacity(heap_size);
     emitter.phpext_output = phpext;
     emitter.emit_text_prelude();
     runtime::emit_runtime(&mut emitter, features);

@@ -53,7 +53,6 @@ const LAST_ERROR_BUFFER: &str = "_elephc_last_error_buffer";
 const LAST_ERROR_LENGTH: &str = "_elephc_last_error_length";
 const LAST_ERROR_PRESENT: &str = "_elephc_last_error_present";
 const LAST_ERROR_CAPACITY: usize = 4096;
-const CONCAT_SCRATCH_CAPACITY: i64 = 65_536;
 
 /// Reserves the fixed, allocation-free state shared by every library export.
 fn reserve_boundary_data(data: &mut DataSection) {
@@ -285,6 +284,31 @@ mod tests {
     use crate::codegen_support::platform::{AppleVariant, Platform, Target};
     use crate::span::Span;
     use crate::types::{FunctionSig, PhpType};
+
+    /// Nested entries read their linked runtime's actual arena bound on every library target.
+    #[test]
+    fn nested_boundary_reads_linked_concat_capacity_on_all_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            boundary::emit_enter_boundary(&mut emitter, 8, "arena_test");
+            let asm = emitter.output();
+            assert!(asm.contains("_concat_capacity"), "{target:?}: {asm}");
+            assert!(!asm.contains("65536"), "nested entry must not bake in the old bound: {asm}");
+            for (heap, capacity) in [(16_384, 65_536), (524_288, 524_288), (1usize << 31, 1usize << 30)] {
+                let data = crate::codegen_support::runtime::emit_runtime_data_fixed(
+                    heap, target, crate::codegen::compile_php_version(),
+                );
+                assert!(data.contains(&format!("_concat_capacity:\n    .quad {capacity}\n")),
+                    "{target:?}: heap size {heap} must publish capacity {capacity}");
+            }
+        }
+    }
 
     /// Builds one single-string-input owned-result export fixture.
     fn string_export() -> ExportedFunction {

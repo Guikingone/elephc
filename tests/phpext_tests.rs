@@ -24,6 +24,8 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 mod validation;
 #[path = "phpext/fibers.rs"]
 mod fibers;
+#[path = "phpext/reentry.rs"]
+mod reentry;
 
 struct Project(PathBuf);
 

@@ -529,3 +529,14 @@ concatenation arena and strict-types regressions alongside producer guards.
 Acceptance of this integration requires fresh full repository CI, the six SDK
 configurations and renewed Grok and Greptile review on the final head.
 Historical review and CI evidence above applies only to the old stacked head.
+
+
+The main integration review found a real concat reentry regression: the enlarged
+arena still used a 64 KiB nested-entry cursor. A PHP output handler reentering
+an export corrupted a 70,000-byte temporary across a `print` expression. The
+new regression failed before the fix and passes after nested boundaries read
+`_concat_capacity` from their linked runtime. Runtime helpers and the metadata
+share one sizing function. All five library targets have a boundary/data check;
+the six SDK jobs run it alongside the new real-PHP regression. Local validation
+passed the warning-free build, all 27 producer cases, producer units, all-target
+boundary/warning emission and existing cdylib/staticlib/iOS emitter checks.

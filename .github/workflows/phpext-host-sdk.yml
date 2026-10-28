@@ -86,6 +86,7 @@ jobs:
         run: |
           cargo test -p elephc --lib phpext::
           cargo test -p elephc --lib warning_dispatch_emits_every_supported_target
+          cargo test -p elephc --lib nested_boundary_reads_linked_concat_capacity_on_all_targets
 
       - name: Check consumer ABI after sharing value-layout facts
         run: cargo test -p elephc-zend --test abi structures_have_the_layout_rust_gives_them
