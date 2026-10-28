@@ -392,6 +392,7 @@ elephc --target linux-x86_64 hello.php
 elephc --web app.php                          # fastest; trusted application code
 elephc --web --web-isolation=pool app.php     # crash containment + concurrent handlers
 elephc --web --web-isolation=request app.php  # discard all native state after each request
+elephc --web --web-lifecycle=application bootstrap.php # retain one application per worker
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 
