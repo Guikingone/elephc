@@ -141,6 +141,37 @@ impl Checker {
         }
     }
 
+    /// Validates a value assigned to a declared (typed) property: PHP converts it as it binds a
+    /// parameter, in weak mode only, so a scalar of another scalar type that converts without a
+    /// `TypeError` is accepted and lowering stores the converted value.
+    ///
+    /// # Errors
+    /// The standard `<context> expects <expected>, got <actual>` mismatch.
+    pub(crate) fn require_typed_property_value(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        value: &Expr,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        self.require_strict_types_param_binding(expected, actual, value.span, context)?;
+        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+            return Ok(());
+        }
+        // A property store, unlike a parameter boundary, has a run-time guard that converts a
+        // scalar of another scalar type in weak mode and raises PHP's TypeError (or deprecation)
+        // for one that does not convert: lowering hands it the boxed value.
+        match classify_param_binding(expected, actual, value) {
+            ParamBinding::Identity
+            | ParamBinding::Cast(_)
+            | ParamBinding::Const(_)
+            | ParamBinding::Deprecated(_)
+            | ParamBinding::TypeError(_)
+            | ParamBinding::NeedsRuntimeCheck(_) => Ok(()),
+            _ => self.require_compatible_arg_type(expected, actual, value.span, context),
+        }
+    }
+
     /// Rejects a declared-parameter argument that `declare(strict_types=1)` forbids at this
     /// call site.
     ///

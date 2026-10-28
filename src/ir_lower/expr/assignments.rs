@@ -86,7 +86,7 @@ pub(super) fn lower_assignment_expr(
             lower_non_local_assignment_write_with_diagnosed_key(
                 ctx, target, value, expr.span, key_already_diagnosed,
             );
-            let result = lower_expr(ctx, result_target);
+            let result = lower_expr(ctx, &typed_property_assignment_result(ctx, target, result_target));
             finish_static_compound_receiver(ctx, compound_receiver, expr.span);
             return super::assignment_rhs_capture::finish_static_assignment_rhs(
                 ctx, rhs_owner, result, expr.span,
@@ -174,6 +174,44 @@ pub(super) fn lower_assignment_expr(
     }
     finish_static_compound_receiver(ctx, compound_receiver, expr.span);
     result
+}
+
+/// The value of `$object->prop = $value` (or `Class::$prop = $value`) for a property declared
+/// with a scalar type: PHP gives the value the property now holds, converted as weak mode does
+/// (`$x = $o->count = "12"` makes `$x` the int 12), so the assigned value is cast to that type.
+/// Any other target keeps `result_target`.
+fn typed_property_assignment_result(ctx: &LoweringContext<'_, '_>, target: &Expr, result_target: &Expr) -> Expr {
+    let declared = match &target.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            let class = match &object.kind {
+                ExprKind::Variable(name) => match ctx.local_type(name) {
+                    PhpType::Object(class) => Some(class),
+                    _ => None,
+                },
+                ExprKind::This => ctx.current_class.clone(),
+                _ => None,
+            };
+            class.and_then(|class| {
+                let info = ctx.classes.get(class.trim_start_matches('\\'))?;
+                if !info.visible_property_is_declared(property) {
+                    return None;
+                }
+                info.visible_property(property).map(|(_, (_, ty))| ty.clone())
+            })
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            crate::ir_lower::stmt::declared_static_property_type(ctx, receiver, property)
+        }
+        _ => None,
+    };
+    let cast = match declared.map(|ty| ty.codegen_repr()) {
+        Some(PhpType::Int) => CastType::Int,
+        Some(PhpType::Float) => CastType::Float,
+        Some(PhpType::Str) => CastType::String,
+        Some(PhpType::Bool) => CastType::Bool,
+        _ => return result_target.clone(),
+    };
+    Expr::new(ExprKind::Cast { target: cast, expr: Box::new(result_target.clone()) }, result_target.span)
 }
 
 /// Lowers a non-local `??=` assignment expression with lazy RHS evaluation.

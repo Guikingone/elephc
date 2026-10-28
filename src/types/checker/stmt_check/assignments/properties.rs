@@ -479,10 +479,10 @@ fn check_object_property_write(
         let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed)
             || readonly_write_guard;
         if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
-            checker.require_compatible_arg_type(
+            checker.require_typed_property_value(
                 &expected_ty,
                 val_ty,
-                span,
+                value,
                 &format!("Property {}::${}", class_name, property),
             )?;
         }

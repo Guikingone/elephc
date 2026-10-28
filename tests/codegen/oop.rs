@@ -76,6 +76,8 @@ mod class_relation_names;
 
 /// A property write whose receiver is statically `mixed` or an object union.
 mod mixed_receiver_property_writes;
+/// Weak-mode scalar conversion of a value stored in a typed property.
+mod typed_property_weak_coercion;
 #[path = "oop/static_receiver_lifetime.rs"]
 mod static_receiver_lifetime;
 #[path = "oop/static_receiver_dynamic.rs"]
