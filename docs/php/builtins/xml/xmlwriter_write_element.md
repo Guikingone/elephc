@@ -2,7 +2,7 @@
 title: "xmlwriter_write_element()"
 description: "Writes a complete element."
 sidebar:
-  order: 1090
+  order: 1092
 ---
 
 ## xmlwriter_write_element()

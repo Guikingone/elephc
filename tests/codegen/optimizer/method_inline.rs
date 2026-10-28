@@ -197,3 +197,6 @@ mod effects;
 
 #[path = "method_inline_packed.rs"]
 mod packed;
+
+#[path = "method_inline_buffer.rs"]
+mod buffer;

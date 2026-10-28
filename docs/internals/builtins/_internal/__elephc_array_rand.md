@@ -2,7 +2,7 @@
 title: "__elephc_array_rand() - internals"
 description: "Compiler internals for __elephc_array_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1094
+  order: 1096
 ---
 
 ## `__elephc_array_rand()` - internals

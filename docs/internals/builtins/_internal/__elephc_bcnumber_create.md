@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_create() - internals"
 description: "Compiler internals for __elephc_bcnumber_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1098
+  order: 1100
 ---
 
 ## `__elephc_bcnumber_create()` - internals

@@ -122,6 +122,38 @@ mod tests {
     use super::*;
     use crate::codegen::platform::Target;
 
+    /// Native callback owners retire after PHP and resource destructors on every supported ABI.
+    #[test]
+    fn application_shutdown_releases_extern_callbacks_after_resources() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut module = Module::new(target);
+            module.extern_decls.push(crate::ir::ExternDecl {
+                name: "signal".into(),
+                params: vec![crate::ir::ExternParamDecl {
+                    name: "handler".into(),
+                    ir_type: crate::ir::IrType::I64,
+                    php_type: PhpType::Callable,
+                    abi: crate::types::ExternAbiType::Callable,
+                }],
+                return_type: crate::ir::IrType::I64,
+                return_php_type: PhpType::Int,
+                return_abi: crate::types::ExternAbiType::INT64,
+                link_libs: vec![],
+            });
+            module.data.global_names.push("probe".into());
+            let mut emitter = Emitter::new(target);
+            emit(&mut emitter, &module, &DataSection::new());
+            let assembly = emitter.output();
+            let entry = assembly.find(&format!("{}:\n", target.extern_symbol("elephc_web_application_shutdown_cleanup"))).unwrap();
+            let shutdown = &assembly[entry..];
+            let release = shutdown.find(crate::codegen::frame::EXTERN_CALLBACK_RELEASE_LABEL).unwrap();
+            let global = shutdown.find(&ir_global_symbol("probe")).unwrap();
+            let resources = shutdown.find("__rt_stream_registry_cleanup").unwrap();
+            assert!(global < resources && resources < release, "{name}: {shutdown}");
+        }
+    }
+
     /// Every supported ABI retains the arena and emits protected cleanup before cycle collection.
     #[test]
     fn application_boundaries_preserve_heap_on_every_target() {

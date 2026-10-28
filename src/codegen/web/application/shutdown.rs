@@ -28,7 +28,8 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         release(emitter, scope, &record.symbol, &record.php_type.codegen_repr(), false);
         emitter.label(&skip);
     }
-    for (index, (symbol, ty)) in refcounted_static_properties(module).into_iter().enumerate() {
+    let (properties, hosting) = static_properties_hosting_last(module);
+    for (index, (symbol, ty)) in properties.into_iter().chain(hosting).enumerate() {
         let skip = format!("__rt_web_app_shutdown_property_{index}");
         abi::emit_load_symbol_to_reg(emitter, value, &symbol, 8);
         super::super::emit_branch_if_equals_sentinel(emitter, &skip);
@@ -61,6 +62,10 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         scope.call(emitter, "__rt_mbstring_release_catalog", false);
     }
     scope.call(emitter, "__rt_stream_registry_cleanup", false);
+    if crate::codegen::frame::module_binds_extern_callbacks(module) {
+        // Native registrations remain callable until every PHP/resource destructor has finished.
+        scope.call(emitter, crate::codegen::frame::EXTERN_CALLBACK_RELEASE_LABEL, false);
+    }
     // -- preserve a pending Throwable until the generated PHP catch can log it --
     scope.finish(emitter);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_web_app_shutdown_clean");

@@ -98,6 +98,7 @@ fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         if isset_object_receiver_type(checker, &object_ty) {
             return Ok(());
         }
@@ -128,6 +129,7 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafePropertyAccess { object, property } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         crate::types::checker::clone_override_storage::record_property_unset_destination(
             checker,
             &object_ty,
@@ -141,6 +143,7 @@ fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafeDynamicPropertyAccess { object, property } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         let property_name = match &property.kind {
             ExprKind::StringLiteral(name) => Some(name.as_str()),
             _ => None,

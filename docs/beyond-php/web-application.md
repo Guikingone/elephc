@@ -18,6 +18,11 @@ elephc --web --web-isolation=worker --web-lifecycle=application bootstrap.php
 Lifecycle is a compiler option. `pool` and `request` isolation reject application
 lifecycle rather than silently changing its semantics.
 
+Projects declaring hosted PHP extensions in `[extension.dependencies]` currently
+require request lifecycle. Compilation rejects application lifecycle for those
+projects because the hosted Zend request storage cannot preserve application-owned
+values across requests. Built-in Elephc bridge crates keep their existing support.
+
 ## Typed API
 
 The shared contract uses ordinary PHP:

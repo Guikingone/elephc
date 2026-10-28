@@ -25,7 +25,8 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         borrow(emitter, &record.symbol);
         emitter.label(&skip);
     }
-    for (index, (symbol, _)) in refcounted_static_properties(module).into_iter().enumerate() {
+    let (properties, hosting) = static_properties_hosting_last(module);
+    for (index, (symbol, _)) in properties.into_iter().chain(hosting).enumerate() {
         let skip = format!("__rt_web_candidate_property_{index}");
         abi::emit_load_symbol_to_reg(emitter, value, &symbol, 8);
         super::super::emit_branch_if_equals_sentinel(emitter, &skip);

@@ -30,6 +30,7 @@ mod basics;
 mod branch_conditions;
 #[path = "runtime_gc/receiver_parameter_owners.rs"]
 mod receiver_parameter_owners;
+mod guarded_interface_mutations;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]
@@ -144,6 +145,7 @@ mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod codegen_guard_operand_owners;
+mod array_edge_type_errors;
 mod call_coercion_owners;
 mod eval_sparse_arrays;
 mod boxed_array_merge;
@@ -196,6 +198,8 @@ mod unserialize_hydration_data;
 mod serialize_magic_results;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
+#[path = "runtime_gc/allocator_bins.rs"]
+mod allocator_bins;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
 mod split_remainders;
@@ -241,3 +245,5 @@ mod coroutine_boundaries;
 mod coroutine_eval;
 
 mod coroutine_slot_set;
+#[path = "runtime_gc/counter_regions.rs"]
+mod counter_regions;

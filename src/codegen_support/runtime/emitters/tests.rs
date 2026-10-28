@@ -479,12 +479,13 @@ fn test_array_slice_str_is_emitted_for_every_supported_target() {
     }
 }
 
-/// The incremental JSON and serialize encoders call the shared scratch-capacity guard and
-/// keep each target's instruction set out of the other target's output.
+/// The incremental JSON and serialize encoders write through the growable `__rt_strbuf_*`
+/// output buffer (which reserves room before every append and moves to the heap past the
+/// scratch arena) and keep each target's instruction set out of the other target's output.
 ///
-/// A misplaced guard is not cosmetic: an x86 `mov rdi, ...` line inside the AArch64 runtime
-/// makes every program that uses `serialize()` fail to assemble, so this pins both the guard
-/// symbol and the target split for the three encoders that write incrementally.
+/// A misplaced instruction is not cosmetic: an x86 `mov rdi, ...` line inside the AArch64
+/// runtime makes every program that uses `serialize()` fail to assemble, so this pins both the
+/// buffer protocol and the target split for the three encoders that write incrementally.
 #[test]
 fn serialize_and_json_encoders_emit_the_capacity_guard_for_their_own_architecture() {
     for name in ["macos-aarch64", "linux-x86_64"] {
@@ -501,8 +502,8 @@ fn serialize_and_json_encoders_emit_the_capacity_guard_for_their_own_architectur
         let serialize = serialize.output();
         for (what, asm) in [("json object", object), ("json array", array), ("serialize", serialize)] {
             assert!(
-                asm.contains("__rt_concat_headroom"),
-                "{name} {what}: encoder never calls the shared capacity guard"
+                asm.contains("__rt_strbuf_"),
+                "{name} {what}: encoder never goes through the growable output buffer"
             );
             if aarch64 {
                 assert!(
@@ -601,3 +602,67 @@ fn x86_heap_transient_stamps_use_the_full_heap_magic() {
     }
 }
 
+/// `preg_match` capture rejects the removed `/e` modifier before PCRE2 compilation.
+///
+/// `__rt_preg_strip` marks `/e` with bit 30. The POSIX wrapper accepts that bit, so every
+/// capture helper — including the iOS AArch64 emitters — must branch to the false sentinel
+/// first. Count-only helpers reject the same bit.
+#[test]
+fn preg_match_capture_rejects_removed_e_modifier_before_compile() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_runtime(
+            &mut emitter,
+            RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            },
+        );
+        let asm = emitter.output();
+        let (reject, fail_sentinel) = match target.arch {
+            Arch::AArch64 => (
+                "tbnz x3, #30, __rt_preg_match_capture_compile_fail",
+                "mov x0, #-1",
+            ),
+            Arch::X86_64 => (
+                "jc __rt_preg_match_capture_compile_fail_linux_x86_64",
+                "mov rax, -1",
+            ),
+        };
+        let body = helper_body(&asm, "__rt_preg_match_capture");
+        let reject_at = body.find(reject).unwrap_or_else(|| {
+            panic!("{name}: capture helper does not reject the /e marker ({reject})")
+        });
+        let compile_at = body.find("elephc_pcre2_v1_compile").unwrap_or_else(|| {
+            panic!("{name}: capture helper does not compile")
+        });
+        assert!(
+            reject_at < compile_at,
+            "{name}: /e rejection must run before PCRE2 compilation"
+        );
+        assert!(
+            body.contains(fail_sentinel),
+            "{name}: capture failure must return the -1 false sentinel"
+        );
+        let count = helper_body(&asm, "__rt_preg_match");
+        let count_reject = match target.arch {
+            Arch::AArch64 => "tbnz x3, #30, __rt_preg_match_fail",
+            Arch::X86_64 => "jc __rt_preg_match_fail_linux_x86_64",
+        };
+        assert!(
+            count.contains(count_reject),
+            "{name}: count-only preg_match must reject /e"
+        );
+    }
+}
+
+/// Returns the text of one runtime helper, from its label through the next global symbol.
+fn helper_body<'a>(asm: &'a str, name: &str) -> &'a str {
+    let marker = format!("{name}:\n");
+    let start = asm
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing helper {name}"));
+    let rest = &asm[start + marker.len()..];
+    rest.find(".globl ").map_or(rest, |end| &rest[..end])
+}

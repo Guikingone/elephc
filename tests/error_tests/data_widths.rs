@@ -107,15 +107,6 @@ fn test_error_width_buffer_element_cannot_be_nullable_or_union() {
     expect_error("<?php buffer<u8|int> $b = buffer_new<u8|int>(2);", "Unknown type: u8");
 }
 
-/// Verifies a width is not a pointer target.
-#[test]
-fn test_error_width_is_not_a_pointer_target() {
-    expect_error(
-        "<?php packed class P { public ptr<u8> $p; }",
-        "Unknown pointer target type: u8",
-    );
-}
-
 /// Verifies a misspelled width in a packed field or buffer element names the accepted
 /// spellings, inside and outside a namespace, instead of pointing at a missing class.
 #[test]
@@ -155,4 +146,77 @@ fn test_packed_class_named_like_a_width_is_embedded_as_a_class() {
         "<?php packed class A { public u8 $x; } packed class u8 { public A $a; }",
         "embeds itself through its packed class fields",
     );
+}
+
+/// Verifies a generic width parameter enforces its PHP scalar carrier at call boundaries.
+#[test]
+fn test_error_generic_native_storage_carriers_reject_wrong_values() {
+    for width in ["u32", "u8", "f32"] {
+        expect_error(
+            &format!(
+                r#"<?php
+final class Cell<T> {{
+    public function set(T $value): void {{}}
+}}
+$cell = new Cell<{width}>();
+$cell->set("bad");
+"#,
+            ),
+            if width == "f32" { "expects float" } else { "expects int" },
+        );
+    }
+}
+
+/// Verifies generic value carriers do not erase the storage identity of returned buffers.
+#[test]
+fn test_error_generic_native_storage_carriers_preserve_buffer_types() {
+    expect_error(
+        r#"<?php
+function wrong<T>(buffer<T> $data): buffer<int> { return $data; }
+wrong<u8>(buffer_new<u8>(1));
+"#,
+        "buffer<u8>",
+    );
+}
+
+/// Verifies only a bound parameter becomes a carrier, not a literal width in a generic body.
+#[test]
+fn test_error_generic_native_storage_carriers_reject_literal_width_annotations() {
+    expect_error(
+        "<?php function wrong<T>(T $value): T { u32 $local = $value; return $local; } echo wrong<int>(1);",
+        "Unknown type: u32",
+    );
+}
+
+/// Verifies width arguments fail object bounds normally and literal width bounds stay invalid.
+#[test]
+fn test_error_generic_native_storage_carriers_object_bounds() {
+    for source in [
+        "<?php class Animal {} class Limited<T : Animal> {} new Limited<u8>();",
+        "<?php class Animal {} function limited<T : Animal>(T $v): T { return $v; } limited<u8>(1);",
+        "<?php class Animal {} class Methods { public function limited<T : Animal>(T $v): T { return $v; } } (new Methods())->limited<u8>(1);",
+    ] {
+        expect_error(source, "does not satisfy its bound Animal");
+    }
+    expect_error("<?php class InvalidBound<T : u32> {} new InvalidBound<int>();", "Unknown type: u32");
+}
+
+/// Verifies native width arguments cannot widen through unrelated global width-named classes.
+#[test]
+fn test_error_generic_native_storage_carriers_variance_keeps_width_identity() {
+    for expected in ["u8", "\\u8"] {
+        expect_error(
+            &format!(
+                r#"<?php
+namespace {{ class u8 {{}} class u32 extends u8 {{}} }}
+namespace WidthVariance {{
+    class Source<+T> {{}}
+    function consume(Source<{expected}> $source): void {{}}
+    consume(new Source<u32>());
+}}
+"#,
+            ),
+            "only two object types can widen",
+        );
+    }
 }

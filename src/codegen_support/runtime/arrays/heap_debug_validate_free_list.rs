@@ -8,6 +8,7 @@
 //! Key details:
 //! - Date helpers consume fixed lookup tables and target libc time fields, so symbol names and field offsets must stay coupled.
 
+use super::heap_consolidate::HEAP_BIN_TABLE_BYTES;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_heap_debug_validate_free_list` runtime helper for heap debug mode.
@@ -15,8 +16,8 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// Validates the ordered free-list and small-bin caches by emitting target-specific
 /// assembly (x86_64 or ARM64). For each free block the helper checks: address lies
 /// within the live heap window, payload size meets the minimum (8 bytes), and blocks
-/// are strictly ascending with proper coalescing. For each small-bin chain it additionally
-/// verifies the payload size falls within the size-class bounds and that every cached block
+/// are strictly ascending with proper coalescing. For each exact size-class bin it additionally
+/// verifies the payload size is exactly the bin's class and that every cached block
 /// is genuinely free (`refcount == 0` and no retained heap `kind`).
 ///
 /// # Arguments
@@ -70,14 +71,12 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.instruction("xor eax, eax");                                    // start with the <=8-byte small-bin head offset
 
         emitter.label("__rt_heap_debug_validate_small_bins");
-        emitter.instruction("cmp eax, 64");                                     // have we validated all eight exact small-bin classes?
+        emitter.instruction(&format!("cmp eax, {}", HEAP_BIN_TABLE_BYTES));     // have we validated every exact size class?
         emitter.instruction("je __rt_heap_debug_validate_free_list_ret");       // yes — both the ordered free list and cached bins are valid
-        emitter.instruction("lea r8, [r11 + rax]");                             // compute the address of the current small-bin head slot
+        emitter.instruction("lea r8, [r11 + rax]");                             // compute the address of the current bin head slot
         emitter.instruction("mov rdx, QWORD PTR [r8]");                         // load the current cached block header for this size class
-        emitter.instruction("mov ecx, eax");                                    // derive the exclusive bound below this exact aligned payload class
-        emitter.instruction("lea edi, [eax + 8]");                              // require this bin's exact payload size
-
-        emitter.label("__rt_heap_debug_validate_small_bin_ready");
+        emitter.instruction("mov ecx, eax");                                    // exclusive lower bound: the bin at offset o holds payload o + 8
+        emitter.instruction("lea edi, [eax + 8]");                              // inclusive upper bound, so the payload must equal o + 8
         crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
         emitter.instruction("mov r8, QWORD PTR [r8]");                          // use the current live heap bytes as a finite traversal budget
 
@@ -170,14 +169,12 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("mov x12, #0");                                         // start with the <=8-byte bin offset
 
     emitter.label("__rt_heap_debug_validate_small_bins");
-    emitter.instruction("cmp x12, #64");                                        // have we validated all eight exact small-bin classes?
+    emitter.instruction(&format!("cmp x12, #{}", HEAP_BIN_TABLE_BYTES));        // have we validated every exact size class?
     emitter.instruction("b.eq __rt_heap_debug_validate_free_list_ret");         // yes — the entire cached free state is valid
-    emitter.instruction("add x13, x11, x12");                                   // x13 = address of the current small-bin head slot
+    emitter.instruction("add x13, x11, x12");                                   // x13 = address of the current bin head slot
     emitter.instruction("ldr x14, [x13]");                                      // x14 = current cached block header for this size class
-    emitter.instruction("mov x15, x12");                                        // derive the exclusive bound below this exact aligned payload class
-    emitter.instruction("add x16, x12, #8");                                    // require this bin's exact payload size
-
-    emitter.label("__rt_heap_debug_validate_small_bin_ready");
+    emitter.instruction("mov x15, x12");                                        // x15 = exclusive lower bound: the bin at offset o holds payload o + 8
+    emitter.instruction("add x16, x12, #8");                                    // x16 = inclusive upper bound, so the payload must equal o + 8
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
     emitter.instruction("ldr x13, [x13]");                                      // x13 = total live heap bytes available to bound the cached chain walk
 

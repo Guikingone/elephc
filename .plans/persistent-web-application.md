@@ -9,7 +9,32 @@
 - [x] Validate retained values, exceptions, bounded memory, preload, and default behavior.
 - [x] Document the typed API and provide a PHP-compatible example with a native adapter.
 
-## Final status, 2026-10-28
+## Publication and main integration, PR #2127
+
+The user subsequently authorized opening the PR, following CI and recovering its
+queue entry through a verified merge. PR https://github.com/illegalstudio/elephc/pull/2127
+is open as a draft with `ci:macos`. Publication is tracked in Code Journal plan
+`83dcd1ef-2352-45bf-a569-adf7ff19e865`. The previous delivery statuses below are
+historical; the implementation is now committed and published.
+
+The original signed feature commit is `a5904e148e46c0558f2f6f6713ecb2ed6925a88c`.
+Integrating main `5aa6bdb8b9c41dbd99e9065f5ad974bbacc3f381` required twelve content
+resolutions. Preserve its exact allocator classes through 2048 bytes and its
+consolidation/reset helpers, while keeping the constant-time live-base guard for
+web frees. Adapt application roots/shutdown to the split static-property metadata
+and retire native callback bindings after PHP/resource destructors. Hosted Zend
+request storage is currently incompatible with retained application state;
+projects declaring `[extension.dependencies]` receive an explicit diagnostic for
+application lifecycle, documented and tested before native artifact resolution.
+
+Machine queue job `50729bce` passed the warning-free build, seven library checks
+(including the new admission and all-target teardown cases), twenty-two native
+coroutine/allocator regressions, and all forty application HTTP cases. An
+additional native callback-cycle control is queued. Remote CI and a clean review
+of the integrated head are pending. Queue membership is currently absent; native
+GitHub HEADGREEN admission and final remote ancestry verification remain required.
+
+## Initial implementation delivery, before PR publication, 2026-10-28
 
 Implementation, focused validation, API documentation and the portable example are
 complete. Independent Claude round 12 returned `VERDICT: clean` with no actionable
