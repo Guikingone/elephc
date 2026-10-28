@@ -33,6 +33,7 @@ use super::array_fill_loop::ArrayFillLoop;
 use super::array_get_bounds::ArrayGetBounds;
 use super::abs_int_sink::AbsIntSink;
 use super::string_len_sink::StringLenSink;
+use super::json_encode_len_sink::JsonEncodeLenSink;
 use super::sqrt_add_int_sink::SqrtAddIntSink;
 use super::strpos_int_sink::StrposIntSink;
 use super::array_sum_int_sink::ArraySumIntSink;
@@ -147,6 +148,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(StringLenSink),
         Box::new(StrposIntSink),
         Box::new(SqrtAddIntSink),
+        Box::new(JsonEncodeLenSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopCounterVersioning::new(module)),
         Box::new(LoopOptimize),

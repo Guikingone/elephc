@@ -697,6 +697,15 @@ result representation changes from the boxed `int|false` cell to a raw `I64`
 A strict-false comparison, echo, store or any other observer keeps the boxed
 call.
 
+`src/ir_passes/json_encode_len_sink.rs` removes the Mixed boxing and string-cast
+copies from `strlen((string) json_encode($value))`. The encoder still runs with its
+original flags, depth, `json_last_error` state and throws; only the result becomes
+the encoder's raw string, which one `str_len` consumes immediately and one release
+frees (a scratch-backed result is a no-op). A JSON error without
+`JSON_PARTIAL_OUTPUT_ON_ERROR` becomes the empty string, exactly like
+`(string) false`, so the observed length stays zero. Any other observer keeps the
+boxed call.
+
 `src/ir_passes/string_len_sink.rs` removes a hash/encoding whose bytes are never
 observed. When a one-argument `md5()` or `base64_encode()` call receives an
 already-materialized PHP string and its result feeds only one `str_len` (plus

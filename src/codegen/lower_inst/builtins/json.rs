@@ -68,6 +68,74 @@ pub(crate) fn lower_json_encode(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the raw string form of `json_encode()` selected by the length sink.
+///
+/// The encoder runs exactly as the boxed builtin does, including flags, depth, error state and
+/// throws, but the result is left as the encoder's raw string instead of being persisted and
+/// boxed. The sink only selects this target when one `strlen()` consumes the string immediately,
+/// so a scratch-backed result stays valid and a grown heap block is released once by that
+/// string's ordinary release.
+pub(crate) fn lower_json_encode_str(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "json_encode", 1, 3)?;
+    let value = expect_operand(inst, 0)?;
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+
+    reset_json_encode_state(ctx);
+    lower_json_encode_depth(ctx, inst)?;
+    lower_json_encode_flags(ctx, inst)?;
+    load_json_encode_value(ctx, value, &value_ty)?;
+    emit_json_encode_loaded_value(ctx, &value_ty);
+    clear_json_diagnostic_source_refs(ctx);
+    finish_json_encode_str(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Keeps the encoder's raw string, or returns the empty string for a reported JSON error.
+///
+/// `json_encode()` answers `false` unless `JSON_PARTIAL_OUTPUT_ON_ERROR` is active; casting that
+/// false to a string yields `""`, whose length is zero. The successful path leaves the encoder's
+/// pointer/length untouched.
+fn finish_json_encode_str(ctx: &mut FunctionContext<'_>) {
+    let string_label = ctx.next_label("json_encode_str_result");
+    let done_label = ctx.next_label("json_encode_str_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_json_last_error", 0);
+            ctx.emitter.instruction(&format!("cbz x9, {}", string_label));      // no JSON error means the encoder string is valid
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_json_active_flags", 0);
+            ctx.emitter.instruction("tst x9, #512");                            // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string
+            ctx.emitter.instruction(&format!("b.ne {}", string_label));         // partial output still exposes its encoded length
+            abi::emit_pop_reg_pair(ctx.emitter, "x10", "x11");
+            ctx.emitter.instruction("mov x1, xzr");                             // (string)false is the empty string
+            ctx.emitter.instruction("mov x2, xzr");                             // the empty string has zero length
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the valid encoder string
+            ctx.emitter.label(&string_label);
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_json_last_error", 0);
+            ctx.emitter.instruction("test r10, r10");                           // check whether the encoder reported an error
+            ctx.emitter.instruction(&format!("jz {}", string_label));           // no JSON error means the encoder string is valid
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_json_active_flags", 0);
+            ctx.emitter.instruction("test r10, 512");                           // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string
+            ctx.emitter.instruction(&format!("jnz {}", string_label));          // partial output still exposes its encoded length
+            abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");
+            ctx.emitter.instruction("xor eax, eax");                            // (string)false is the empty string
+            ctx.emitter.instruction("xor edx, edx");                            // the empty string has zero length
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the valid encoder string
+            ctx.emitter.label(&string_label);
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
 /// Lowers `json_last_error()` by reading the shared runtime error-code symbol.
 pub(crate) fn lower_json_last_error(
     ctx: &mut FunctionContext<'_>,

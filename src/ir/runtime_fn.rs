@@ -791,6 +791,8 @@ pub enum RuntimeFnId {
     HttpResponseCode,
     JsonDecode,
     JsonEncode,
+    /// Raw `json_encode()` string observed only by `strlen()` after a string cast.
+    JsonEncodeStr,
     JsonLastError,
     JsonLastErrorMsg,
     JsonValidate,
@@ -888,6 +890,7 @@ impl RuntimeFnId {
             RuntimeFnId::Base64EncodedLen => Some((1, Some(1))),
             RuntimeFnId::StrposInt => Some((2, Some(3))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
+            RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
             _ => None,
         }
     }
@@ -1720,6 +1723,8 @@ impl RuntimeFnId {
             RuntimeFnId::StrposInt => RuntimeFnId::Strpos.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
             RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
+            // The raw encoder keeps the JSON error state and encoder side effects.
+            RuntimeFnId::JsonEncodeStr => RuntimeFnId::JsonEncode.effects(),
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
@@ -2395,7 +2400,7 @@ impl RuntimeFnId {
         use crate::builtins::semantics::BuiltinResultOwnership;
         // Decoding always constructs an independent Mixed graph. String payloads are
         // persisted from decoder scratch; no result borrows the source argument pin.
-        if matches!(self, RuntimeFnId::JsonDecode) {
+        if matches!(self, RuntimeFnId::JsonDecode | RuntimeFnId::JsonEncodeStr) {
             return BuiltinResultOwnership::Fresh;
         }
         if self.uses_mbstring_runtime() {
@@ -3488,6 +3493,7 @@ impl RuntimeFnId {
             RuntimeFnId::HttpResponseCode => "http_response_code",
             RuntimeFnId::JsonDecode => "json_decode",
             RuntimeFnId::JsonEncode => "json_encode",
+            RuntimeFnId::JsonEncodeStr => "json_encode_str",
             RuntimeFnId::JsonLastError => "json_last_error",
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",
             RuntimeFnId::JsonValidate => "json_validate",
