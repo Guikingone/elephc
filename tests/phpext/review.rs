@@ -10,6 +10,25 @@
 
 use super::*;
 
+/// Shared fatal helpers become recoverable PHP Errors without writing around host diagnostics.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn fatal_helpers_do_not_write_raw_stderr() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("capacity", "<?php #[Export] function php_fill(int $count): array { return array_fill(0, $count, 0); } #[Export] function php_buffer(int $count): int { $buffer = buffer_new<int>($count); return $buffer[0]; } #[Export] function php_buffer_index(int $index): int { $buffer = buffer_new<int>(1); return $buffer[$index]; }");
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+try { php_fill(PHP_INT_MAX); exit(10); } catch (Error $error) {}
+try { php_buffer(-1); exit(12); } catch (Error $error) {}
+try { php_buffer_index(1); exit(13); } catch (Error $error) {}
+if (php_fill(2) !== [0, 0]) { exit(11); }
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 /// Compares independently executed source and native functions, preserving status and diagnostics.
 fn compare(source: &str, driver: &str) {
     let project = Project::new();

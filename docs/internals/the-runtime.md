@@ -23,9 +23,10 @@ under `src/phpext/`, and native stack/allocation failures escape to an invocatio
 boundary before a host PHP exception is raised. It bypasses the standalone
 runtime object cache so these helpers cannot be reused by executable output.
 
-`src/phpext/state.rs` places all writable native storage into one bounded region.
-The adapter initializes a template at MINIT, allocates independent request images
-at RINIT and exchanges complete images at stable native addresses under a module
+`src/phpext/state.rs` places writable native storage into initialized data and a
+sparse zero-filled range. MINIT retains initialized bytes. RINIT activates the
+request; its first exported call lazily allocates an independent snapshot. The
+adapter exchanges both ranges at stable native addresses under a module
 mutex. PHP output/error callbacks run with the image parked and the lock released,
 allowing reentry and concurrent host requests. RSHUTDOWN and MSHUTDOWN free the
 request and module storage. The initial producer capability policy rejects
