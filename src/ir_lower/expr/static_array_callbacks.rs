@@ -41,7 +41,19 @@ pub(super) fn lower_static_array_map(
         return None;
     }
     let elem_type = static_callable_return_type(ctx, &callback);
+
     let array_type = PhpType::Array(Box::new(elem_type.clone()));
+
+    // A callback that returns nothing has no element representation, and this path builds the
+    // result array from the callback's OWN return type rather than from the checker's answer.
+    // `array_map(nop(...), [1, 2])` is `[null, null]` in php-src; here it reached `array_push`
+    // with a `Void` operand, which has no lowering, so a program php accepts was refused.
+    // Declining hands it to the ordinary runtime path, which boxes each result — the same answer
+    // the closure-literal form already gave, since only this static shape took the shortcut.
+    if matches!(elem_type.codegen_repr(), PhpType::Void) {
+        return None;
+    }
+
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),
@@ -128,16 +140,16 @@ pub(super) fn static_callable_return_type(
         | StaticCallableBinding::ExternFunction(name)
         | StaticCallableBinding::Builtin(name) => call_return_type(ctx, name, &[]),
         StaticCallableBinding::Closure { signature, .. } => {
-            normalize_value_php_type(signature.return_type.codegen_repr())
+            normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type))
         }
         StaticCallableBinding::StaticMethod { receiver, method }
         | StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
             static_method_implementation_signature(ctx, receiver, method)
-                .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+                .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
                 .unwrap_or(PhpType::Mixed)
         }
         StaticCallableBinding::InstanceMethod { signature, .. } => {
-            normalize_value_php_type(signature.return_type.codegen_repr())
+            normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type))
         }
     }
 }
@@ -178,6 +190,13 @@ pub(super) fn lower_static_callable_value_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
+            let sig = call_signature(
+                ctx,
+                &function_name,
+                source_prefers_extension_builtin(&function_name),
+            );
+            let mut operands = operands;
+            box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
             let php_type = static_callable_builtin_result_type(
                 ctx,
                 &function_name,
@@ -198,11 +217,12 @@ pub(super) fn lower_static_callable_value_call(
             signature,
             captures,
             return_alias: _,
+            ..
         } => {
             let arguments = operands;
             let mut call_operands = arguments.clone();
             append_closure_capture_operands(&mut call_operands, &captures);
-            let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            let php_type = normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type));
             let data = ctx.intern_function_name(&name);
             let call = ctx.emit_value(
                 Op::Call,
@@ -220,7 +240,7 @@ pub(super) fn lower_static_callable_value_call(
             let sig = static_method_implementation_signature(ctx, &receiver, &method).cloned();
             let result_type = sig
                 .as_ref()
-                .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+                .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
                 .unwrap_or_else(|| fallback_expr_type(expr));
             let name = format!("{}::{}", receiver_name(&receiver), method);
             let data = ctx.intern_string(&name);

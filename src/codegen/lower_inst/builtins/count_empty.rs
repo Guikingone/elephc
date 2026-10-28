@@ -242,7 +242,9 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
     ensure_arg_count(inst, "empty", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.raw_value_php_type(value)? {
-        PhpType::Int | PhpType::Pointer(_) => {
+        // A packed record address, a `?ptr<T>` (null is 0) or a buffer handle (0 is the missing
+        // element of a buffer array) is one raw word, not a Mixed cell.
+        ty if matches!(ty, PhpType::Int | PhpType::Pointer(_) | PhpType::Packed(_) | PhpType::Buffer(_)) || crate::types::is_nullable_pointer_type(&ty) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_zero_bool(ctx);
         }
@@ -257,7 +259,7 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
             ctx.load_value_to_result(value)?;
             emit_string_length_zero_bool(ctx);
         }
-        PhpType::TaggedScalar => {
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => { // Includes nullable integer unions.
             emit_tagged_scalar_empty_bool(ctx, value)?;
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {

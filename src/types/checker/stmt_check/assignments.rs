@@ -97,6 +97,24 @@ impl Checker {
         self.foreach_key_locals.contains(name)
     }
 
+    /// Returns true when `index` is the counter of the `for` loop this write runs directly in.
+    ///
+    /// That is the one index a write into a still-EMPTY array can carry without leaving packed
+    /// storage: the counter is `0` at the first write and advances one slot per iteration, so it
+    /// never runs ahead of the array's length and no gap is reachable. The depth comparison is
+    /// what "directly in" means — a write nested one conditional deeper may be skipped, and a
+    /// skipped iteration is exactly how a gap appears.
+    pub(crate) fn index_is_packed_loop_counter(&self, array: &str, index: &Expr) -> bool {
+        let ExprKind::Variable(name) = &index.kind else {
+            return false;
+        };
+        self.packed_loop_counter.as_ref().is_some_and(|counter| {
+            counter.name == *name
+                && counter.depth == self.local_conditional_depth
+                && !counter.rebound_locals.contains(array)
+        })
+    }
+
     /// Validates assignment-like statements, dispatching to specialized checkers per variant.
     ///
     /// # Parameters
@@ -117,6 +135,16 @@ impl Checker {
         &mut self,
         stmt: &Stmt,
         env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        self.check_assignment_like_stmt_with_property_update(stmt, env, false)
+    }
+
+    /// Preserves a compound expression's property-write mode after its value becomes a temp.
+    pub(crate) fn check_assignment_like_stmt_with_property_update(
+        &mut self,
+        stmt: &Stmt,
+        env: &mut TypeEnv,
+        compound_property_update: bool,
     ) -> Result<(), CompileError> {
         let result = match &stmt.kind {
             StmtKind::Assign { name, value } => {
@@ -203,6 +231,7 @@ impl Checker {
                 value,
                 stmt.span,
                 env,
+                compound_property_update,
             ),
             StmtKind::PropertyArrayPush {
                 object,

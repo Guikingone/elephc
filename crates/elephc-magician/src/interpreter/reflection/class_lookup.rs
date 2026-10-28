@@ -386,6 +386,9 @@ pub(super) fn eval_reflection_class_is_cloneable(
     if class.is_abstract() || is_enum {
         return false;
     }
+    let mut ancestry = context.class_parent_names(class.name());
+    ancestry.push(class.name().to_string());
+    if ancestry.iter().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|contract| !contract.cloneable)) { return false; }
     context
         .class_method(class.name(), "__clone")
         .map(|(_, method)| method.visibility() == EvalVisibility::Public)
@@ -575,7 +578,7 @@ pub(super) fn eval_reflection_property_modifiers(
     match set_visibility {
         Some(EvalVisibility::Private) => modifiers |= 32 | 4096,
         Some(EvalVisibility::Protected) => modifiers |= 2048,
-        _ if is_readonly && visibility == EvalVisibility::Public => modifiers |= 2048,
+        None if is_readonly && visibility == EvalVisibility::Public => modifiers |= 2048,
         _ => {}
     }
     modifiers

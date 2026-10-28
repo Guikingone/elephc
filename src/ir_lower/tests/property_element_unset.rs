@@ -27,6 +27,39 @@ const TARGETS: [&str; 5] = [
     "linux-x86_64",
 ];
 
+/// Runtime object dispatch, readonly guards, and invalid array keys emit for every supported ABI.
+#[test]
+fn property_element_unset_runtime_payloads_compile_on_every_target() {
+    let source = r#"<?php
+class RuntimeOffsetBag implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+class RuntimeOffsetHolder {
+    public mixed $value;
+    public readonly mixed $fixed;
+    public function __construct() { $this->fixed = new RuntimeOffsetBag(); }
+}
+class RuntimeStaticOffsetHolder { public static array $pending; }
+function runtime_offset_key(int $n): mixed { return $n > 0 ? new stdClass() : [1]; }
+unset(RuntimeStaticOffsetHolder::$pending["key"]);
+$holder = new RuntimeOffsetHolder();
+$holder->value = new RuntimeOffsetBag();
+unset($holder->value[[1]], $holder->value[new stdClass()], $holder->fixed["key"]);
+$holder->value = ["keep" => 1];
+try { unset($holder->value[runtime_offset_key($argc)]); } catch (TypeError $error) {}
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Lowers `source` for the host target and returns the refusal message it must produce.
 fn refusal(source: &str) -> crate::errors::CompileError {
     match super::try_lower_source_at_for_target(

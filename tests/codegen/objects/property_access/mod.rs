@@ -10,6 +10,7 @@
 use super::*;
 
 mod array_element_unset;
+mod element_unset_regressions;
 mod by_ref_builtin_args;
 mod nullsafe;
 mod nullsafe_side_effects;

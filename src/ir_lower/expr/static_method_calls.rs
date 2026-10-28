@@ -159,7 +159,7 @@ pub(super) fn lower_static_method_call(
     // be declared with the exact type the call is emitted with.
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| {
             if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
                 PhpType::Mixed
@@ -250,7 +250,16 @@ pub(super) fn static_late_binding_receiver_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
             ctx.current_class.clone()
@@ -361,7 +370,7 @@ pub(super) fn lower_static_method_descriptor_call(
         .map(crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig);
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| fallback_expr_type(expr));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
@@ -398,7 +407,7 @@ pub(super) fn lower_static_method_descriptor_value_call(
     let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| fallback_expr_type(expr));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
@@ -515,7 +524,7 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let nominal = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))?;
     match (
         static_method_late_static_return_for_ir(ctx, receiver, method),
         static_late_binding_receiver_type_for_ir(ctx, receiver),
@@ -548,7 +557,16 @@ pub(crate) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
         StaticReceiver::Parent => {

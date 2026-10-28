@@ -7,20 +7,20 @@
 //! Key details:
 //! - EIR publishes a detached cell before this lowering promotes and publishes its unique hash.
 //! - Destructors can throw or replace the array; no receiver writeback follows value release.
-//! - A non-array payload gets PHP's answer: null/false are a no-op, strings and scalars throw,
+//! - Non-array payloads follow PHP: null is quiet, false emits a deprecation, scalars throw,
 //!   and an `ArrayAccess` object has its `offsetUnset()` called.
 
 use crate::codegen::{abi, CodegenIrError, Result};
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
-use crate::ir::Instruction;
+use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::{expect_operand, hashes};
 
 /// Promotes a rooted array cell to sparse storage, then removes the key from its installed hash.
 ///
-/// A cell that holds no array gets PHP's answer instead: null and false are left alone, a string
+/// A cell that holds no array gets PHP's answer: null is quiet, false reports a deprecation, a string
 /// raises `Error("Cannot unset string offsets")`, an object raises `Error("Cannot use object of
 /// type C as array")` unless it is `ArrayAccess`, and any other payload raises `Error("Cannot
 /// unset offset in a non-array variable")`. An object goes to `__rt_mixed_object_offset_unset`,
@@ -38,6 +38,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let string_offset = ctx.next_label("offset_unset_string");
     let non_array = ctx.next_label("offset_unset_non_array");
     let object = ctx.next_label("offset_unset_object");
+    let false_offset = ctx.next_label("offset_unset_false");
     // PHP answers a receiver that is not an array by what it holds: null (a removed untyped
     // property is recreated as null by the write fetch) and false leave everything alone, a
     // string refuses its offsets, and every other scalar is not a container at all.
@@ -56,7 +57,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction("cmp x10, #3");                             // runtime tag 3 = bool
             ctx.emitter.instruction(&format!("b.ne {non_array}"));              // every other payload is not a container
             ctx.emitter.instruction("ldr x10, [x9, #8]");                       // load the bool payload
-            ctx.emitter.instruction(&format!("cbz x10, {done}"));               // false is left alone like null
+            ctx.emitter.instruction(&format!("cbz x10, {false_offset}"));       // false reports its conversion deprecation without removing a key
             ctx.emitter.instruction(&format!("b {non_array}"));                 // true is not a container
         }
         Arch::X86_64 => {
@@ -75,7 +76,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction("cmp r11, 3");                              // runtime tag 3 = bool
             ctx.emitter.instruction(&format!("jne {non_array}"));               // every other payload is not a container
             ctx.emitter.instruction("cmp QWORD PTR [r10 + 8], 0");              // is the bool payload false?
-            ctx.emitter.instruction(&format!("je {done}"));                     // false is left alone like null
+            ctx.emitter.instruction(&format!("je {false_offset}"));             // false reports its conversion deprecation without removing a key
             ctx.emitter.instruction(&format!("jmp {non_array}"));               // true is not a container
         }
     }
@@ -92,15 +93,8 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
     let boxed_key = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, boxed_key);
-    // The runtime's SPL containers still take the normalized key; see the helper. It is built
-    // WITHOUT the float-to-int deprecation: PHP hands an `ArrayAccess` object the float as is and
-    // warns about nothing, and a warning here could run a user error handler between the payload
-    // tag check above and the receiver read below, with the owned key box on the stack.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            hashes::materialize_hash_key_aarch64_after_first(ctx, key)?;
-            ctx.emitter.instruction("mov x3, x2");                              // pass the normalized key high word
-            ctx.emitter.instruction("mov x2, x1");                              // pass the normalized key low word
             abi::emit_pop_reg(ctx.emitter, "x1");
             ctx.load_value_to_reg(cell, "x9")?;
             ctx.emitter.instruction("ldr x0, [x9, #8]");                        // pass the unboxed object
@@ -108,9 +102,6 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("b {done}"));                      // the object answered through offsetUnset or threw
         }
         Arch::X86_64 => {
-            hashes::materialize_hash_key_x86_64_after_first(ctx, key)?;
-            ctx.emitter.instruction("mov rcx, rdx");                            // pass the normalized key high word
-            ctx.emitter.instruction("mov rdx, rsi");                            // pass the normalized key low word
             abi::emit_pop_reg(ctx.emitter, "rsi");
             ctx.load_value_to_reg(cell, "r10")?;
             ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // pass the unboxed object
@@ -118,12 +109,42 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("jmp {done}"));                    // the object answered through offsetUnset or threw
         }
     }
+    ctx.emitter.label(&false_offset);
+    super::runtime_class_messages::emit_static_diagnostic(
+        ctx,
+        "Deprecated: Automatic conversion of false to array is deprecated\n",
+        true,
+    );
+    abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&string_offset);
     super::exceptions::emit_error(ctx, "Cannot unset string offsets");
     ctx.emitter.label(&non_array);
     super::exceptions::emit_error(ctx, "Cannot unset offset in a non-array variable");
     ctx.emitter.label(&valid);
+    lower_array_offset_unset(ctx, key)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Rejects invalid array offsets only after selecting the array receiver branch.
+/// The same key remains legal for a user ArrayAccess receiver reached through the object branch.
+fn lower_array_offset_unset(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    match ctx.value_php_type(key)?.codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            super::exceptions::emit_type_error(ctx, "Cannot unset offset of type array on array");
+            return Ok(());
+        }
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(key)?;
+            emit_object_key_error(ctx);
+            return Ok(());
+        }
+        _ => {}
+    }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if ctx.value_php_type(key)?.codegen_repr() == PhpType::Mixed {
+        guard_boxed_array_key(ctx, key)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             hashes::materialize_hash_key_aarch64(ctx, key)?;
@@ -135,6 +156,40 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
-    ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Prevents boxed array and object offsets from falling through hash normalization as key zero.
+fn guard_boxed_array_key(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    let array = ctx.next_label("unset_key_array");
+    let object = ctx.next_label("unset_key_object");
+    let valid = ctx.next_label("unset_key_valid");
+    ctx.load_value_to_result(key)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let result = abi::int_result_reg(ctx.emitter);
+    let arm = ctx.emitter.target.arch == Arch::AArch64;
+    for tag in [4, 5] {
+        ctx.emitter.instruction(&format!("cmp {result}, {}{tag}", if arm { "#" } else { "" })); // reject both PHP array payload representations
+        ctx.emitter.instruction(&format!("{} {array}", if arm { "b.eq" } else { "je" })); // select the array-key TypeError
+    }
+    ctx.emitter.instruction(&format!("cmp {result}, {}6", if arm { "#" } else { "" })); // an object offset must name its runtime class
+    ctx.emitter.instruction(&format!("{} {object}", if arm { "b.eq" } else { "je" })); // select the object-key TypeError
+    abi::emit_jump(ctx.emitter, &valid);
+    ctx.emitter.label(&array);
+    super::exceptions::emit_type_error(ctx, "Cannot unset offset of type array on array");
+    ctx.emitter.label(&object);
+    abi::emit_reg_move(ctx.emitter, result, crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target));
+    emit_object_key_error(ctx);
+    ctx.emitter.label(&valid);
+    Ok(())
+}
+
+/// Builds PHP's invalid offset message with the actual runtime class of an object key.
+fn emit_object_key_error(ctx: &mut FunctionContext<'_>) {
+    let result = abi::int_result_reg(ctx.emitter);
+    super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result, "object");
+    super::runtime_class_messages::emit_concat_static_prefix(ctx, "Cannot unset offset of type ");
+    super::runtime_class_messages::emit_concat_static_suffix(ctx, " on array");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    super::exceptions::emit_type_error_from_string_result(ctx);
 }

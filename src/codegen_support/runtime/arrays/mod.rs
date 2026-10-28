@@ -10,6 +10,11 @@
 //! - A hash entry that belongs to a PHP reference set carries runtime value tag 11 and a managed
 //!   reference cell in `value_lo`; `hash_entry_reference` owns that representation.
 
+#[cfg(test)]
+mod incref_register_tests;
+#[cfg(test)]
+mod gc_incoming_cache_tests;
+
 mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
@@ -27,6 +32,7 @@ mod array_diff;
 mod array_diff_refcounted;
 mod array_diff_key;
 mod array_edge_key;
+mod array_edge_value;
 mod array_ensure_unique;
 mod array_take_boxed;
 mod array_fill;
@@ -75,6 +81,7 @@ mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
 mod array_rand;
+mod mt_uniform;
 mod random_u32;
 mod random_uniform;
 mod random_uniform64;
@@ -104,6 +111,7 @@ mod array_to_hash_reverse;
 mod array_to_hash_unique;
 mod hash_to_hash_unique;
 mod array_to_mixed;
+mod array_to_pointer_words;
 mod array_udiff_uintersect;
 mod array_union;
 mod array_unshift;
@@ -121,7 +129,9 @@ mod eval_array_references;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
+mod memory;
 mod gc_destructors;
+mod gc_weak_observers;
 mod gc_exceptions;
 mod gc_eval_object_children;
 mod gc_mark_reachable;
@@ -162,6 +172,9 @@ mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
 mod heap_alloc;
+pub(crate) mod heap_live_bases;
+mod heap_grow_tail;
+mod heap_consolidate;
 mod heap_debug_check_live;
 mod heap_debug_fail;
 mod heap_debug_report;
@@ -209,6 +222,8 @@ mod slice_bounds;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
+mod float_compare_slots;
+mod float_sort;
 mod php_compare_slots;
 mod usort;
 mod usort_str;
@@ -245,6 +260,8 @@ pub use array_diff_key::emit_array_diff_key;
 /// Emit array difference by key helper.
 pub use array_edge_key::emit_array_edge_key;
 /// Emit array first/last key helper (array_key_first / array_key_last).
+pub use array_edge_value::emit_array_edge_value;
+/// Emit array first/last value helper (array_first / array_last).
 pub use array_internal_pointer::emit_array_ptr_key;
 /// Emit the internal-array-pointer key boxing helper (key()).
 pub use array_internal_pointer::emit_array_ptr_seek;
@@ -280,6 +297,8 @@ pub use array_free_deep::emit_array_free_deep;
 /// Emit deep array free helper.
 pub use array_grow::emit_array_grow;
 /// Emit array grow helper.
+pub use heap_grow_tail::emit_heap_grow_tail;
+/// Emit heap tail-growth helper.
 pub use array_hash_union::emit_array_hash_union;
 /// Emit array hash union helper.
 pub use array_intersect::emit_array_intersect;
@@ -346,6 +365,7 @@ pub use array_rand::emit_array_rand;
 pub use random_u32::emit_random_u32;
 /// Emit 32-bit random unsigned integer helper.
 pub use random_uniform::emit_random_uniform;
+pub use mt_uniform::emit_mt_uniform;
 pub use random_uniform64::{emit_random_u64, emit_random_uniform64};
 /// Emit uniform random integer helper.
 pub use array_reduce::emit_array_reduce;
@@ -397,6 +417,7 @@ pub use array_to_hash_unique::emit_array_to_hash_unique;
 pub use hash_to_hash_unique::emit_hash_to_hash_unique;
 /// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
 pub use array_to_mixed::emit_array_to_mixed;
+pub use array_to_pointer_words::emit_array_to_pointer_words;
 /// Emit array-to-Mixed conversion helper.
 pub use array_udiff_uintersect::emit_array_udiff_uintersect;
 /// Emit array udiff/uintersect comparator helper.
@@ -431,6 +452,7 @@ pub use hash_chunk::emit_hash_chunk;
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
 pub use gc_control::emit_gc_control;
+pub use memory::emit_memory;
 /// Emits pinned destructor snapshots for both cycle collectors.
 pub use gc_destructors::emit_gc_destructors;
 /// Emits eval-owned object GC edges and final-release dispatch.
@@ -483,6 +505,10 @@ pub use hash_union::emit_hash_union;
 pub use hash_unset::emit_hash_unset;
 /// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;
+/// Emit the bin-merging consolidation pass and the bin reset helper.
+pub use heap_consolidate::emit_heap_consolidate;
+/// Bytes of the exact size-class bin table the runtime data reserves.
+pub(crate) use heap_consolidate::{heap_bin_mark_bytes, HEAP_BIN_TABLE_BYTES};
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;
 /// Emit heap debug live check helper.
@@ -568,6 +594,10 @@ pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 pub use float_key_to_int::emit_float_key_to_int;
+/// Emit the raw-float comparators used by the stable float sorter.
+pub use float_compare_slots::emit_float_compare_slots;
+/// Emit PHP-compatible sorting for raw float arrays.
+pub use float_sort::emit_float_sort;
 /// Emit user-defined sort helper.
 pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;

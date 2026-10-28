@@ -584,9 +584,8 @@ echo $n, "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Removing an offset of a `false` held in a boxed `mixed` property leaves it `false`. PHP also
-/// prints an `Automatic conversion of false to array` deprecation, which elephc does not (see
-/// `docs/php/types.md`). Review follow-up for #750.
+/// Removing an offset of false leaves it false and reports PHP's conversion deprecation.
+/// Handler ordering is covered by `element_unset_regressions`. Review follow-up for #750.
 #[test]
 fn test_unset_offset_of_false_mixed_property_keeps_false() {
     let out = compile_and_run(
