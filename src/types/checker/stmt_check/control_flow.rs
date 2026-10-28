@@ -491,6 +491,19 @@ impl Checker {
                             );
                         }
                     }
+                } else if matches!(&arr_ty, PhpType::Object(class_name)
+                    if !*value_by_ref
+                        && !self.object_type_implements_iterable(class_name)
+                        && crate::types::foreach_walks_properties(&self.classes, class_name))
+                {
+                    // PHP walks a non-Traversable object's properties visible here, as
+                    // `get_object_vars()` lists them; lowering iterates exactly that array.
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), PhpType::Mixed);
+                        self.clear_foreach_callable_metadata(k);
+                    }
+                    env.insert(value_var.clone(), PhpType::Mixed);
+                    self.clear_foreach_callable_metadata(value_var);
                 } else if let PhpType::Object(class_name) = &arr_ty {
                     if !self.object_type_implements_iterable(class_name) {
                         return Err(CompileError::new(

@@ -168,7 +168,7 @@ fn test_foreach_accepts_builtin_iterator_interface_parameter_types() {
 #[test]
 fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalikes() {
     for source in [
-        "<?php class Plain {} function walk(Plain $items): void { foreach ($items as $value) {} }",
+        "<?php class Plain {} function walk(Plain $items): void { foreach ($items as &$value) {} }",
         r"<?php namespace Domain; interface Traversable {} function walk(Traversable $items): void { foreach ($items as $value) {} }",
     ] {
         expect_error(

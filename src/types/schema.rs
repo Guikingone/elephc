@@ -442,6 +442,39 @@ pub struct ClassInfo {
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
+/// Whether `foreach` over an object declared as class `class_name` walks its visible properties,
+/// as PHP does for an object that is not `Traversable`: the class is a known class that is not
+/// Traversable, and neither is any subclass a value of that type could be.
+pub fn foreach_walks_properties<'a>(classes: &'a HashMap<String, ClassInfo>, class_name: &str) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    if !classes.contains_key(class_name) {
+        return false;
+    }
+    let traversable = |info: &ClassInfo| {
+        info.interfaces.iter().any(|interface| {
+            let interface = interface.trim_start_matches('\\');
+            ["Traversable", "Iterator", "IteratorAggregate"].iter().any(|name| interface.eq_ignore_ascii_case(name))
+        })
+    };
+    let descends = |mut name: &'a str| {
+        let mut steps = 0;
+        loop {
+            if name.eq_ignore_ascii_case(class_name) {
+                return true;
+            }
+            let Some(parent) = classes.get(name).and_then(|info| info.parent.as_deref()) else {
+                return false;
+            };
+            name = parent.trim_start_matches('\\');
+            steps += 1;
+            if steps > classes.len() {
+                return false;
+            }
+        }
+    };
+    !classes.iter().any(|(name, info)| descends(name) && traversable(info))
+}
+
 /// Returns the class whose `__construct` PHP runs when `class_name` is instantiated.
 ///
 /// A private method is not inherited, so `ClassInfo::methods` deliberately carries no

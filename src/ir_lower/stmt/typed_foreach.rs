@@ -204,6 +204,31 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    // A non-Traversable object: PHP walks the properties visible here, which is the array
+    // `get_object_vars()` gives in this scope.
+    if !value_by_ref {
+        let object_class = match &array.kind {
+            ExprKind::Variable(name) => match ctx.local_type(name) {
+                PhpType::Object(class) => Some(class),
+                _ => None,
+            },
+            ExprKind::This => ctx.current_class.clone(),
+            ExprKind::NewObject { class_name, .. } => Some(class_name.to_string()),
+            _ => None,
+        };
+        if object_class.is_some_and(|class| crate::types::foreach_walks_properties(ctx.classes, &class)) {
+            let vars = Expr::new(
+                ExprKind::FunctionCall {
+                    name: crate::names::Name::unqualified("get_object_vars"),
+                    args: vec![array.clone()],
+                },
+                // A lowering-built call takes no source span: the checker's per-span call facts
+                // belong to the iterated expression.
+                crate::span::Span::dummy(),
+            );
+            return lower_foreach(ctx, &vars, key_var, value_var, value_by_ref, body, loop_span);
+        }
+    }
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
