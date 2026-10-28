@@ -691,3 +691,31 @@ var_dump(empty(mk()->p));
         "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n"
     );
 }
+
+/// Reading a property through null warns `Attempt to read property "p" on null` and yields null,
+/// whether the receiver is statically null, a reference-bound undefined variable or a boxed
+/// value; other non-objects name their type, and `isset`/`??` stay silent (php 8.5 output).
+#[test]
+fn test_property_read_on_non_object_warns() {
+    let run = compile_and_run_capture(r#"<?php
+$a =& $b;
+var_dump($a->p);
+$c = null;
+$c->q;
+$m = json_decode("[1]");
+var_dump($m->r, isset($m->s), $m->t ?? "d");
+"#);
+    for warning in [
+        "Attempt to read property \"p\" on null",
+        "Attempt to read property \"q\" on null",
+        "Attempt to read property \"r\" on array",
+    ] {
+        assert!(run.stdout_raw.contains(warning), "{warning}: {}", run.stdout_raw);
+    }
+    assert!(
+        !run.stdout_raw.contains("property \"s\"") && !run.stdout_raw.contains("property \"t\""),
+        "{}",
+        run.stdout_raw
+    );
+    assert_eq!(run.stdout, "NULL\nNULL\nbool(false)\nstring(1) \"d\"\n");
+}

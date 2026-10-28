@@ -139,6 +139,11 @@ impl Checker {
         if matches!(obj_ty, PhpType::Void) && self.null_probe_depth > 0 {
             return Ok(PhpType::Void);
         }
+        // Any other read through a null receiver is php's run-time warning `Attempt to read
+        // property "p" on null` and yields null (lowered as a boxed null).
+        if matches!(obj_ty, PhpType::Void) {
+            return Ok(PhpType::Mixed);
+        }
         Err(CompileError::new(
             expr.span,
             "Property access requires an object or typed pointer",

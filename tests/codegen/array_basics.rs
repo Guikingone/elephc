@@ -1898,3 +1898,21 @@ echo $sargs[0];
     );
     assert_eq!(out, "4|3|[1,2,3]|7");
 }
+
+/// `array_push` with a spread among its values appends every element and writes the array back
+/// (it used to push the spread tail as one value, return the wrong count and then crash).
+#[test]
+fn test_array_push_with_spread_values() {
+    let out = compile_and_run(r#"<?php
+function test() {
+    $array = [1, 2, 3];
+    $values = [];
+    echo array_push($array, 4, ...$values), json_encode($array), "\n";
+    $more = [8, 9];
+    echo array_push($array, 7, ...$more), json_encode($array), "\n";
+    echo array_push($array, ...$more), json_encode($array), "\n";
+}
+test();
+"#);
+    assert_eq!(out, "4[1,2,3,4]\n7[1,2,3,4,7,8,9]\n9[1,2,3,4,7,8,9,8,9]\n");
+}

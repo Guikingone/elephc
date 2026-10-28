@@ -171,7 +171,7 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     ctx.emitter.label(&zero_label);
-    super::exceptions::emit_division_by_zero_error(ctx, MODULO_BY_ZERO_MESSAGE);
+    super::exceptions::emit_division_by_zero_error_at(ctx, MODULO_BY_ZERO_MESSAGE, inst.span);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -213,7 +213,7 @@ pub(super) fn lower_int_div_to_float(
         }
     }
     ctx.emitter.label(&zero_label);
-    super::exceptions::emit_division_by_zero_error(ctx, DIVISION_BY_ZERO_MESSAGE);
+    super::exceptions::emit_division_by_zero_error_at(ctx, DIVISION_BY_ZERO_MESSAGE, inst.span);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -252,7 +252,7 @@ pub(super) fn lower_float_div(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     ctx.emitter.label(&zero_label);
-    super::exceptions::emit_division_by_zero_error(ctx, DIVISION_BY_ZERO_MESSAGE);
+    super::exceptions::emit_division_by_zero_error_at(ctx, DIVISION_BY_ZERO_MESSAGE, inst.span);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }

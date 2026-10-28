@@ -651,8 +651,59 @@ pub(super) fn parse_function_call_or_callable(
     } else {
         let args = parse_args(tokens, pos, span)?;
         let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+        if let Some(push) = spread_array_push(&name, &args, span) {
+            return Ok(push);
+        }
         Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
     }
+}
+
+/// Rewrites `array_push($a, x, ...$s)` (a spread among the values) into the element pushes it
+/// performs: `$t = [x, ...$s]; foreach ($t as $v) { $a[] = $v; }`, valued `count($a)`. The
+/// builtin path handed the spread tail to the runtime as one value and never wrote `$a` back.
+fn spread_array_push(name: &Name, args: &[Expr], span: Span) -> Option<Expr> {
+    if !name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("array_push") {
+        return None;
+    }
+    let (target, values) = args.split_first()?;
+    let ExprKind::Variable(array) = &target.kind else { return None; };
+    if !values.iter().any(|value| matches!(value.kind, ExprKind::Spread(_)))
+        || values.iter().any(|value| matches!(value.kind, ExprKind::NamedArg { .. }))
+    {
+        return None;
+    }
+    let temp = |role: &str| crate::names::generated_local_name(&format!(
+        "__elephc_array_push_{}_{}_{}", role, span.line, span.col,
+    ));
+    let (list, item, count) = (temp("list"), temp("item"), temp("count"));
+    let variable = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), span);
+    let prelude = vec![
+        Stmt::new(StmtKind::Assign {
+            name: list.clone(),
+            value: Expr::new(ExprKind::ArrayLiteral(values.to_vec()), span),
+        }, span),
+        Stmt::new(StmtKind::Foreach {
+            array: variable(&list),
+            key_var: None,
+            value_var: item.clone(),
+            value_by_ref: false,
+            body: vec![Stmt::new(StmtKind::ArrayPush {
+                array: array.clone(),
+                value: variable(&item),
+            }, span)],
+        }, span),
+    ];
+    let counted = Expr::new(ExprKind::FunctionCall {
+        name: Name::from_parts(crate::names::NameKind::FullyQualified, vec!["count".to_string()]),
+        args: vec![target.clone()],
+    }, span);
+    Some(Expr::new(ExprKind::Assignment {
+        target: Box::new(variable(&count)),
+        value: Box::new(counted),
+        result_target: None,
+        prelude,
+        conditional_value_temp: None,
+    }, span))
 }
 
 /// Returns true for the construct-like names whose `<T>` is part of their own grammar.

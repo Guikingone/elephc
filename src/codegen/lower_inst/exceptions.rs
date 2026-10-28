@@ -243,6 +243,23 @@ pub(super) fn emit_division_by_zero_error(ctx: &mut FunctionContext<'_>, message
     );
 }
 
+/// The located sibling of `emit_division_by_zero_error`, for a `/` or `%` operator the user
+/// wrote: php's uncaught report names its line and prints the trace.
+pub(super) fn emit_division_by_zero_error_at(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    span: Option<crate::span::Span>,
+) {
+    let location = span.and_then(|span| ctx.module.source_path.clone().map(|file| (file, span.line)));
+    emit_static_exception_at(
+        ctx,
+        "DivisionByZeroError",
+        "_spl_division_by_zero_error_class_id",
+        message,
+        location,
+    );
+}
+
 /// Throws a catchable PHP `ArithmeticError` carrying a static message.
 ///
 /// Reference PHP raises this for arithmetic that has no representable result but is not a

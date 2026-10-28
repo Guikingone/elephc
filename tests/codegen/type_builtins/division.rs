@@ -160,3 +160,17 @@ fn test_intdiv_int_min_div_neg_two_no_overflow() {
     let out = compile_and_run("<?php echo intdiv(PHP_INT_MIN, -2);");
     assert_eq!(out, "4611686018427387904");
 }
+
+/// An uncaught division or modulo by zero names the operator's file and line and prints the
+/// trace, like php's `Fatal error: Uncaught DivisionByZeroError: Modulo by zero in F:L`.
+#[test]
+fn test_uncaught_modulo_by_zero_reports_its_location() {
+    let run = compile_and_run_capture("<?php\n$z = $argc - 1;\n$a = ['k' => 5];\n$a['k'] %= $z;\n");
+    assert!(!run.success);
+    assert!(
+        run.stdout_raw.contains("Uncaught DivisionByZeroError: Modulo by zero in ")
+            && run.stdout_raw.contains(":4\nStack trace:\n#0 {main}\n  thrown in "),
+        "{}",
+        run.stdout_raw
+    );
+}

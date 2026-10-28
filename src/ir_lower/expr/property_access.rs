@@ -360,6 +360,15 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    if op == Op::PropGet && value_is_definitely_null(ctx, object.value) {
+        // php warns and reads null through a null receiver.
+        let message = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(format!(
+            "Warning: Attempt to read property \"{property}\" on null\n")), expr.span));
+        ctx.emit_void(Op::RuntimeCall, vec![message.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)),
+            crate::ir_lower::effects_lookup::runtime_effects(), Some(expr.span));
+        return lower_boxed_null(ctx, expr);
+    }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.

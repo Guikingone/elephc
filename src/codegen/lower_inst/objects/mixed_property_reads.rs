@@ -208,11 +208,40 @@ pub(super) fn lower_declared_mixed_prop_get(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
+    if mode.is_read() {
+        emit_non_object_property_read_warning(ctx, property);
+    }
     emit_boxed_null(ctx);
 
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Emits php's `Attempt to read property "p" on <type>` for a non-object Mixed receiver whose
+/// runtime tag `__rt_mixed_unbox` left in the integer result register.
+fn emit_non_object_property_read_warning(ctx: &mut FunctionContext<'_>, property: &str) {
+    let done = ctx.next_label("mixed_prop_warned");
+    for (tag, type_name) in [(8, "null"), (0, "int"), (1, "string"), (2, "float"), (3, "bool"), (4, "array"), (5, "array")] {
+        let next = ctx.next_label("mixed_prop_warn_next");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // does the receiver carry this non-object tag?
+                ctx.emitter.instruction(&format!("b.ne {}", next));             // try the next runtime type name
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // does the receiver carry this non-object tag?
+                ctx.emitter.instruction(&format!("jne {}", next));              // try the next runtime type name
+            }
+        }
+        emit_static_property_warning(
+            ctx,
+            &format!("Warning: Attempt to read property \"{}\" on {}\n", property, type_name),
+        );
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&next);
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Lowers a `Mixed` receiver through the runtime stdClass-style property helper.
@@ -222,6 +251,23 @@ pub(super) fn lower_runtime_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    // The helper answers null for a non-object receiver; a read reports it first, as php does.
+    let non_object = property_fetch_mode(inst).is_read().then(|| ctx.next_label("mixed_prop_non_object"));
+    let read_done = ctx.next_label("mixed_prop_runtime_done");
+    if let Some(non_object) = &non_object {
+        ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #6");                          // is the receiver an object?
+                ctx.emitter.instruction(&format!("b.ne {}", non_object));       // non-objects warn and read null
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, 6");                          // is the receiver an object?
+                ctx.emitter.instruction(&format!("jne {}", non_object));        // non-objects warn and read null
+            }
+        }
+    }
     let (label, len) = ctx.data.add_string(property.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -236,6 +282,13 @@ pub(super) fn lower_runtime_mixed_prop_get(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_property_get");
+    if let Some(non_object) = &non_object {
+        abi::emit_jump(ctx.emitter, &read_done);
+        ctx.emitter.label(non_object);
+        emit_non_object_property_read_warning(ctx, property);
+        emit_boxed_null(ctx);
+        ctx.emitter.label(&read_done);
+    }
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
