@@ -241,7 +241,7 @@ fn try_lower_constant_prefix_suffix(
             if starts {
                 ctx.emitter.instruction("movzx eax, BYTE PTR [rdi + r10]");     // load the next haystack byte
             } else {
-                ctx.emitter.instruction("add r11, r8, r10");                    // compute the suffix byte position
+                ctx.emitter.instruction("lea r11, [r8 + r10]");                 // compute the suffix byte position
                 ctx.emitter.instruction("movzx eax, BYTE PTR [rdi + r11]");     // load the next suffix byte
             }
             ctx.emitter.instruction("movzx r11d, BYTE PTR [rdx + r10]");        // load the matching needle byte
