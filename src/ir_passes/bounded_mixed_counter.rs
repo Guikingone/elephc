@@ -746,7 +746,7 @@ fn defining_id(function: &Function, value: ValueId) -> Option<InstId> {
 /// Top-level locals that another body reaches through `global` are `GlobalAlias` slots, which the
 /// candidate filter excludes, and eval is rejected separately. A runtime `include` is the one
 /// remaining way to hand the whole frame to other code, so main keeps boxed storage there.
-fn main_frame_is_private(function: &Function, data: &DataPool) -> bool {
+pub(super) fn main_frame_is_private(function: &Function, data: &DataPool) -> bool {
     !function.instructions.iter().any(|inst| {
         inst.op == Op::RuntimeCall
             && matches!(inst.immediate, Some(Immediate::Data(id))
