@@ -10,6 +10,7 @@
 //!   The bare read stays null. Both shapes are checked with IR optimization on and off.
 //! - A cast inside a loop sees a miss stored later in that loop, and a miss returned
 //!   from a call or ternary and then stored casts to an empty string too.
+//! - A loop that stores an untyped array element does not leak the previous string.
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
@@ -487,6 +488,89 @@ string(0) \"\"
 string(4) \"stay\"
 string(2) \"ok\"
 ";
+
+/// A loop over an untyped array parameter does not leak the string it casts.
+///
+/// The cast runs before the store, and the store reads an untyped `array`, a `match`,
+/// a `foreach` that `continue`s, or `$a[$k] ?? "dd"`. PHP 8.2–8.5 keeps the original
+/// string for the first iteration and the assigned element after that. Fifty calls
+/// must leave the heap clean. `return (string)$s` from the loop returns the last cast.
+#[test]
+fn test_untyped_array_loop_string_cast_is_heap_clean() {
+    assert_untyped_array_loop_string_cast();
+}
+
+/// The untyped-array loop cast stays heap-clean when EIR optimization is off.
+#[test]
+fn test_untyped_array_loop_string_cast_is_heap_clean_no_ir_opt() {
+    without_ir_opt(assert_untyped_array_loop_string_cast);
+}
+
+/// Runs the untyped-array loop fixture and checks PHP's stdout and a clean heap.
+fn assert_untyped_array_loop_string_cast() {
+    assert_merge(
+        UNTYPED_ARRAY_LOOP_STRING_CAST,
+        UNTYPED_ARRAY_LOOP_STRING_CAST_OUT,
+        0,
+    );
+}
+
+/// Fixture for `(string)` of a local overwritten by an untyped array element inside a loop.
+const UNTYPED_ARRAY_LOOP_STRING_CAST: &str = r#"<?php
+function loop_param(array $a): int {
+    $s = str_repeat("b", 30); $n = 0;
+    for ($i = 0; $i < 3; $i++) { $n += strlen((string)$s); $s = $a[1]; }
+    return $n;
+}
+function loop_match(array $a): int {
+    $s = str_repeat("b", 30); $n = 0;
+    for ($i = 0; $i < 3; $i++) {
+        $n += strlen((string)$s);
+        $s = match ($i) { 0 => $a[1], default => $a[1] };
+    }
+    return $n;
+}
+function loop_foreach(array $a): int {
+    $s = str_repeat("b", 30); $n = 0;
+    foreach ([0, 1, 2] as $i) {
+        $n += strlen((string)$s);
+        if ($i === 0) { continue; }
+        $s = $a[1];
+    }
+    return $n;
+}
+function loop_return(array $a): string {
+    $s = str_repeat("b", 30);
+    $out = "";
+    for ($i = 0; $i < 3; $i++) {
+        $out = (string)$s;
+        $s = $a[1];
+    }
+    return $out;
+}
+function loop_coalesce(array $a, int $key): int {
+    $s = str_repeat("b", 30); $n = 0;
+    for ($i = 0; $i < 3; $i++) {
+        $n += strlen((string)$s);
+        $s = $a[$key] ?? "dd";
+    }
+    return $n;
+}
+$a = ["p", "q"];
+$key = $argc > 0 ? 1 : 0;
+$sum = 0;
+for ($j = 0; $j < 50; $j++) {
+    $sum += loop_param($a);
+    $sum += loop_match($a);
+    $sum += loop_foreach($a);
+    $sum += strlen(loop_return($a));
+    $sum += loop_coalesce($a, $key);
+}
+echo $sum, "\n";
+"#;
+
+/// PHP 8.5 stdout for [`UNTYPED_ARRAY_LOOP_STRING_CAST`], stable across PHP 8.2–8.5.
+const UNTYPED_ARRAY_LOOP_STRING_CAST_OUT: &str = "7900\n";
 
 /// A miss returned by a call or ternary and then stored casts to an empty string.
 ///

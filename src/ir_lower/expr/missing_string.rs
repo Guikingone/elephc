@@ -12,6 +12,8 @@
 //!   an alias.
 //! - Stores later in a loop body are not emitted yet when the cast is lowered. The loop scan
 //!   records those names from the AST. Straight-line stores after the cast are not included.
+//! - Only a concrete string array publishes the sentinel. An untyped `array` read does not,
+//!   so a loop that stores one does not wrap the previous owned string in a cast.
 //! - A call or ternary stored into a local carries the sentinel when one of its arguments or
 //!   branches does. A call that has not been stored may also return a sentinel its callee built.
 
@@ -20,6 +22,7 @@ use std::collections::HashSet;
 use crate::ir::{Immediate, LocalSlotId, Op, ValueId};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
+use crate::types::PhpType;
 
 /// Returns whether a string value can still be the missing typed-array sentinel.
 pub(super) fn string_value_may_carry_missing_entry(
@@ -563,6 +566,30 @@ fn collect_expr(
     }
 }
 
+/// Returns whether an array read can publish the missing-string sentinel.
+///
+/// The sentinel is the element representation of a concrete string array. An
+/// untyped `array` read is null or mixed, and a string offset is a real empty
+/// view. Neither one should make a later cast treat the destination as a miss.
+fn array_access_may_carry_missing_string(
+    array: &Expr,
+    ctx: &LoweringContext<'_, '_>,
+) -> bool {
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    concrete_string_array(&ctx.local_type(name))
+}
+
+/// Returns whether `ty` stores string elements that use the missing-entry sentinel.
+fn concrete_string_array(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Str,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Str,
+        _ => false,
+    }
+}
+
 /// Returns whether an expression's value can be the missing-string sentinel.
 fn expr_may_carry_missing_string(
     expr: &Expr,
@@ -570,7 +597,9 @@ fn expr_may_carry_missing_string(
     ctx: &LoweringContext<'_, '_>,
 ) -> bool {
     match &expr.kind {
-        ExprKind::ArrayAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_may_carry_missing_string(array, ctx)
+        }
         ExprKind::ErrorSuppress(inner) | ExprKind::Print(inner) | ExprKind::Spread(inner) => {
             expr_may_carry_missing_string(inner, carried, ctx)
         }

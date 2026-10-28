@@ -152,9 +152,10 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
 /// Normalizes a string that may carry the missing-entry sentinel.
 ///
 /// The cast result is borrowed: it aliases a real string or the canonical empty
-/// string and owns neither. An owning source is copied into a fresh string and
-/// then released, so computed owners stay balanced instead of leaking behind the
-/// cast.
+/// string and owns neither. An owning source that is not a local is copied into
+/// a fresh string and then released. A local load is released in place: that
+/// release is dropped when the slot stays a concrete string, and kept when a
+/// later store widens the slot so the load allocated a detached copy.
 fn normalize_missing_string_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -170,14 +171,20 @@ fn normalize_missing_string_value(
     );
     ctx.builder
         .set_value_ownership(normalized.value, Ownership::Borrowed);
-    // A local keeps its own storage. Copying it here would leak the copy when the
-    // caller still treats a `string` parameter as an alias, and releasing it would
-    // free that parameter under the caller. Element reads are borrowed too.
+    // A concrete string local only lends its bytes. Copying it would leak when
+    // the caller still treats a `string` parameter as an alias, and an eager
+    // free would release that parameter under the caller. The release emitted
+    // here is provisional: finalization removes it unless the slot widens and
+    // the load's coercion owns a detached string. Element reads are borrowed.
     let local_load = matches!(
         ctx.builder.value_defining_op(value.value),
         Some(Op::LoadLocal | Op::LoadStaticLocal)
     );
-    if local_load || !ctx.value_is_owning_temporary(value) {
+    if local_load {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        return normalized;
+    }
+    if !ctx.value_is_owning_temporary(value) {
         return normalized;
     }
     let owned = ctx.emit_owned_value(
