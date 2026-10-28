@@ -11,6 +11,7 @@
 //! - A cast inside a loop sees a miss stored later in that loop, and a miss returned
 //!   from a call or ternary and then stored casts to an empty string too.
 //! - A loop that stores an untyped array element does not leak the previous string.
+//!   Mixed locals, `??`, and nested indexes print the same bytes as PHP.
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
@@ -571,6 +572,81 @@ echo $sum, "\n";
 
 /// PHP 8.5 stdout for [`UNTYPED_ARRAY_LOOP_STRING_CAST`], stable across PHP 8.2–8.5.
 const UNTYPED_ARRAY_LOOP_STRING_CAST_OUT: &str = "7900\n";
+
+/// Casts that used to free their source, and nested misses, print PHP's bytes.
+///
+/// A mixed local (`match` / `@`), `(string)($m["k"] ?? "n")`, and `$grid[0][$key]`
+/// inside a loop must echo the characters PHP 8.2–8.5 prints. The untyped array
+/// parameter is also called 50 times so a per-iteration leak fails the heap check.
+#[test]
+fn test_string_cast_bytes_survive_mixed_coalesce_and_nested_index() {
+    assert_string_cast_bytes();
+}
+
+/// Those casts print the same bytes when EIR optimization is off.
+#[test]
+fn test_string_cast_bytes_survive_mixed_coalesce_and_nested_index_no_ir_opt() {
+    without_ir_opt(assert_string_cast_bytes);
+}
+
+/// Runs the byte-level cast fixture and checks PHP's stdout, warnings, and heap.
+fn assert_string_cast_bytes() {
+    assert_merge(STRING_CAST_BYTES, STRING_CAST_BYTES_OUT, 2);
+}
+
+/// Fixture for cast bytes, nested misses, and the untyped-array leak repro.
+const STRING_CAST_BYTES: &str = r#"<?php
+function bytes_mixed(int $key): void {
+    $values = ["a"];
+    $s = "i";
+    for ($i = 0; $i < 3; $i++) {
+        echo "[", (string)$s, "]\n";
+        $s = match ($i) { 0 => @$values[$key], default => "zz" };
+    }
+}
+function bytes_coalesce(): void {
+    $m = ["k" => str_repeat("w", 6)];
+    echo (string)($m["k"] ?? "n"), "\n";
+    echo (string)($m["missing"] ?? "n"), "\n";
+}
+function bytes_nested(int $key): void {
+    $grid = [["a"]];
+    $s = "i";
+    for ($i = 0; $i < 2; $i++) {
+        echo "[", (string)$s, "]\n";
+        $s = $grid[0][$key];
+    }
+}
+function leak_param(array $a): int {
+    $s = str_repeat("b", 30);
+    $n = 0;
+    for ($i = 0; $i < 3; $i++) {
+        $n += strlen((string)$s);
+        $s = $a[1];
+    }
+    return $n;
+}
+bytes_mixed($argc + 5);
+bytes_coalesce();
+bytes_nested($argc + 5);
+$sum = 0;
+for ($j = 0; $j < 50; $j++) {
+    $sum += leak_param(["p", "q"]);
+}
+echo $sum, "\n";
+"#;
+
+/// PHP 8.5 stdout for [`STRING_CAST_BYTES`], stable across PHP 8.2–8.5.
+const STRING_CAST_BYTES_OUT: &str = "\
+[i]
+[]
+[zz]
+wwwwww
+n
+[i]
+[]
+1600
+";
 
 /// A miss returned by a call or ternary and then stored casts to an empty string.
 ///

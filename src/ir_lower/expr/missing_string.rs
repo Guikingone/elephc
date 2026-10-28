@@ -12,8 +12,9 @@
 //!   an alias.
 //! - Stores later in a loop body are not emitted yet when the cast is lowered. The loop scan
 //!   records those names from the AST. Straight-line stores after the cast are not included.
-//! - Only a concrete string array publishes the sentinel. An untyped `array` read does not,
-//!   so a loop that stores one does not wrap the previous owned string in a cast.
+//! - Only a concrete string array publishes the sentinel, including through nested
+//!   indexing (`$grid[0][$key]`). An untyped `array` read does not. `??` never
+//!   yields the missing element, so only its default can carry the sentinel.
 //! - A call or ternary stored into a local carries the sentinel when one of its arguments or
 //!   branches does. A call that has not been stored may also return a sentinel its callee built.
 
@@ -568,17 +569,34 @@ fn collect_expr(
 
 /// Returns whether an array read can publish the missing-string sentinel.
 ///
-/// The sentinel is the element representation of a concrete string array. An
-/// untyped `array` read is null or mixed, and a string offset is a real empty
-/// view. Neither one should make a later cast treat the destination as a miss.
+/// The sentinel is the element representation of a concrete string array. Nested
+/// indexing uses the element type of the inner read, so `$grid[0][$key]` carries
+/// when `$grid` is `array<array<string>>`. An untyped `array` read is null or
+/// mixed, and a string offset is a real empty view.
 fn array_access_may_carry_missing_string(
     array: &Expr,
     ctx: &LoweringContext<'_, '_>,
 ) -> bool {
-    let ExprKind::Variable(name) = &array.kind else {
-        return false;
-    };
-    concrete_string_array(&ctx.local_type(name))
+    concrete_string_array(&array_value_type(array, ctx))
+}
+
+/// Returns the type of an array expression, including a nested index.
+fn array_value_type(expr: &Expr, ctx: &LoweringContext<'_, '_>) -> PhpType {
+    match &expr.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::ErrorSuppress(inner) | ExprKind::Print(inner) => array_value_type(inner, ctx),
+        ExprKind::ArrayAccess { array, .. } => array_element_type(&array_value_type(array, ctx)),
+        _ => PhpType::Mixed,
+    }
+}
+
+/// Returns the element type of an array, or mixed when `ty` is not one.
+fn array_element_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Array(element) => element.as_ref().clone(),
+        PhpType::AssocArray { value, .. } => value.as_ref().clone(),
+        _ => PhpType::Mixed,
+    }
 }
 
 /// Returns whether `ty` stores string elements that use the missing-entry sentinel.
@@ -621,17 +639,20 @@ fn expr_may_carry_missing_string(
                     .as_deref()
                     .is_some_and(|arm| expr_may_carry_missing_string(arm, carried, ctx))
         }
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
+        // `??` uses the left side only when it is not the missing element, so that
+        // side cannot publish the sentinel. The default still can.
+        ExprKind::NullCoalesce { default, .. } => {
+            expr_may_carry_missing_string(default, carried, ctx)
+        }
+        ExprKind::ShortTernary { value, default } => {
             expr_may_carry_missing_string(value, carried, ctx)
                 || expr_may_carry_missing_string(default, carried, ctx)
         }
         ExprKind::Cast { target, .. } if matches!(target, CastType::String) => false,
         ExprKind::BinaryOp { op: BinOp::Concat, .. } => false,
-        ExprKind::BinaryOp { left, op, right } => {
+        ExprKind::BinaryOp { op, right, .. } => {
             matches!(op, BinOp::NullCoalesce)
-                && (expr_may_carry_missing_string(left, carried, ctx)
-                    || expr_may_carry_missing_string(right, carried, ctx))
+                && expr_may_carry_missing_string(right, carried, ctx)
         }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::MethodCall { args, .. }
