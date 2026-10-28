@@ -10,8 +10,9 @@
 //! - Recipe and source identity come from the catalog, not a separately pinned revision.
 //! - System PCRE2 archives are admitted only inside this test provider; production resolution
 //!   remains fail-closed and never falls back to system libraries.
-//! - Provider and shim results, including a miss, are cached per target. One process can
-//!   serve the host and a different `ELEPHC_TEST_TARGET` without replacing the other entry.
+//! - Provider and shim results, including a miss, are cached per target. Each target has
+//!   its own `OnceLock`, so one thread builds or searches that target while another target
+//!   proceeds independently.
 //! - `managed_pcre2_execution_skip_reason` skips only where a missing provider is expected.
 //!   Linux, macOS, and any process with `CI` set panic through `test_pcre2_provider` instead.
 //!   That check runs when a regex fixture is prepared. The host self-test lives with the
@@ -25,7 +26,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use elephc::codegen::platform::{Arch, Platform, Target};
 use serde_json::json;
@@ -71,24 +73,41 @@ pub(crate) fn configure_host_managed_pcre2(command: &mut Command, dir: &Path) {
     command.env("ELEPHC_NATIVE_CACHE", cache);
 }
 
+/// Counts completed attempts to compile the embedded shim in this process.
+static SHIM_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Returns how many times this process has started compiling the embedded shim.
+///
+/// Callers use this to show that concurrent requests for one target share one build.
+pub(crate) fn test_pcre2_shim_build_count() -> usize {
+    SHIM_BUILD_COUNT.load(Ordering::SeqCst)
+}
+
 /// Returns the cached shim archive for `target`, compiling it on the first request.
 ///
-/// Each target keeps its own archive. A later request for another target does not
-/// replace this one, so host fixtures and `ELEPHC_TEST_TARGET` can share a process.
+/// Each target has its own `OnceLock`. The map mutex only publishes that slot; the
+/// slot then lets one thread run `gcc` and `ar` while every other caller for the
+/// same target waits and receives the same archive path.
 pub(crate) fn test_pcre2_shim_archive(target: Target) -> &'static Path {
-    static SHIMS: LazyLock<Mutex<HashMap<&'static str, &'static Path>>> =
+    static SHIMS: LazyLock<Mutex<HashMap<&'static str, Arc<OnceLock<&'static Path>>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    let key = target.as_str();
-    if let Some(archive) = lock_test_cache(&SHIMS).get(key).copied() {
-        return archive;
-    }
-    let archive: &'static Path = Box::leak(Box::new(compile_test_pcre2_shim(target)));
-    *lock_test_cache(&SHIMS).entry(key).or_insert(archive)
+    let slot = {
+        let mut cache = lock_test_cache(&SHIMS);
+        cache
+            .entry(target.as_str())
+            .or_insert_with(|| Arc::new(OnceLock::new()))
+            .clone()
+    };
+    *slot.get_or_init(|| Box::leak(Box::new(compile_test_pcre2_shim(target))))
 }
 
 /// Compiles and archives the embedded shim against the selected target's PCRE2 headers.
+///
+/// `test_pcre2_shim_archive` calls this from one `OnceLock` per target, so concurrent
+/// callers do not share the object file or the `ar rcs` destination.
 fn compile_test_pcre2_shim(target: Target) -> PathBuf {
+    SHIM_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!(
         "elephc_test_pcre2_shim_{}_{}",
         std::process::id(),
@@ -160,18 +179,24 @@ fn test_c_compiler(target: Target) -> &'static str {
 
 /// Returns the cached static PCRE2 provider for `target`, searching each target once.
 ///
-/// A miss is cached as `None` for that target only. Another target keeps its own entry,
-/// so a host lookup and an `ELEPHC_TEST_TARGET` lookup can both succeed in one process.
+/// A miss is cached as `None` for that target only. The map mutex only publishes the
+/// target's `OnceLock`; that slot runs the directory search once, including when
+/// several threads ask for the same target together.
 pub(crate) fn find_test_pcre2_provider(target: Target) -> Option<&'static TestPcre2Provider> {
-    static CACHED: LazyLock<Mutex<HashMap<&'static str, Option<&'static TestPcre2Provider>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
+    static CACHED: LazyLock<
+        Mutex<HashMap<&'static str, Arc<OnceLock<Option<&'static TestPcre2Provider>>>>>,
+    > = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    let key = target.as_str();
-    if let Some(found) = lock_test_cache(&CACHED).get(key).copied() {
-        return found;
-    }
-    let found = locate_test_pcre2_provider(target).map(|provider| &*Box::leak(Box::new(provider)));
-    *lock_test_cache(&CACHED).entry(key).or_insert(found)
+    let slot = {
+        let mut cache = lock_test_cache(&CACHED);
+        cache
+            .entry(target.as_str())
+            .or_insert_with(|| Arc::new(OnceLock::new()))
+            .clone()
+    };
+    *slot.get_or_init(|| {
+        locate_test_pcre2_provider(target).map(|provider| &*Box::leak(Box::new(provider)))
+    })
 }
 
 /// Searches the target's static PCRE2 prefixes and returns the first complete one.

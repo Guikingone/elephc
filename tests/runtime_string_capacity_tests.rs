@@ -325,6 +325,47 @@ fn managed_pcre2_provider_cache_keeps_distinct_targets() {
     );
 }
 
+/// Concurrent requests for one target must share one shim build and one archive path.
+///
+/// `cargo test` runs fixtures in parallel in one process. Releasing the cache lock
+/// before `gcc` and `ar` let those threads rewrite the same object and archive.
+#[test]
+fn managed_pcre2_shim_archive_is_built_once_for_one_target() {
+    let target = Target::detect_host();
+    let mut threads = Vec::new();
+    for _ in 0..8 {
+        threads.push(std::thread::spawn(move || {
+            (
+                managed_pcre2::test_pcre2_shim_archive(target),
+                managed_pcre2::find_test_pcre2_provider(target),
+            )
+        }));
+    }
+    let results: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().expect("shim cache thread panicked"))
+        .collect();
+    let archive = results[0].0;
+    let provider = results[0].1;
+    assert!(
+        results.iter().all(|(path, _)| std::ptr::eq(*path, archive)),
+        "concurrent shim requests must return one archive path"
+    );
+    assert!(
+        results.iter().all(|(_, found)| match (provider, *found) {
+            (Some(first), Some(second)) => std::ptr::eq(first, second),
+            (None, None) => true,
+            _ => false,
+        }),
+        "concurrent provider requests must return one cached result"
+    );
+    assert!(
+        managed_pcre2::test_pcre2_shim_build_count() <= 1,
+        "this process builds the host shim once, got {}",
+        managed_pcre2::test_pcre2_shim_build_count()
+    );
+}
+
 /// `preg_replace()` must grow its output instead of corrupting the heap when a replacement
 /// expands the subject past the historical 64 KiB threshold.
 #[test]
