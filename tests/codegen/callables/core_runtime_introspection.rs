@@ -122,6 +122,27 @@ fn test_core_debug_print_backtrace_aot_optional_and_variadic_arguments() {
     assert_eq!(out.lines().count(), 6, "unexpected frame count: {out}");
 }
 
+/// Each frame's `line` is where its function was CALLED, not the frame's own current call:
+/// a call site never overwrites the callee-recorded line (output measured with php 8.5).
+#[test]
+fn test_core_debug_backtrace_aot_frame_lines_name_the_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+function inner() {
+    foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $f) {
+        echo $f['function'], "@", $f['line'], " ";
+    }
+    echo debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0]['line'], "\n";
+}
+function outer() {
+    inner();
+}
+outer();
+"#,
+    );
+    assert_eq!(out, "inner@9 outer@11 9\n");
+}
+
 /// Verifies nested AOT function and method activations expose live outer frames and receivers.
 #[test]
 fn test_core_debug_backtrace_aot_nested_frames_and_objects() {

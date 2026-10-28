@@ -36,7 +36,7 @@ const CALLBACK_ARG_COUNT_OFFSET: usize = 16;
 const CALLBACK_PRINT_INDEX_OFFSET: usize = 24;
 const CALLBACK_PRINT_ARG_COUNT_OFFSET: usize = 32;
 
-/// Publishes the source line and a call-site-specific frame reader before a nested PHP call.
+/// Publishes the caller's source line before a nested PHP call so the callee's activation can record it.
 pub(super) fn prepare_call_site(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -46,7 +46,11 @@ pub(super) fn prepare_call_site(
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
     let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
         && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot);
-    if instruction_may_enter_php_frame(inst) || warns_at_call_site {
+    // Injected prelude code is an internal function's body: php-src reports its notices at
+    // the user's call site, so publishing the prelude's synthetic span here would overwrite
+    // the location the entering call just published.
+    let compiler_generated = inst.span.is_some_and(|span| !span.is_from_source());
+    if (instruction_may_enter_php_frame(inst) || warns_at_call_site) && !compiler_generated {
         let scratch = abi::int_result_reg(ctx.emitter);
         abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
@@ -69,25 +73,9 @@ pub(super) fn prepare_call_site(
     abi::emit_load_int_immediate(ctx.emitter, scratch, line);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
 
-    if !ctx.backtrace_activation {
-        return Ok(());
-    }
-    let activation_offset = ctx
-        .exception_activation_offset
-        .expect("backtrace activation requires an activation frame slot");
-    abi::store_at_offset(ctx.emitter, scratch, activation_offset - 32);
-    // Address-taken entries need real symbols: Mach-O folds temporary L labels into
-    // their enclosing symbol's signed 24-bit addend, which large PHP frames exceed.
-    // label() keeps this entry file-local; it is not exported with .globl.
-    let callback = ctx.next_global_label("backtrace_frame_reader");
-    abi::emit_symbol_address(ctx.emitter, scratch, &callback);
-    abi::store_at_offset(ctx.emitter, scratch, activation_offset - 24);
-
-    let resume = ctx.next_label("backtrace_call_site");
-    abi::emit_jump(ctx.emitter, &resume);
-    ctx.emitter.label(&callback);
-    emit_frame_reader_callback(ctx)?;
-    ctx.emitter.label(&resume);
+    // The callee's prologue copies this line into its own activation (`[32]`) and installs its
+    // function-level frame reader (`[24]`); a call site must never overwrite either word, or every
+    // frame would report the line of its own next call instead of the line it was called from.
     Ok(())
 }
 

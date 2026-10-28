@@ -318,11 +318,11 @@ fn lower_trigger_operands(
         Op::ConstStr.default_effects(),
         Some(call.span),
     );
-    // Synthetic SPL bodies have no source line of their own. Read the context published by
-    // their caller so both the default diagnostic and a user error handler receive it.
-    let line_op = if call.span.line == 0 { Op::LoadDiagnosticLine } else { Op::ConstI64 };
-    let line_immediate = (call.span.line != 0)
-        .then_some(Immediate::I64(i64::from(call.span.line)));
+    // Synthetic SPL bodies and AST preludes have no source line of their own. Read the context
+    // published by their caller so both the default diagnostic and a user error handler receive it.
+    let from_source = call.span.is_from_source();
+    let line_op = if from_source { Op::ConstI64 } else { Op::LoadDiagnosticLine };
+    let line_immediate = from_source.then_some(Immediate::I64(i64::from(call.span.line)));
     let line = ctx.emit_value(
         line_op,
         Vec::new(),
