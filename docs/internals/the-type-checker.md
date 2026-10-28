@@ -91,6 +91,16 @@ statement, including the `exit()` appended by the native test driver. A generic
 class reached only from a test method uses the same specialization path as an
 ordinary program.
 
+Included generic functions retain their runtime include dispatch. The checker binds the
+public template at each call and specializes every possible include variant before
+comparing their concrete signatures. Variants must declare matching type parameter
+contracts, including bounds and defaults; parameter names may differ. After the fixed
+point, each public specialization has its own dispatcher and activation marks at the
+original include positions. This also applies to functions declared in files required
+by `elephc test`.
+The rewrite updates both the AST and the checker's retained class and enum method
+bodies, including flattened trait methods, because EIR lowers those retained copies.
+
 The checker validates bounds and variance, and records resolved call, construction,
 and method sites in `CheckResult`. Site keys include the enclosing body scope and
 source span, so one template coordinate can select different instantiations.

@@ -577,11 +577,11 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
-    Stmt {
+    pass.transform_stmt(Stmt {
         kind,
         span,
         source_mode,
         strict_types,
         attributes,
-    }
+    })
 }
