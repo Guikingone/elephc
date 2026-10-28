@@ -719,3 +719,21 @@ var_dump($m->r, isset($m->s), $m->t ?? "d");
     );
     assert_eq!(run.stdout, "NULL\nNULL\nbool(false)\nstring(1) \"d\"\n");
 }
+
+/// A property read under a subscript probed by `??`, `??=` or `isset` stays silent through a
+/// null receiver, statically null or not yet assigned (php 8.5 output).
+#[test]
+fn test_property_subscript_probe_on_null_receiver_is_silent() {
+    let run = compile_and_run_capture(r#"<?php
+function foo() {
+    for ($cnt = 0; $cnt < 3; $cnt++) {
+        $obj->ary["bas"] ??= $obj = new stdClass;
+    }
+}
+foo();
+$n = null;
+var_dump($n->p["k"] ?? "d", isset($n->p["k"]));
+"#);
+    assert!(!run.stdout_raw.contains("Attempt to read property"), "{}", run.stdout_raw);
+    assert_eq!(run.stdout, "string(1) \"d\"\nbool(false)\n");
+}

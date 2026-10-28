@@ -971,6 +971,16 @@ pub(super) fn property_probe_needs_runtime_name_form(
     property_probe_needs_runtime_name_form_for_type(&expr_receiver_type_for_probe(ctx, object))
 }
 
+/// Whether a property read under a probed subscript (`$o->p[k] ?? d`) must take the `??`
+/// probe to stay silent: its receiver is statically null or only known at run time.
+pub(super) fn subscript_property_receiver_needs_probe(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> bool {
+    matches!(expr_receiver_type_for_probe(ctx, object), PhpType::Void)
+        || property_probe_needs_runtime_name_form(ctx, object)
+}
+
 /// The receiver-TYPE half of the decision above, for a receiver already lowered to a value.
 ///
 /// A nullable or union receiver that still resolves to one object class keeps the ordinary named

@@ -210,6 +210,13 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
+    // `$o->p[k] ?? d` probes the property as `$o->p ?? d` would when the receiver may be null:
+    // php stays silent there. A typed object receiver keeps its exact property read.
+    if let ExprKind::PropertyAccess { object, .. } = &array.kind {
+        if super::property_access::subscript_property_receiver_needs_probe(ctx, object) {
+            return super::lazy_branches::lower_null_coalesce_value(ctx, array);
+        }
+    }
     lower_expr(ctx, array)
 }
 

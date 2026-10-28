@@ -141,6 +141,10 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // class is only known at run time needs the runtime-name form to carry that mode.
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
         let object = lower_expr(ctx, object);
+        // A statically-null receiver answers the default without php's read warning.
+        if super::value_is_definitely_null(ctx, object.value) {
+            return super::lower_boxed_null(ctx, value);
+        }
         if property_can_be_uninitialized(ctx, object.value, property)
             || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
