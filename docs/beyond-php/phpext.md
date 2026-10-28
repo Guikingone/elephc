@@ -73,6 +73,9 @@ wrappers left by a completed by-reference `foreach` are copied as values. Nestin
 arrays. An ordinary reference supplied to a by-value parameter is dereferenced
 and copied. Use the PHP `array` declaration for inputs; Elephc's specialized
 `array<T>` and `array<K,V>` input ABIs are not exposed by this mode.
+Native pointers, buffers and packed records cannot be converted or boxed into
+PHP values or their array elements. Unsupported dynamic results, including
+closures, raise a host PHP `Error` and leave later calls usable.
 
 Compiled `Exception`, `RuntimeException`, `Error`, `TypeError`, `ValueError`,
 `ArithmeticError`, `DivisionByZeroError`, `ArgumentCountError` and `JsonException`

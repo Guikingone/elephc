@@ -11,6 +11,33 @@
 
 use super::*;
 
+/// Native handles must retain their identity instead of boxing into PHP integer addresses.
+#[test]
+fn phpext_validation_rejects_native_handle_boxing() {
+    let project = Project::new();
+    let source = project.0.join("handles.php");
+    for expression in ["buffer_new<int>(1)", "ptr($value)", "ptr_null()", "$records[0]"] {
+        for (return_type, result) in [("mixed", expression.to_string()),
+            ("array", format!("['handle' => {expression}]")),
+            ("array", format!("[{expression}, {expression}]"))] {
+            fs::write(&source, format!("<?php packed class NativeRecord {{ public int $value; }} #[Export] function php_handle(): {return_type} {{ $value = 1; $records = buffer_new<NativeRecord>(1); return {result}; }}")).unwrap();
+            for mode in [Some("--check"), Some("--emit-ir"), None] {
+                let mut command = Command::new(compiler_binary());
+                command.args(["--emit", "phpext"]);
+                if let Some(mode) = mode { command.arg(mode); }
+                let output = command.arg(&source)
+                    .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
+                let diagnostic = String::from_utf8_lossy(&output.stderr);
+                assert!(!output.status.success(), "{result}, {mode:?} boxed a native handle");
+                let boxed_handle = diagnostic.contains("native handles cannot be boxed into PHP values");
+                let pointer_policy = expression.starts_with("ptr") && diagnostic.contains("no audited request-local PHP extension lifecycle");
+                assert!(boxed_handle || pointer_policy, "{result}, {mode:?}: {diagnostic}");
+                assert!(!diagnostic.contains("query php-config"), "{result}, {mode:?}: {diagnostic}");
+            }
+        }
+    }
+}
+
 /// Inferred storage types must not become declarations in the public PHP signature.
 #[test]
 fn phpext_validation_requires_declared_export_types() {

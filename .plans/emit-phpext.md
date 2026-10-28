@@ -20,6 +20,11 @@ The existing C ABI for `cdylib` and `staticlib` remains compatible.
 Producer exports require explicit parameter and return declarations. Null
 defaults require explicit nullable types, avoiding inferred ABI placeholders
 and PHP's deprecated implicit-nullable scalar declarations.
+Default serialization decodes the frontend's byte markers before generating C
+or arginfo. Parameter names are escaped C strings, independent of C identifier
+rules. Runtime result packing rejects callable and raw pointer tags before
+normalization. EIR validation rejects conversions and PHP container stores that
+erase native handle identity.
 
 The first delivery covers by-value `int`, `float`, `bool`, binary `string`,
 `array`, `null`, supported nullable forms, and `void` returns. Arrays include

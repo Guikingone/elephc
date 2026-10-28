@@ -73,7 +73,7 @@ pub(super) fn default_text(expr: Option<&Expr>) -> Result<Option<String>, String
         },
         ExprKind::BoolLiteral(v) => v.to_string(), ExprKind::Null => "null".into(),
         ExprKind::ArrayLiteral(values) if values.is_empty() => "[]".into(),
-        ExprKind::StringLiteral(v) => format!("\"{}\"", v.as_bytes().iter().map(|b| format!("\\x{b:02x}")).collect::<String>()),
+        ExprKind::StringLiteral(v) => format!("\"{}\"", crate::string_bytes::literal_bytes(v).iter().map(|b| format!("\\x{b:02x}")).collect::<String>()),
         _ => return Err("PHP extension defaults currently require scalar, null or empty array constants".into()),
     }))
 }

@@ -10,6 +10,65 @@
 
 use super::*;
 
+/// Escaped PHP bytes stay identical in optional values and Reflection defaults.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn binary_string_defaults_match_php() {
+    compare(r#"<?php
+#[Export] function php_bytes(string $binary = "\xff\x80\0", string $unicode = "caf\u{e9}",
+    string $octal = "\200", mixed $dynamic = "\377", string $last = 'last'): array {
+    return [$binary, $unicode, $octal, $dynamic, $last];
+}
+"#, r#"
+$defaults = array_map(fn($parameter) => bin2hex($parameter->getDefaultValue()),
+    (new ReflectionFunction('php_bytes'))->getParameters());
+echo json_encode([array_map('bin2hex', php_bytes()),
+    array_map('bin2hex', php_bytes(last: 'named')), $defaults]);
+"#);
+}
+
+/// PHP parameter names need string literals rather than the C identifier grammar.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn non_ascii_parameter_names_match_php() {
+    // PHP accepts a non-breaking space inside a variable name; C can normalize it.
+    let name = format!("gap{}name", '\u{a0}');
+    let source = format!(r#"<?php
+#[Export] function php_names(float $t° = 1.0, float $x© = 2.0, float $y÷ = 3.0,
+    float ${name} = 4.0): array {{ return [$t°, $x©, $y÷, ${name}]; }}
+"#);
+    let driver = format!(r#"
+echo json_encode([php_names(), php_names(y÷: 4.5), php_names({name}: 6.0),
+    array_map(fn($parameter) => $parameter->getName(),
+        (new ReflectionFunction('php_names'))->getParameters())]);
+"#);
+    compare(&source, &driver);
+}
+
+/// Unsupported dynamic results raise a host Error and leave the next call usable.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn unsupported_dynamic_results_raise_host_errors() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("unsupported", r#"<?php
+#[Export] function php_closure(): mixed { return fn() => 1; }
+#[Export] function php_callable_array(): array { return ['callback' => strlen(...)]; }
+#[Export] function php_object(): mixed { return new RuntimeException('unsupported result'); }
+#[Export] function php_recover(int $value): int { return $value + 1; }
+"#);
+    let output = php(&sdk, &module).args(["-r", r#"
+foreach (['php_closure', 'php_callable_array', 'php_object'] as $function) {
+    try { $function(); exit(10); } catch (Error $error) {}
+    if (php_recover(41) !== 42) { exit(11); }
+}
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 /// Explicit nullable declarations retain omitted, explicit and named null defaults.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

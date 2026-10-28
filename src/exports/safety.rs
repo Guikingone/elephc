@@ -108,6 +108,21 @@ fn validate_call_graph(
             let callable_reachability = CallableReachabilityAnalysis::new(module, function);
             for instruction in &function.instructions {
                 if phpext {
+                    let php_values = match instruction.op {
+                        Op::MixedBox | Op::MixedClone | Op::ArrayToMixed | Op::HashToMixed =>
+                            &instruction.operands[..instruction.operands.len().min(1)],
+                        Op::Cast if !contains_native_handle(&instruction.result_php_type) =>
+                            &instruction.operands[..instruction.operands.len().min(1)],
+                        Op::ArraySet | Op::ArraySetMixedKey | Op::ArrayPush | Op::HashSet | Op::HashAppend | Op::PropSet =>
+                            instruction.operands.get(1..).unwrap_or(&[]),
+                        Op::RuntimeCall => instruction.operands.as_slice(),
+                        _ => &[],
+                    };
+                    if php_values.iter().any(|value| function.value(*value)
+                        .is_some_and(|value| contains_native_handle(&value.php_type))) {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches {} through {}; native handles cannot be boxed into PHP values", export.name, instruction.op.name(), path.join(" -> "))));
+                    }
                     let unsupported = match instruction.op {
                         Op::GeneratorNew | Op::GeneratorYield | Op::GeneratorYieldFrom | Op::GeneratorReturn =>
                             Some("native generators have no hosted stack or lifecycle policy"),
@@ -234,6 +249,17 @@ fn validate_call_graph(
         }
     }
     Ok(())
+}
+
+/// Finds address-bearing native storage whose ordinary Mixed tag would hide its identity.
+fn contains_native_handle(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => true,
+        PhpType::Array(value) => contains_native_handle(value),
+        PhpType::AssocArray { key, value } => contains_native_handle(key) || contains_native_handle(value),
+        PhpType::Union(members) => members.iter().any(contains_native_handle),
+        _ => false,
+    }
 }
 
 /// Rejects every fatal EIR terminator in a body reachable from an export.

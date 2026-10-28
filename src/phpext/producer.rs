@@ -38,7 +38,7 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
                     default = Some(format!("{:?}", *value as f64));
                 }
             }
-            handlers.push_str(&format!("    ZEND_ARG_TYPE_MASK(0, {param}, {}, {})\n", mask(ty)?, default.as_ref().map(|s| c_string(s.as_bytes())).unwrap_or("NULL".into())));
+            handlers.push_str(&format!("    {{ {}, ZEND_TYPE_INIT_MASK(({}) | _ZEND_ARG_INFO_FLAGS(0, 0, 0)), {} }},\n", c_string(param.as_bytes()), mask(ty)?, default.as_ref().map(|s| c_string(s.as_bytes())).unwrap_or("NULL".into())));
         }
         handlers.push_str(&format!("ZEND_END_ARG_INFO()\nstatic ZEND_FUNCTION({symbol})\n{{\n    zval values[{}];\n", sig.params.len().max(1)));
         let mut parse = String::new();
@@ -151,10 +151,10 @@ fn default_c(expr: Option<&crate::parser::ast::Expr>, value: &str) -> Result<Str
         Some(ExprKind::BoolLiteral(v)) => format!("ZVAL_BOOL(&{value}, {});", u8::from(*v)),
         Some(ExprKind::ArrayLiteral(values)) if values.is_empty() => format!("ZVAL_EMPTY_ARRAY(&{value});"),
         Some(ExprKind::StringLiteral(text)) => {
-            let bytes = text.as_bytes();
+            let bytes = crate::string_bytes::literal_bytes(text);
             let symbol = value.replace('[', "_").replace(']', "");
             format!("static const struct {{ zend_refcounted_h gc; zend_ulong h; size_t len; char val[{}]; }} default_{symbol} = {{ {{1, {{0}}}}, 0, {}, {} }}; ZVAL_STR(&{value}, (zend_string *)&default_{symbol});",
-                bytes.len() + 1, bytes.len(), c_string(bytes))
+                bytes.len() + 1, bytes.len(), c_string(&bytes))
         },
         _ => return Err("PHP extension defaults currently require scalar, null or empty array constants".into()),
     })
