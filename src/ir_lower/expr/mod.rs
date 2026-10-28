@@ -51,6 +51,7 @@ mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod string_offset_assign;
 mod assignment_rhs_capture;
 mod weak_map_places;
 mod static_property_updates;
@@ -143,6 +144,7 @@ use unary_logic::*;
 use lazy_branches::*;
 use pipe::*;
 use assignments::*;
+use string_offset_assign::*;
 use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
@@ -245,9 +247,10 @@ pub(crate) use weak_map_places::lower_weak_map_append;
 pub(crate) use weak_map_places::lower_weak_map_denied_append;
 use weak_map_places::lower_weak_map_incdec_expression;
 pub(crate) use instanceof_coercions::{
-    coerce_array_key_to_int_at_span, coerce_to_int_at_span,
+    coerce_array_key_to_int_at_span, coerce_to_int_at_span, coerce_to_string_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
+pub(in crate::ir_lower) use merge_temps::{store_value_into_temp, take_owned_temp};
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
