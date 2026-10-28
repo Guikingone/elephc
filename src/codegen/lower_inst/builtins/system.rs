@@ -722,6 +722,8 @@ pub(crate) fn lower_usleep(
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
     let Some(status) = inst.operands.first().copied() else {
+        // php-src's shutdown runs the live objects' destructors before output is flushed.
+        abi::emit_call_label(ctx.emitter, "__rt_exit_destructors");
         if ctx.shared.instrument.is_on() {
             // Shutdown output handlers are PHP calls and must finish inside the
             // still-open exact stack before the termination hook closes it.
@@ -933,6 +935,7 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     match (ctx.emitter.target.platform, ctx.emitter.target.arch) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
+            ctx.emitter.instruction("bl __rt_exit_destructors");                // run the live objects' destructors, as php-src's shutdown does
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
             abi::emit_exit_hook(ctx.emitter);
             crate::codegen::frame::emit_instr_terminate(ctx);
@@ -942,6 +945,7 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::Linux, Arch::X86_64) => {
             ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
+            ctx.emitter.instruction("call __rt_exit_destructors");              // run the live objects' destructors, as php-src's shutdown does
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
             abi::emit_exit_hook(ctx.emitter);
             crate::codegen::frame::emit_instr_terminate(ctx);

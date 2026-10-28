@@ -194,8 +194,11 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x1, #{}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
     emitter.instruction("bl __rt_stdout_write");                                // terminate the report
     abi::emit_load_symbol_to_reg(emitter, "x10", "_uncaught_report_mode", 0);
-    emitter.instruction("cbz x10, __rt_uncaught_exit");                         // ordinary uncaught exception: the report is complete
+    emitter.instruction("cbz x10, __rt_uncaught_destruct");                     // ordinary uncaught exception: the report is complete
     emitter.instruction("bl __rt_debuginfo_fatal_text");                        // PHP follows the warning with the `__debuginfo() must return an array` fatal
+    emitter.instruction("b __rt_uncaught_exit");                                // a fatal error runs no destructors
+    emitter.label("__rt_uncaught_destruct");
+    emitter.instruction("bl __rt_exit_destructors");                            // PHP's shutdown runs the live objects' destructors after the report
     emitter.label("__rt_uncaught_exit");
     emitter.instruction("bl __rt_run_exit_hook");                              // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
@@ -564,8 +567,11 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stdout_write");                              // terminate the report
     abi::emit_load_symbol_to_reg(emitter, "r10", "_uncaught_report_mode", 0);
     emitter.instruction("test r10, r10");                                       // is this the exception-escaping-__debugInfo() flavour?
-    emitter.instruction("jz __rt_uncaught_exit");                               // ordinary uncaught exception: the report is complete
+    emitter.instruction("jz __rt_uncaught_destruct");                           // ordinary uncaught exception: the report is complete
     emitter.instruction("call __rt_debuginfo_fatal_text");                      // PHP follows the warning with the `__debuginfo() must return an array` fatal
+    emitter.instruction("jmp __rt_uncaught_exit");                              // a fatal error runs no destructors
+    emitter.label("__rt_uncaught_destruct");
+    emitter.instruction("call __rt_exit_destructors");                          // PHP's shutdown runs the live objects' destructors after the report
     emitter.label("__rt_uncaught_exit");
     emitter.instruction("call __rt_run_exit_hook");                            // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception

@@ -1595,6 +1595,9 @@ pub(crate) fn emit_runtime_data_fixed(
     // _debuginfo_pad: 1 while a var_dump render is fetching `__debugInfo()` (PHP has already
     // printed the nested value's indent when the fatal fires), 0 for print_r.
     out.push_str(&comm_directive("_debuginfo_pad", 8, target));
+    // _exit_destructors_ran: 1 once exit() has run the live objects' destructors
+    // (`__rt_exit_destructors`), so a destructor that calls exit() does not run them again.
+    out.push_str(&comm_directive("_exit_destructors_ran", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
