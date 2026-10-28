@@ -134,6 +134,18 @@ echo json_encode([php_defaults(), php_defaults(null, null, null, null, null, nul
 "#);
 }
 
+/// Nullable and union float returns widen native integers before Zend validates arginfo.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn float_union_returns_match_php() {
+    compare(r#"<?php
+#[Export] function php_nullable_float(int $value): ?float { return $value; }
+#[Export] function php_float_or_string(int $value): float|string { return $value; }
+"#, r#"
+var_dump(php_nullable_float(3), php_float_or_string(4));
+"#);
+}
+
 /// A small shared array graph cannot expand into an unbounded malloc-owned transport tree.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
@@ -232,6 +244,57 @@ error_reporting(E_ALL & ~E_DEPRECATED);
 set_error_handler(function ($level, $message) { if (error_reporting() & $level) { throw new ErrorException($message, 0, $level); } return true; });
 try { echo json_encode(php_float_key([], 1.5)); } catch (Throwable $e) { echo get_class($e), ':', $e->getMessage(); }
 "#);
+}
+
+/// A pending host error-handler exception leaves native finally callbacks usable.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn host_error_handler_exceptions_leave_native_finally_callbacks_usable() {
+    compare(r#"<?php
+#[Export] function php_finally_callbacks(array $value): void {
+    try { echo $value['first']; }
+    finally { echo 'cleanup'; echo $value['second']; echo 'more'; }
+}
+"#, r#"
+ob_start(function ($bytes) {
+    if ($bytes === '') { return ''; }
+    return "[$bytes]";
+}, 1);
+$warnings = [];
+set_error_handler(function ($level, $message) use (&$warnings) {
+    if (str_contains($message, '"first"')) { throw new LogicException('warning'); }
+    $warnings[] = [$level, $message];
+    return true;
+});
+try { php_finally_callbacks([]); } catch (LogicException $error) { echo 'caught'; }
+echo json_encode($warnings), 'after';
+ob_end_flush();
+"#);
+}
+
+/// Output-handler bailouts stay inside the adapter and leave the next export usable.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn output_handler_bailouts_are_contained_at_the_native_boundary() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("output_bailout", r#"<?php
+#[Export] function php_output_bailout(): void {
+    try { echo 'start'; } finally { echo 'cleanup'; }
+}
+#[Export] function php_after_output_bailout(int $value): int { return $value + 1; }
+"#);
+    let output = php(&sdk, &module).args(["-r", r#"
+ob_start(function ($bytes) { throw new LogicException('output'); }, 1);
+try { php_output_bailout(); exit(10); }
+catch (LogicException $error) { echo 'caught'; }
+echo php_after_output_bailout(41), 'after';
+ob_end_flush();
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status,
+        String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"startcaught42after");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
 /// Single-owner Zend reference wrappers left by foreach retain by-value array semantics.

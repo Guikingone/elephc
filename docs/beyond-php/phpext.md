@@ -128,6 +128,13 @@ or Fiber stack boundary. A C bailout guard contains host exceptions and request
 termination until native cleanup completes. Output uses PHP's API and never
 writes directly to file descriptor 1.
 
+Exceptions thrown by host error handlers run compiled `finally` cleanup but
+bypass `catch` blocks inside the export. They propagate to the host caller after
+native cleanup completes. An exception from a host output handler uses Zend's
+bailout path instead. The adapter contains that bailout and completes native
+ownership cleanup, but suppresses further PHP callbacks from the remaining
+`finally` code.
+
 Synchronous reentry on the same host Fiber is supported. If an error handler
 suspends a Fiber while native frames remain active, another Fiber or the main
 context cannot enter that module until the owning call finishes. Such overlap

@@ -134,6 +134,11 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     ep_state_reset();
     ep_current = NULL;
     pthread_mutex_unlock(&ep_native_lock);
+    /* Native finally blocks run while the first host callback exception is pending.
+     * Temporarily park it so later cleanup output and warnings can invoke PHP just as
+     * Zend does, then restore it behind any replacement exception. */
+    bool saved_exception = EG(exception) != NULL;
+    if (saved_exception) { zend_exception_save(); }
     zend_try {
         if (warning) {
             ep_issue_warning(call);
@@ -144,13 +149,15 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
         call->host_bailout = true;
     } zend_end_try();
     if (call->warning) { zend_string_release(call->warning); call->warning = NULL; }
+    bool callback_exception = EG(exception) != NULL;
+    if (saved_exception) { zend_exception_restore(); }
     call->host_exception = EG(exception) != NULL;
     /* The module-local normal mutex remains initialized for every active request. */
     pthread_mutex_lock(&ep_native_lock);
     ep_state_restore(call->snapshot);
     ep_native_stack_limit = ep_native_stack_limit_main = call->stack_floor;
     ep_current = call;
-    return call->host_bailout || call->host_exception;
+    return call->host_bailout || callback_exception;
 }
 
 /* No Zend bailout escapes this C frame into the native stack. */
@@ -222,7 +229,8 @@ static zend_class_entry *ep_exception_class(ep_call *call)
 }
 
 /* No Zend frame, allocation or callback lies below the native invocation. */
-static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function, zval *values, size_t count)
+static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function, zval *values,
+    size_t count, bool integer_to_float)
 {
     (void)execute_data;
     if (!EP_GLOBAL(initialized)) {
@@ -292,6 +300,9 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
                 zend_throw_exception_object(&thrown);
             } else if (call->result) {
                 ep_to_zend(call->result, return_value);
+                if (integer_to_float && Z_TYPE_P(return_value) == IS_LONG) {
+                    ZVAL_DOUBLE(return_value, (double)Z_LVAL_P(return_value));
+                }
             } else {
                 zend_throw_error(NULL, "elephc native call returned no value");
             }

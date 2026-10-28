@@ -101,7 +101,8 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
                 }
             }
         }
-        handlers.push_str(&format!("    ZEND_PARSE_PARAMETERS_START({required}, {})\n{parse}    ZEND_PARSE_PARAMETERS_END();\n{normalize}    ep_invoke(INTERNAL_FUNCTION_PARAM_PASSTHRU, {symbol}, values, {});\n}}\n", sig.params.len(), sig.params.len()));
+        let integer_to_float = sig.return_type.coerces_integer_to_float();
+        handlers.push_str(&format!("    ZEND_PARSE_PARAMETERS_START({required}, {})\n{parse}    ZEND_PARSE_PARAMETERS_END();\n{normalize}    ep_invoke(INTERNAL_FUNCTION_PARAM_PASSTHRU, {symbol}, values, {}, {integer_to_float});\n}}\n", sig.params.len(), sig.params.len()));
         entries.push_str(&format!("    ZEND_RAW_FENTRY({}, zif_{symbol}, arginfo_{symbol}, 0, NULL, NULL)\n", c_string(export.name.trim_start_matches('\\').as_bytes())));
     }
     registration = registration.replace("static const zend_function_entry", &format!("{}\n{}\n{handlers}\nstatic const zend_function_entry", include_str!("transport.c"), include_str!("activation.c")));
