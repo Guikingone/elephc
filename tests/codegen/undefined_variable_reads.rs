@@ -245,3 +245,23 @@ fn test_function_without_return_returns_null_to_its_caller() {
     );
     assert_eq!(out, "NULL\n");
 }
+
+/// Element writes on an undefined variable through nested pushes create the arrays, and a
+/// reference stored into a property creates an undefined source silently (php 8.5 output).
+#[test]
+fn test_nested_push_vivifies_and_property_reference_creates_source() {
+    let run = compile_and_run_capture(r#"<?php
+function a() { $x[""][] = 1; echo json_encode($x), "\n"; }
+function b() { $arr[][] = NULL; echo json_encode($arr), "\n"; }
+function c($id) { $u[$id][] = 'v'; $u[$id][] = 'w'; echo json_encode($u), "\n"; }
+function d() { $t['e']['p'][] = ['a', 'a']; echo json_encode($t), "\n"; }
+class H { public $property; }
+function e() { $a = new H; $a->property = &$b; $b = 3; var_dump($a->property); }
+a(); b(); c(7); d(); e();
+"#);
+    assert_eq!(
+        run.stdout,
+        "{\"\":[1]}\n[[null]]\n{\"7\":[\"v\",\"w\"]}\n{\"e\":{\"p\":[[\"a\",\"a\"]]}}\nint(3)\n"
+    );
+    assert!(!run.stderr.contains("Undefined variable"), "{}", run.stderr);
+}

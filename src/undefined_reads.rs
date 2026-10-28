@@ -1017,6 +1017,13 @@ fn vivify_children(stmt: &mut Stmt, seen: &mut HashSet<String>) -> Vec<String> {
 /// Returns the variable a statement writes an element of, if it is that kind of statement.
 fn element_write_root(stmt: &Stmt) -> Option<String> {
     match &stmt.kind {
+        // A nested push (`$x['k'][] = v`) is desugared into a block that reads the branch into
+        // a temporary, appends, and writes it back: the block's last statement names the
+        // variable, and the array must exist before the block's first read of it.
+        StmtKind::Synthetic(body) => body
+            .last()
+            .and_then(element_write_root)
+            .filter(|root| !is_compiler_temp(root)),
         StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => Some(array.clone()),
         StmtKind::NestedArrayAssign { target, .. } => {
             let mut current = target;
@@ -1295,6 +1302,16 @@ fn rewrite_flow_stmt(stmt: &mut Stmt, maybe: &mut HashSet<String>) {
             rewrite_ordered(index, maybe);
             rewrite_ordered(value, maybe);
         }
+        // The value of a property write is read before the property is stored.
+        StmtKind::PropertyAssign { value, .. }
+        | StmtKind::PropertyArrayPush { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => rewrite_ordered(value, maybe),
+        StmtKind::PropertyArrayAssign { index, value, .. }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            rewrite_ordered(index, maybe);
+            rewrite_ordered(value, maybe);
+        }
         _ => {}
     }
     maybe.extend(own.written);
@@ -1373,6 +1390,14 @@ fn undefined_write_roots(stmt: &Stmt, maybe: &HashSet<String>) -> Vec<(String, b
         StmtKind::RefAssign { source, .. } => {
             if let Some(root) = spine_root(source) {
                 add(root, false, &mut roots);
+            }
+            return roots;
+        }
+        // A reference stored into an element or property (`$o->p =& $x`, parsed as
+        // `<target> = $x; $x =& <target>;`) creates an undefined `$x` silently, as php does.
+        StmtKind::Synthetic(body) => {
+            if let Some(Stmt { kind: StmtKind::RefAssign { target, .. }, .. }) = body.last() {
+                add(target, false, &mut roots);
             }
             return roots;
         }
