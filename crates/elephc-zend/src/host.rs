@@ -1429,6 +1429,69 @@ pub unsafe extern "C" fn elephc_php_ext_property_direct(handle: *mut c_void) -> 
     i64::from(direct)
 }
 
+/// The engine class a program scope stands for: the first class of `chain` (comma-separated, as
+/// `elephc_php_ext_take_scope` gives it, `!` prefix allowed) the engine hosts, or null.
+unsafe fn scope_ancestor(chain: &[u8]) -> *mut zend_class_entry {
+    let chain = chain.strip_prefix(&[crate::property::STRICT_MARK]).unwrap_or(chain);
+    chain
+        .split(|&byte| byte == b',')
+        .filter(|name| !name.is_empty())
+        .find_map(|name| Some(crate::class::lookup(name)).filter(|ce| !ce.is_null()))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Starts `module` (MINIT, then RINIT) if nothing has yet, so its classes are registered; 1 when
+/// it runs.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_boot(module: *mut c_void) -> i64 {
+    i64::from(boot_module(module.cast()))
+}
+
+/// A class-level query on the engine class named `class`, as a call whose result
+/// `__elephc_php_ext_result` rebuilds (NULL when no such class): `op` 0 tells whether the class
+/// declares property `name` (`property_exists()`), 1 lists its properties' defaults visible from
+/// `scope` (`get_class_vars()`).
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_class_query(
+    class: *const c_char,
+    scope: *const c_char,
+    name: *const c_char,
+    op: i64,
+) -> *mut c_void {
+    let ce = find_class(class);
+    if ce.is_null() {
+        return ptr::null_mut();
+    }
+    let call = new_call(ptr::null_mut(), ptr::null_mut(), ce, 0).cast::<Call>();
+    if op == 0 {
+        let name = string::new(CStr::from_ptr(name).to_bytes());
+        set_bool(&mut (*call).result, crate::object::class_declares(ce, name));
+        string::zend_string_release(name);
+    } else {
+        let ancestor = scope_ancestor(CStr::from_ptr(scope).to_bytes());
+        set_arr(&mut (*call).result, crate::object::class_defaults(ce, ancestor));
+    }
+    call.cast()
+}
+
+/// `property_exists()` on the engine object a wrapper holds by `handle`, as a call whose bool
+/// result `__elephc_php_ext_result` rebuilds (NULL for a released object).
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_object_query(handle: i64, name: *const c_char) -> *mut c_void {
+    let object = held_object(handle);
+    if object.is_null() {
+        return ptr::null_mut();
+    }
+    let call = new_call(ptr::null_mut(), object, (*object).ce, 0).cast::<Call>();
+    let name = string::new(CStr::from_ptr(name).to_bytes());
+    set_bool(&mut (*call).result, crate::object::object_has_property(object, name));
+    string::zend_string_release(name);
+    call.cast()
+}
+
 const PROPERTY_READ: i64 = 0;
 const PROPERTY_WRITE: i64 = 1;
 const PROPERTY_ISSET: i64 = 2;
@@ -1438,6 +1501,10 @@ const PROPERTY_CLONE: i64 = 5;
 /// A write the hosted class makes itself (the wrapper seeding the state its C methods read), in
 /// the object's own scope.
 const PROPERTY_SEED: i64 = 6;
+/// The properties `get_object_vars()` gives in the access's scope.
+const PROPERTY_VARS: i64 = 7;
+/// The properties an `(array)` cast gives, under php-src's mangled keys.
+const PROPERTY_CAST: i64 = 8;
 
 /// Bailout-protected body of a property access: runs the read, write, isset or unset object handler
 /// selected by `*op` on the call's object and property, leaving a read or isset result in the call.
@@ -1475,12 +1542,22 @@ unsafe extern "C" fn property_trampoline(handle: *mut c_void, op: *mut c_void) {
                 unset(object, name, ptr::null_mut());
             }
         }
+        PROPERTY_VARS | PROPERTY_CAST => {
+            set_arr(&mut (*call).result, crate::object::property_view(object, *op.cast::<i64>() == PROPERTY_CAST));
+        }
         PROPERTY_DEBUG => {
-            // What `var_dump()` shows: the debug-info handler's table, else the properties.
+            // What `var_dump()` shows: the debug-info handler's table; the standard one is the
+            // properties under their mangled keys, as php-src's properties table holds them.
             let mut is_temp: c_int = 0;
+            let standard = (*handlers).get_debug_info.map(|debug| debug as *const () as usize)
+                == Some(crate::object::zend_std_get_debug_info as *const () as usize);
             let table = match (*handlers).get_debug_info {
+                _ if standard || (*handlers).get_debug_info.is_none() => {
+                    is_temp = 1;
+                    crate::object::property_view(object, true)
+                }
                 Some(debug) => debug(object, &mut is_temp),
-                None => crate::object::zend_elephc_object_properties(object),
+                None => ptr::null_mut(),
             };
             if !table.is_null() {
                 let owned = if is_temp != 0 { table } else { hash::zend_array_dup(table) };
@@ -1523,7 +1600,7 @@ pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op:
         eg().fake_scope = (*(*call).this).ce;
     }
     // A read, write, isset or unset is the program's, checked in its scope (`crate::property`).
-    let access = matches!(op, PROPERTY_READ | PROPERTY_WRITE | PROPERTY_ISSET | PROPERTY_UNSET);
+    let access = matches!(op, PROPERTY_READ | PROPERTY_WRITE | PROPERTY_ISSET | PROPERTY_UNSET | PROPERTY_VARS);
     if access {
         let object = (*call).this;
         let class = (*call).access_class.clone().unwrap_or_else(|| crate::object::class_name(object));

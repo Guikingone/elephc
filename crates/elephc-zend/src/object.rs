@@ -365,6 +365,152 @@ unsafe fn release_shadowing(object: *mut zend_object) {
     }
 }
 
+/// The array PHP's `get_object_vars()` (`mangled` false) or `(array)` cast and debug table
+/// (`mangled` true) give for `object`, built as php-src's properties table orders it: declared
+/// properties in declaration order (the root class's first), skipping one never initialized,
+/// then dynamic ones in creation order. Unmangled, only what the program access's scope may see
+/// is listed; mangled, every property under php-src's key (`"\0Class\0name"` for a private one,
+/// `"\0*\0name"` for a protected one).
+pub unsafe fn property_view(object: *mut zend_object, mangled: bool) -> *mut HashTable {
+    let result = hash::_zend_new_array(0);
+    let table = zend_elephc_object_properties(object);
+    let mut declared = std::collections::HashSet::new();
+    let add = |key: *mut zend_string, value: *mut zval| {
+        let mut copied = zval::UNDEF;
+        copy(&mut copied, crate::zval::deref(value));
+        if hash::zend_hash_add(result, key, &mut copied).is_null() {
+            zval_ptr_dtor(&mut copied);
+        }
+    };
+    for ce in crate::class::lineage((*object).ce) {
+        let Some(list) = crate::class::declared(ce) else { continue };
+        for property in list {
+            let name = property.name;
+            if !declared.insert(bytes(name).to_vec()) {
+                continue;
+            }
+            let info = property::info((*object).ce, name);
+            if info.is_null() || table.is_null() {
+                continue;
+            }
+            let value = hash::zend_hash_find_ind(table, name);
+            if value.is_null() {
+                continue;
+            }
+            if mangled {
+                let key = mangled_name(info);
+                add(key, value);
+                string::zend_string_release(key);
+            } else if matches!(property::visibility(object, info), Access::Allowed) {
+                add(name, value);
+            }
+        }
+    }
+    let dynamic = |source: *mut HashTable| {
+        if source.is_null() {
+            return;
+        }
+        for idx in 0..(*source).nNumUsed {
+            let bucket = hash::bucket(source, idx);
+            if (*bucket).val.u1.v.r#type == IS_UNDEF {
+                continue;
+            }
+            if (*bucket).key.is_null() {
+                let mut copied = zval::UNDEF;
+                copy(&mut copied, crate::zval::deref(&mut (*bucket).val));
+                hash::zend_hash_index_update(result, (*bucket).h, &mut copied);
+            } else if !declared.contains(bytes((*bucket).key)) || source != table {
+                add((*bucket).key, &mut (*bucket).val);
+            }
+        }
+    };
+    dynamic(table);
+    dynamic(shadowing(object, false));
+    result
+}
+
+/// Whether class `ce` (or an ancestor) declares property `name`, in any visibility, static or
+/// not, as `property_exists()` asks.
+pub unsafe fn class_declares(ce: *mut zend_class_entry, name: *mut zend_string) -> bool {
+    let mut current = ce;
+    while !current.is_null() {
+        if !hash::zend_hash_find_ptr(&(*current).properties_info, name).is_null() {
+            return true;
+        }
+        current = (*current).parent_u.parent;
+    }
+    false
+}
+
+/// Whether `object` has property `name` as `property_exists()` sees it: declared by its class, or
+/// held as a dynamic property.
+pub unsafe fn object_has_property(object: *mut zend_object, name: *mut zend_string) -> bool {
+    if class_declares((*object).ce, name) {
+        return true;
+    }
+    let table = zend_elephc_object_properties(object);
+    let shadowed = shadowing(object, false);
+    (!table.is_null() && !hash::zend_hash_find_ind(table, name).is_null())
+        || (!shadowed.is_null() && !hash::zend_hash_find_ind(shadowed, name).is_null())
+}
+
+/// `get_class_vars()` of class `ce` from a program scope whose nearest hosted class is
+/// `ancestor` (null for the global scope or a class extending none): the declared instance
+/// properties' defaults in declaration order, null for one with no default. A program class is
+/// never an engine class, so a private property is never listed and a protected one only from a
+/// class in its lineage.
+pub unsafe fn class_defaults(ce: *mut zend_class_entry, ancestor: *mut zend_class_entry) -> *mut HashTable {
+    let result = hash::_zend_new_array(0);
+    let mut seen = std::collections::HashSet::new();
+    for class in crate::class::lineage(ce) {
+        let Some(list) = crate::class::declared(class) else { continue };
+        for property in list {
+            if !seen.insert(bytes(property.name).to_vec()) {
+                continue;
+            }
+            let info = property::info(ce, property.name);
+            if info.is_null() {
+                continue;
+            }
+            let flags = (*info).flags;
+            let visible = if flags & ZEND_ACC_PRIVATE != 0 {
+                false
+            } else if flags & ZEND_ACC_PROTECTED != 0 {
+                !ancestor.is_null() && crate::class::instanceof_function(ancestor, (*info).ce)
+            } else {
+                true
+            };
+            if !visible {
+                continue;
+            }
+            let mut value = zval::UNDEF;
+            if property.default.u1.v.r#type == IS_UNDEF {
+                value.u1.type_info = IS_NULL as u32;
+            } else {
+                copy(&mut value, &property.default);
+            }
+            hash::zend_hash_add(result, property.name, &mut value);
+        }
+    }
+    result
+}
+
+/// php-src's key for a declared property in a properties table: `"\0Class\0name"` for a
+/// private one, `"\0*\0name"` for a protected one, the name for a public one.
+unsafe fn mangled_name(info: *mut zend_property_info) -> *mut zend_string {
+    let name = bytes((*info).name);
+    let mut key = Vec::with_capacity(name.len() + 16);
+    if (*info).flags & ZEND_ACC_PRIVATE != 0 {
+        key.push(0);
+        key.extend_from_slice(bytes((*(*info).ce).name));
+        key.push(0);
+    } else if (*info).flags & ZEND_ACC_PROTECTED != 0 {
+        key.extend_from_slice(b"\0*\0");
+    }
+    key.extend_from_slice(name);
+    string::new(&key)
+}
+
 /// Whether the engine answers an access to property `name` of `object` itself, in the program
 /// access's scope: php-src's standard handlers call a class's `__get`, `__set`, `__isset` or
 /// `__unset` only for a name that scope cannot reach or the object does not hold. A class with

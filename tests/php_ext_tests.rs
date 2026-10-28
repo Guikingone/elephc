@@ -190,6 +190,38 @@ var_dump(new $k);
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// `var_dump()` object ids with the digits dropped: the wrapper identity table holds an id of its
+/// own, so a hosted object's `#N` can run ahead of PHP's (see `dumps_show_the_engine_object`).
+fn without_object_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '#' {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+            }
+        }
+    }
+    out
+}
+
+/// A hosted object's properties as PHP's introspection shows them, from the engine object:
+/// `get_object_vars()` in the caller's scope, `(array)` under mangled keys, `var_dump()` and
+/// `print_r()` in declaration order with their visibility, `property_exists()` and
+/// `get_class_vars()`; and a `__debugInfo()` array's mangled keys print unmangled, as PHP does
+/// for any class. Line for line with real PHP (object ids aside).
+#[test]
+fn hosted_property_views_match_real_php() {
+    let dir = project("property-views");
+    let program = fs::read_to_string(fixture_dir().join("hosted_property_views.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("hosted_property_views.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(without_object_ids(&String::from_utf8_lossy(&run.stdout)), without_object_ids(&expected));
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// Introspection sees a hosted class as PHP's internal class: none of the wrapper's own members
 /// (`__elephc…` methods, its `__get`/`__set`/`__isset`/`__unset`/`__clone`, the marker
 /// interface) is listed or reported, and Reflection lists methods in declaration order.

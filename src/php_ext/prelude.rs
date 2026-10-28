@@ -213,6 +213,17 @@ pub(crate) fn is_internal_name(name: &str) -> bool {
 pub(crate) const DIRECT_FUNCTION: &str = "__elephc_php_ext_direct";
 /// The prelude function that runs a property access on the engine object.
 pub(crate) const PROPERTY_FUNCTION: &str = "__elephc_php_ext_property";
+/// The wrapper method that lists the engine object's properties as `get_object_vars()` does, in
+/// the scope the caller published; the runtime's object projection calls it for a hosted object.
+pub(crate) const OBJECT_VARS_METHOD: &str = "__elephcObjectVars";
+/// The wrapper method that lists the engine object's properties as an `(array)` cast does.
+pub(crate) const OBJECT_CAST_METHOD: &str = "__elephcObjectCast";
+/// The prelude function both call.
+const VARS_FUNCTION: &str = "__elephc_php_ext_vars";
+/// The prelude function `property_exists()` on a hosted class or object becomes.
+pub(crate) const PROPERTY_EXISTS_FUNCTION: &str = "__elephc_php_ext_property_exists";
+/// The prelude function `get_class_vars()` on a hosted class becomes.
+pub(crate) const CLASS_VARS_FUNCTION: &str = "__elephc_php_ext_class_vars";
 /// The protected wrapper property repeating its table slot. `clone` copies it
 /// (the table is keyed by object id, which a clone does not share), so
 /// `__clone` knows which engine object to clone.
@@ -389,6 +400,15 @@ fn abi_externs() -> Vec<Stmt> {
             .build(),
         extern_fn_unbound("elephc_php_ext_property_invoke").param("call", ptr()).param("op", CType::Int).returns(CType::Int).build(),
         extern_fn_unbound("elephc_php_ext_property_direct").param("call", ptr()).returns(CType::Int).build(),
+        extern_fn_unbound("elephc_php_ext_class_query")
+            .param("class", CType::Str)
+            .param("scope", CType::Str)
+            .param("name", CType::Str)
+            .param("op", CType::Int)
+            .returns(ptr())
+            .build(),
+        extern_fn_unbound("elephc_php_ext_boot").param("module", ptr()).returns(CType::Int).build(),
+        extern_fn_unbound("elephc_php_ext_object_query").param("object", CType::Int).param("name", CType::Str).returns(ptr()).build(),
         extern_fn_unbound("elephc_php_ext_property_as")
             .param("call", ptr())
             .param("class", CType::Str)
@@ -1295,6 +1315,91 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
             s_return(strict_eq(e_var("__elephc_direct"), e_int(1))),
         ])
         .build();
+    // function __elephc_php_ext_vars(int $object, string $class, string $scope, int $op): mixed
+    // The engine object's property list for `$op` (see `object_view_method`), in `$scope`.
+    let vars = function(VARS_FUNCTION)
+        .param("__elephc_object", TypeExpr::Int)
+        .param("__elephc_class", TypeExpr::Str)
+        .param("__elephc_scope", TypeExpr::Str)
+        .param("__elephc_op", TypeExpr::Int)
+        .returns(t_mixed())
+        .body(vec![
+            s_if(strict_eq(e_var("__elephc_object"), e_int(0)), vec![s_return(e_array(vec![]))], vec![], None),
+            s_assign("__elephc_call", call("elephc_php_ext_property_new", vec![e_var("__elephc_object"), e_str(""), e_int(0)])),
+            s_if(call("__elephc_ptr_is_null", vec![call_var()]), vec![s_return(e_array(vec![]))], vec![], None),
+            s_expr(call("elephc_php_ext_property_as", vec![call_var(), e_var("__elephc_class"), e_var("__elephc_scope")])),
+            s_expr(call("elephc_php_ext_property_scope", vec![call_var(), e_var("__elephc_scope")])),
+            s_assign("__elephc_status", call("elephc_php_ext_property_invoke", vec![call_var(), e_var("__elephc_op")])),
+            s_if(
+                strict_eq(e_var("__elephc_status"), e_int(2)),
+                vec![s_expr(call("elephc_php_ext_call_free", vec![call_var()])), s_expr(call("exit", vec![e_int(255)]))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_var("__elephc_status"), BinOp::StrictNotEq, e_int(0)),
+                vec![s_expr(call("__elephc_php_ext_raise", vec![call_var()]))],
+                vec![],
+                None,
+            ),
+            s_return(call("__elephc_php_ext_result", vec![call_var()])),
+        ])
+        .build();
+    // function __elephc_php_ext_property_exists(mixed $target, string $name): bool
+    // `property_exists()` on a hosted class's name or object: the engine class declares it (in
+    // any visibility), or the object holds it.
+    // A class-level query may come before anything started the extensions, which register their
+    // classes in MINIT.
+    let boot_all = || {
+        let mut boot = vec![s_expr(call("__elephc_php_ext_setup", vec![]))];
+        boot.extend(hosted.extensions.iter().map(|extension| {
+            s_expr(call("elephc_php_ext_boot", vec![call(&extension.record.module_accessor(), vec![])]))
+        }));
+        boot
+    };
+    let exists = function(PROPERTY_EXISTS_FUNCTION)
+        .param("__elephc_target", t_mixed())
+        .param("__elephc_name", TypeExpr::Str)
+        .returns(TypeExpr::Bool)
+        .body([boot_all(), vec![
+            s_if(
+                call("is_object", vec![e_var("__elephc_target")]),
+                vec![s_assign(
+                    "__elephc_call",
+                    call(
+                        "elephc_php_ext_object_query",
+                        vec![e_method_call(e_var("__elephc_target"), OBJECT_METHOD, vec![]), e_var("__elephc_name")],
+                    ),
+                )],
+                vec![],
+                Some(vec![s_assign(
+                    "__elephc_call",
+                    call(
+                        "elephc_php_ext_class_query",
+                        vec![e_cast(CastType::String, e_var("__elephc_target")), e_str(""), e_var("__elephc_name"), e_int(0)],
+                    ),
+                )]),
+            ),
+            s_if(call("__elephc_ptr_is_null", vec![call_var()]), vec![s_return(e_bool(false))], vec![], None),
+            s_return(e_cast(CastType::Bool, call("__elephc_php_ext_result", vec![call_var()]))),
+        ]].concat())
+        .build();
+    // function __elephc_php_ext_class_vars(string $class, string $scope): array
+    // `get_class_vars()` on a hosted class: its declared properties' defaults the calling
+    // `$scope` may see.
+    let class_vars = function(CLASS_VARS_FUNCTION)
+        .param("__elephc_class", TypeExpr::Str)
+        .param("__elephc_scope", TypeExpr::Str)
+        .returns(t_array())
+        .body([boot_all(), vec![
+            s_assign(
+                "__elephc_call",
+                call("elephc_php_ext_class_query", vec![e_var("__elephc_class"), e_var("__elephc_scope"), e_str(""), e_int(1)]),
+            ),
+            s_if(call("__elephc_ptr_is_null", vec![call_var()]), vec![s_return(e_array(vec![]))], vec![], None),
+            s_return(e_cast(CastType::Array, call("__elephc_php_ext_result", vec![call_var()]))),
+        ]].concat())
+        .build();
     vec![
         marker,
         omitted_marker,
@@ -1303,6 +1408,9 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
         compact_wrappers_helper(),
         property,
         direct,
+        vars,
+        exists,
+        class_vars,
         clone,
         adopt,
         iterator_class(),
@@ -2133,6 +2241,8 @@ fn wrapper_class(
             .method(method("__clone").body(vec![s_expr(e_method_call(e_this(), CLONE_METHOD, vec![]))]))
             // What `var_dump()` and `print_r()` show is the engine object's
             // debug table, as in PHP, never the wrapper's own bookkeeping.
+            .method(object_view_method(OBJECT_VARS_METHOD, 7))
+            .method(object_view_method(OBJECT_CAST_METHOD, 8))
             .method(method(DEBUG_INFO_METHOD).protected().body(vec![s_return(e_cast(
                 CastType::Array,
                 call(
@@ -2159,6 +2269,21 @@ fn wrapper_class(
         builder = builder.method(wrapper_method(extension, class, &all, function, wrapped));
     }
     builder.build()
+}
+
+/// A protected wrapper method returning the engine object's property list for `op` (7 the
+/// properties visible in the published scope, 8 all of them under mangled keys), as `mixed`:
+/// the runtime turns it into the array it hands back.
+fn object_view_method(name: &str, op: i64) -> crate::synthetic_class::MethodBuilder {
+    method(name).protected().returns(t_mixed()).body(vec![s_return(call(
+        VARS_FUNCTION,
+        vec![
+            e_method_call(e_this(), OBJECT_METHOD, vec![]),
+            call("get_class", vec![e_this()]),
+            call("elephc_php_ext_take_scope", vec![]),
+            e_int(op),
+        ],
+    ))])
 }
 
 /// `__get`, `__set`, `__isset` and `__unset`, answered by the engine object

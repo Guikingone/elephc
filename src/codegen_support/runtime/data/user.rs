@@ -565,6 +565,51 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // A hosted PHP extension's objects keep their properties on the engine object: the runtime's
+    // object projection (`get_object_vars()`, `(array)`) asks `__elephc_php_ext_object_view`,
+    // through this pointer (0 in a program hosting no extension), before walking descriptors.
+    let hosting = classes.contains_key(crate::php_ext::prelude::OWNER_CLASS);
+    out.push_str(".globl _elephc_object_view_hook\n_elephc_object_view_hook:\n");
+    out.push_str(if hosting { "    .quad __elephc_php_ext_object_view\n" } else { "    .quad 0\n" });
+    if hosting {
+        // Per class id: the wrapper's `get_object_vars()` and `(array)` view methods (0 for a
+        // class that wraps no engine object), and the class chain a scope class id publishes.
+        out.push_str(".globl _class_hosted_view_ptrs\n_class_hosted_view_ptrs:\n");
+        let vars_key = php_symbol_key(crate::php_ext::prelude::OBJECT_VARS_METHOD);
+        let cast_key = php_symbol_key(crate::php_ext::prelude::OBJECT_CAST_METHOD);
+        let mut chains = Vec::new();
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                let (vars, cast) = match class_info_by_id.get(&class_id) {
+                    Some(class_info) if is_hosted_extension_class(class_info) && class_info.method_impl_classes.contains_key(&vars_key) => (
+                        source_instance_method_entry(class_info, &vars_key, classes)?,
+                        source_instance_method_entry(class_info, &cast_key, classes)?,
+                    ),
+                    _ => ("0".to_string(), "0".to_string()),
+                };
+                out.push_str(&format!("    .quad {}\n    .quad {}\n", vars, cast));
+                let mut chain = Vec::new();
+                let mut current = class_name_by_id.get(&class_id).map(|name| name.to_string());
+                while let Some(name) = current {
+                    if chain.contains(&name) {
+                        break;
+                    }
+                    current = classes.get(&name).and_then(|info| info.parent.clone());
+                    chain.push(name);
+                }
+                chains.push(chain.join(","));
+            }
+        }
+        out.push_str(".globl _elephc_scope_chains\n_elephc_scope_chains:\n");
+        for (class_id, chain) in chains.iter().enumerate() {
+            out.push_str(&format!("    .quad _elephc_scope_chain_{class_id}\n    .quad {}\n", chain.len()));
+        }
+        for (class_id, chain) in chains.iter().enumerate() {
+            out.push_str(&format!("_elephc_scope_chain_{class_id}:\n    .ascii \"{}\"\n", escaped_ascii(chain)));
+        }
+        out.push_str("    .p2align 3\n");
+    }
+
     // Dense class-id-indexed __toString table for runtime string coercions that
     // cannot know the concrete class during EIR lowering (notably
     // unserialize()'s allowed_classes values).

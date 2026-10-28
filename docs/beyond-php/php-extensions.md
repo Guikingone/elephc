@@ -251,7 +251,12 @@ but cannot be called yet: it throws an `Error` saying why.
   and `elephc extension add` lists them.
 - **Magic methods other than `__toString` and `__debugInfo`** (`__serialize`,
   `__invoke`...) are not forwarded. `var_dump()` and `print_r()` show an
-  extension object's debug table, as PHP does.
+  extension object's debug table, as PHP does: its properties in declaration
+  order with their visibility; `get_object_vars()`, `(array)`,
+  `property_exists()` and `get_class_vars()` read the extension's object and
+  class too. Two gaps remain: a typed property never initialized is left out of
+  `var_dump()` where PHP prints `uninitialized(int)`, and
+  `ReflectionClass::getProperties()` does not list the extension's properties.
 - **The engine is PHP's extension API, not PHP's runtime.** Elephc's engine
   provides what extensions call to handle values, parse arguments, register
   functions, classes, constants and INI directives, throw exceptions,
