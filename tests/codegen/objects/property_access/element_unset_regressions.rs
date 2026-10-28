@@ -10,6 +10,37 @@
 
 use super::*;
 
+/// Warning-capable hash keys invalidate a global closure that a handler may replace.
+#[test]
+fn test_unset_hash_key_diagnostic_invalidates_scoped_closure_facts() {
+    for key in ["1.5", "scoped_unset_key()"] {
+        let source = r#"<?php
+class ScopedUnsetVault {
+    private string $code = "old";
+    public string $label = "new";
+}
+class ScopedUnsetHolder { public $items = ["keep" => 1]; }
+function scoped_unset_key(): mixed { return 1.5; }
+function expose_scoped_unset_global(): void { global $peek; }
+$holder = new ScopedUnsetHolder();
+$peek = function () { return $this->code; };
+set_error_handler(function (): bool {
+    global $peek;
+    $peek = function () { return $this->label; };
+    return true;
+});
+try { unset($holder->items[UNSET_KEY]); } catch (Error $error) {}
+restore_error_handler();
+$bound = Closure::bind($peek, new ScopedUnsetVault(), ScopedUnsetVault::class);
+echo $bound(), "\n";
+"#.replace("UNSET_KEY", key);
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "new\n");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
 /// Raw associative property storage uses the same key-diagnostic snapshot as boxed PHP arrays.
 #[test]
 fn test_unset_associative_property_key_diagnostic_preserves_replacement() {
