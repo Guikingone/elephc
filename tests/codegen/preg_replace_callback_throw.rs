@@ -13,6 +13,9 @@
 //! - `--heap-debug` counts elephc heap blocks only. PCRE2's compiled pattern and
 //!   match data come from the libc allocator, so this summary cannot see them.
 //!   The throw path still frees those pointers through the shim and `free`.
+//! - Nested calls, `finally`, closures that capture objects, static callables,
+//!   and a generator each match a PHP 8.5.9 transcript and finish with a clean
+//!   elephc heap.
 
 use crate::support::*;
 
@@ -209,6 +212,197 @@ echo "E\n";
         live_blocks(&out.stderr),
         0,
         "a thrown bound method left a block alive:\n{}",
+        out.stderr
+    );
+}
+
+/// An inner `preg_replace_callback` throw must free the inner receiver before
+/// the outer one, and both before the caller's `catch`.
+#[test]
+fn test_preg_replace_callback_throw_nested_releases_both_receivers() {
+    assert_clean_php(
+        r#"<?php
+class InnerObj {
+    public function __destruct() { echo "Di"; }
+    public function fail(array $m): string {
+        echo "I";
+        throw new Exception("x");
+    }
+}
+class OuterObj {
+    public function __destruct() { echo "Do"; }
+    public function go(array $m): string {
+        echo "O";
+        return preg_replace_callback("/b/", [new InnerObj(), "fail"], "b");
+    }
+}
+try {
+    preg_replace_callback("/a/", [new OuterObj(), "go"], "a");
+    echo "!";
+} catch (Exception $e) {
+    echo "C";
+}
+echo "E\n";
+"#,
+        "OIDiDoCE\n",
+    );
+}
+
+/// `finally` runs after a temporary receiver is destroyed, and a receiver the
+/// caller still holds stays alive until that variable is cleared.
+#[test]
+fn test_preg_replace_callback_throw_finally_orders_destructors() {
+    assert_clean_php(
+        r#"<?php
+class FinTemp {
+    public function __destruct() { echo "Dt"; }
+    public function fail(array $m): string {
+        echo "M";
+        throw new Exception("fin");
+    }
+}
+class FinKept {
+    public function __destruct() { echo "Dk"; }
+    public function fail(array $m): string {
+        echo "N";
+        throw new Exception("fin");
+    }
+}
+try {
+    try {
+        preg_replace_callback("/a/", [new FinTemp(), "fail"], "a");
+        echo "!";
+    } finally {
+        echo "Y";
+    }
+} catch (Exception $e) {
+    echo "C";
+}
+$kept = new FinKept();
+try {
+    try {
+        preg_replace_callback("/a/", [$kept, "fail"], "a");
+        echo "!";
+    } finally {
+        echo "Z";
+    }
+} catch (Exception $e) {
+    echo "C";
+}
+echo "S";
+$kept = null;
+echo "E\n";
+"#,
+        "MDtYCNZCSDkE\n",
+    );
+}
+
+/// A closure that is the only remaining owner of a captured object must keep
+/// that object alive across the throw and drop it when the closure itself dies.
+#[test]
+fn test_preg_replace_callback_throw_closure_capture_drops_with_closure() {
+    assert_clean_php(
+        r#"<?php
+class CapObj {
+    public string $tag;
+    public function __construct(string $tag) { $this->tag = $tag; }
+    public function __destruct() { echo "D", $this->tag; }
+}
+$live = new CapObj("v");
+$fn = function (array $m) use ($live): string {
+    echo "M";
+    throw new Exception("cap");
+};
+$live = null;
+try {
+    preg_replace_callback("/a/", $fn, "a");
+    echo "!";
+} catch (Exception $e) {
+    echo "C";
+}
+echo "S";
+$fn = null;
+echo "E\n";
+"#,
+        "MCSDvE\n",
+    );
+}
+
+/// A static callable array does not retain an unrelated object past the throw.
+#[test]
+fn test_preg_replace_callback_throw_static_callable_stays_clean() {
+    assert_clean_php(
+        r#"<?php
+class StatCb {
+    public static function fail(array $m): string {
+        echo "M";
+        throw new Exception("stat");
+    }
+}
+class StatBox {
+    public function __destruct() { echo "Ds"; }
+}
+$box = new StatBox();
+try {
+    preg_replace_callback("/a/", ["StatCb", "fail"], "a");
+    echo "!";
+} catch (Exception $e) {
+    echo "C";
+}
+echo "S";
+$box = null;
+echo "E\n";
+"#,
+        "MCSDsE\n",
+    );
+}
+
+/// A generator that catches a callback throw resumes, then destroys the object
+/// its callback closure captured.
+#[test]
+fn test_preg_replace_callback_throw_inside_generator_releases_capture() {
+    assert_clean_php(
+        r#"<?php
+class GenObj {
+    public function __destruct() { echo "Dg"; }
+}
+function gen_throw(): Generator {
+    $obj = new GenObj();
+    try {
+        preg_replace_callback("/a/", function (array $m) use ($obj): string {
+            echo "M";
+            throw new Exception("gen");
+        }, "a");
+        echo "!";
+        yield "bad";
+    } catch (Exception $e) {
+        echo "C";
+    }
+    yield "Y";
+    echo "A";
+}
+foreach (gen_throw() as $v) {
+    echo $v;
+}
+echo "E\n";
+"#,
+        "MCYADgE\n",
+    );
+}
+
+/// Compiles one fixture with heap debugging and requires the PHP transcript plus a clean elephc heap.
+fn assert_clean_php(source: &str, expected: &str) {
+    let out = run_preg_callback(source, 8_388_608, true);
+    assert!(
+        out.success,
+        "fixture failed\nstdout:\n{}\nstderr:\n{}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, expected, "stderr:\n{}", out.stderr);
+    assert_eq!(
+        live_blocks(&out.stderr),
+        0,
+        "throw left an elephc block alive:\n{}",
         out.stderr
     );
 }
