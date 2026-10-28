@@ -100,6 +100,8 @@ pub enum RuntimeFnId {
     /// Fused `is_*($packedMixedArray[$intIndex])` predicate that reads the stored tag in place.
     ArrayElementTypeCheck,
     ArrayFind,
+    /// Boxes the first value of an array in insertion order for `array_first()`.
+    ArrayFirst,
     ArrayFlip,
     ArrayIntersect,
     ArrayIntersectAssoc,
@@ -109,6 +111,8 @@ pub enum RuntimeFnId {
     ArrayKeyFirst,
     ArrayKeyLast,
     ArrayKeys,
+    /// Boxes the last value of an array in insertion order for `array_last()`.
+    ArrayLast,
     ArrayMap,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
@@ -1319,8 +1323,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
-            RuntimeFnId::ArrayKeyFirst |
-            RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
             RuntimeFnId::ArrayMergeRecursive |
             RuntimeFnId::ArrayReplace |
@@ -1478,6 +1480,19 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // Array-edge value/key functions read one edge and box it into a fresh
+            // Mixed cell (retaining a container payload inside the box). No user code runs and
+            // nothing is written, but the result depends on the array's current contents, so
+            // the call must never be treated as pure and merged with an earlier read. A `mixed`
+            // argument holding no array raises PHP's TypeError, so the call may throw: operands
+            // are pinned for unwind and stores before it stay observable by a catch.
+            RuntimeFnId::ArrayFirst | RuntimeFnId::ArrayLast
+            | RuntimeFnId::ArrayKeyFirst | RuntimeFnId::ArrayKeyLast => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             // The runtime script cache is process state: these read it and nothing else,
             // so they must NOT be folded across an include that can move the counters.
             RuntimeFnId::ElephcOpcacheRtScriptField | RuntimeFnId::ElephcOpcacheRtStat => {
@@ -2602,6 +2617,13 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
+                // Array-edge value/key functions box their answer through the same
+                // `__rt_mixed_from_value` / `__rt_array_get_mixed_key` paths, so the cell is
+                // independently owned and never aliases the source array.
+                | RuntimeFnId::ArrayFirst
+                | RuntimeFnId::ArrayLast
+                | RuntimeFnId::ArrayKeyFirst
+                | RuntimeFnId::ArrayKeyLast
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace
@@ -2883,6 +2905,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayFillKeys => "array_fill_keys",
             RuntimeFnId::ArrayFilter => "array_filter",
             RuntimeFnId::ArrayFind => "array_find",
+            RuntimeFnId::ArrayFirst => "array_first",
             RuntimeFnId::ArrayCountValues => "array_count_values",
             RuntimeFnId::ArrayFlip => "array_flip",
             RuntimeFnId::ArrayIntersect => "array_intersect",
@@ -2893,6 +2916,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyFirst => "array_key_first",
             RuntimeFnId::ArrayKeyLast => "array_key_last",
             RuntimeFnId::ArrayKeys => "array_keys",
+            RuntimeFnId::ArrayLast => "array_last",
             RuntimeFnId::ArrayMap => "array_map",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddSafe => "array_map_sum_add_safe",
