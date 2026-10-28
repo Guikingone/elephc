@@ -272,29 +272,67 @@ ob_end_flush();
 "#);
 }
 
-/// Output-handler bailouts stay inside the adapter and leave the next export usable.
+/// Output-handler exceptions run both flattened and kept native finally regions.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
-fn output_handler_bailouts_are_contained_at_the_native_boundary() {
-    let project = Project::new();
-    let sdk = project.sdk();
-    let module = project.compile("output_bailout", r#"<?php
-#[Export] function php_output_bailout(): void {
-    try { echo 'start'; } finally { echo 'cleanup'; }
+fn output_handler_exceptions_run_native_finally_regions() {
+    compare(r#"<?php
+#[Export] function php_output_finally(bool $kept): int {
+    static $state = 0;
+    try {
+        echo $kept ? 'kept' : 'flat';
+        if ($kept) { throw new RuntimeException('unreached'); }
+        $state += 10;
+    } finally {
+        $state += 100;
+        echo 'cleanup';
+    }
+    return $state;
 }
-#[Export] function php_after_output_bailout(int $value): int { return $value + 1; }
+"#, r#"
+foreach ([false, true] as $kept) {
+    ob_start(function ($bytes) { throw new LogicException('output'); }, 1);
+    try { php_output_finally($kept); exit(10); }
+    catch (LogicException $error) { echo 'caught'; }
+    ob_end_flush();
+    echo ':', php_output_finally(false), '|';
+}
 "#);
-    let output = php(&sdk, &module).args(["-r", r#"
-ob_start(function ($bytes) { throw new LogicException('output'); }, 1);
-try { php_output_bailout(); exit(10); }
-catch (LogicException $error) { echo 'caught'; }
-echo php_after_output_bailout(41), 'after';
-ob_end_flush();
-"#]).output().unwrap();
-    assert!(output.status.success(), "{:?}: {}", output.status,
-        String::from_utf8_lossy(&output.stderr));
-    assert_eq!(output.stdout, b"startcaught42after");
-    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// A native finally return discards a pending host callback exception like PHP.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn native_finally_returns_override_host_callback_exceptions() {
+    compare(r#"<?php
+#[Export] function php_finally_return(array $value): int {
+    try { echo $value['missing']; } finally { return 7; }
+}
+"#, r#"
+set_error_handler(function () { throw new LogicException('host'); });
+var_dump(php_finally_return([]));
+echo 'after';
+"#);
+}
+
+/// A native finally exception replaces and chains a pending host callback exception.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn native_finally_exceptions_replace_host_callback_exceptions() {
+    compare(r#"<?php
+#[Export] function php_finally_throw(array $value): void {
+    try { echo $value['missing']; }
+    finally { throw new RuntimeException('native'); }
+}
+"#, r#"
+set_error_handler(function () { throw new LogicException('host'); });
+try { php_finally_throw([]); }
+catch (Throwable $error) {
+    $previous = $error->getPrevious();
+    echo get_class($error), ':', $error->getMessage(), ':',
+        get_class($previous), ':', $previous->getMessage();
+}
+"#);
 }
 
 /// Single-owner Zend reference wrappers left by foreach retain by-value array semantics.

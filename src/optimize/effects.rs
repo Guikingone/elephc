@@ -86,7 +86,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
         StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(),
         StmtKind::IncludeOnceGuard { body, .. } => block_effect(body).with_side_effects(),
-        StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(),
+        // Hosted output handlers can throw. Keep output inside its source try region even for
+        // standalone builds, where the extra conservatism only forgoes an optimization.
+        StmtKind::Echo(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
@@ -290,7 +292,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 evaluated.with_side_effects().with_may_throw().with_writes_globals()
             }
         }
-        ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
+        ExprKind::Print(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),

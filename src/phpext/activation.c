@@ -187,7 +187,7 @@ int elephc_php_exception(const uintptr_t *object, uintptr_t status)
 {
     ep_call *call = ep_current;
     if (!call) { return 1; }
-    if (call->host_exception || call->host_bailout) { return 0; }
+    if (call->host_bailout || (call->host_exception && !object)) { return 0; }
     if (call->error) { return 1; }
     if (!object) {
         call->error = status == 1 ? "PHP extension result exceeds the maximum nesting depth (64)" :
@@ -285,6 +285,16 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     /* The call allocation is on the heap: setjmp cannot invalidate its cleanup fields. */
     zend_try {
         if (call->host_bailout) { zend_bailout(); }
+        bool restore_host_exception = call->exception_message && EG(exception);
+        if (restore_host_exception) {
+            /* A native exception from finally replaces the host callback exception and keeps
+             * that exception as its previous link, matching Zend's finally semantics. */
+            zend_exception_save();
+        } else if (call->result && call->host_exception && EG(exception)) {
+            /* A return from finally overrides the pending host callback exception. */
+            zend_clear_exception();
+            call->host_exception = false;
+        }
         if (!EG(exception)) {
             if (call->error) {
                 zend_throw_error(NULL, "%s", call->error);
@@ -307,6 +317,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
                 zend_throw_error(NULL, "elephc native call returned no value");
             }
         }
+        if (restore_host_exception) { zend_exception_restore(); }
     } zend_catch {
         ep_call_destroy(call);
         zend_bailout();

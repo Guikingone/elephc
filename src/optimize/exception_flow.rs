@@ -543,7 +543,8 @@ impl ExceptionFlowAnalysis {
             StmtKind::Echo(expr) => self
                 .expr_throws(expr, bindings, class_context)
                 .combined(self.string_conversion_throws(expr, class_context))
-                .combined(self.temporary_destruction_throws(expr, class_context)),
+                .combined(self.temporary_destruction_throws(expr, class_context))
+                .combined(ThrownTypes::unknown()),
             StmtKind::ExprStmt(expr) => self
                 .expr_throws(expr, bindings, class_context)
                 .combined(self.temporary_destruction_throws(expr, class_context)),
@@ -764,7 +765,8 @@ impl ExceptionFlowAnalysis {
             }
             ExprKind::Print(inner) => self
                 .expr_throws(inner, bindings, class_context)
-                .combined(self.string_conversion_throws(inner, class_context)),
+                .combined(self.string_conversion_throws(inner, class_context))
+                .combined(ThrownTypes::unknown()),
             ExprKind::Cast { target, expr: inner } => {
                 let mut thrown = self.expr_throws(inner, bindings, class_context);
                 if matches!(target, CastType::String) {
