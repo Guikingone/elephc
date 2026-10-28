@@ -302,3 +302,21 @@ truthy();
     );
     assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
 }
+
+/// A boxed `?ArrayObject` local can never hold false, so its keyed write is a plain
+/// `offsetSet()` with no false-to-array promotion (output measured with php 8.5).
+#[test]
+fn test_element_write_on_nullable_array_access_local_skips_false_promotion() {
+    let run = compile_and_run_with_heap_debug(r#"<?php
+class D { public static ?ArrayObject $owner = null; }
+function f() { $owner = D::$owner; if ($owner !== null) { $owner['y'] = 9; } }
+$a = new ArrayObject([]);
+D::$owner = $a;
+f();
+echo count($a), json_encode($a->getArrayCopy()), "\n";
+D::$owner = null;
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    assert_eq!(run.stdout, "1{\"y\":9}\n");
+    assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
+}

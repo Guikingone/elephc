@@ -46,7 +46,10 @@ pub(super) fn normalize_for_update(
     let attached = ctx.declare_synthetic_php_local(PhpType::Bool);
     let present = lower_expr(ctx, &Expr::new(ExprKind::BoolLiteral(true), span));
     ctx.store_local(&attached, present, PhpType::Bool, Some(span));
-    if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
+    let parent_ty = ctx.builder.value_php_type(parent.value);
+    // A boxed `?ArrayObject` parent cannot hold false; promoting it would store an array
+    // into an object receiver, which lowers as an `ArrayAccess` append.
+    if parent_ty.codegen_repr() != PhpType::Mixed || !may_hold_false(&parent_ty) {
         return present;
     }
     let boolean = ctx.emit_value(Op::TypePredicate, vec![parent.value],
@@ -83,6 +86,15 @@ pub(super) fn normalize_for_update(
     ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
     ctx.builder.position_at_end(done);
     ctx.load_local(&attached, Some(span))
+}
+
+/// True when a value of this PHP type can be `false` at run time.
+fn may_hold_false(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Bool | PhpType::False | PhpType::Mixed | PhpType::TaggedScalar => true,
+        PhpType::Union(members) => members.iter().any(may_hold_false),
+        _ => false,
+    }
 }
 
 /// Skips a detached promoted parent's missing-key read without changing the update result.
