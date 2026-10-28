@@ -41,10 +41,11 @@ pub(crate) fn lower_json_decode(
     if matches!(assoc_arg, AssocArg::Explicit) {
         lower_json_decode_assoc(ctx, inst)?;
     }
-    load_json_source_string(ctx, json, "json_decode source")?;
+    let source_temp = load_json_source_string(ctx, json, "json_decode source")?;
     store_json_error_source_ptr(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_json_decode_mixed");
     clear_json_diagnostic_source_refs(ctx);
+    release_json_source_temp(ctx, source_temp);
     box_null_on_json_decode_failure(ctx);
     store_if_result(ctx, inst)
 }
@@ -172,10 +173,11 @@ pub(crate) fn lower_json_validate(
     reset_json_validation_state(ctx);
     lower_json_validate_flags(ctx, inst)?;
     lower_json_validate_depth(ctx, inst)?;
-    load_json_source_string(ctx, json, "json_validate source")?;
+    let source_temp = load_json_source_string(ctx, json, "json_validate source")?;
     store_json_error_source_ptr(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_json_validate");
     clear_json_diagnostic_source_refs(ctx);
+    release_json_source_temp(ctx, source_temp);
     store_if_result(ctx, inst)
 }
 
@@ -608,35 +610,43 @@ fn lower_json_validate_depth(
 }
 
 /// Loads a JSON source string into the runtime helper's expected result registers.
+///
+/// Returns true when a temporary stack slot was reserved for a boxed source. A concrete string
+/// payload is borrowed from the live Mixed cell, avoiding the persist copy that previously
+/// leaked once per `json_decode()` call. Other boxed tags still materialize a heap string,
+/// whose pointer is saved so the caller can release it after the JSON helper returns.
 fn load_json_source_string(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     context: &str,
-) -> Result<()> {
+) -> Result<bool> {
     match ctx.value_php_type(value)? {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            ctx.load_string_value_to_regs(value, ptr_reg, len_reg)
+            ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+            Ok(false)
         }
         PhpType::Int => {
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
-            Ok(())
+            Ok(false)
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_ftoa");
-            Ok(())
+            Ok(false)
         }
-        PhpType::Bool => lower_bool_json_source(ctx, value),
+        PhpType::Bool => {
+            lower_bool_json_source(ctx, value)?;
+            Ok(false)
+        }
         PhpType::Void | PhpType::Never => {
             emit_static_string_result(ctx, b"");
-            Ok(())
+            Ok(false)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            Ok(())
+            load_boxed_json_source_string(ctx, value)?;
+            Ok(true)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
@@ -644,6 +654,72 @@ fn load_json_source_string(
             other
         ))),
     }
+}
+
+/// Loads a boxed JSON source, borrowing string payloads and saving any materialized copy.
+fn load_boxed_json_source_string(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    // The low slot holds a heap pointer only when the boxed source had to be stringified.
+    abi::emit_load_int_immediate(ctx.emitter, abi::symbol_scratch_reg(ctx.emitter), 0);
+    abi::emit_store_to_sp(ctx.emitter, abi::symbol_scratch_reg(ctx.emitter), 0);
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let borrowed = ctx.next_label("json_source_string_borrowed");
+    let done = ctx.next_label("json_source_string_ready");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // is the boxed payload already a string?
+            ctx.emitter.instruction(&format!("b.eq {borrowed}"));               // borrow its live heap bytes without copying
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            ctx.emitter.instruction("str x1, [sp]");                            // save the persisted copy for the caller to release
+            ctx.emitter.instruction(&format!("b {done}"));                      // join the borrowed and persisted source paths
+            ctx.emitter.label(&borrowed);
+            // x1/x2 already hold the borrowed pointer and length.
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // is the boxed payload already a string?
+            ctx.emitter.instruction(&format!("je {borrowed}"));                 // borrow its live heap bytes without copying
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the persisted copy for the caller to release
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join the borrowed and persisted source paths
+            ctx.emitter.label(&borrowed);
+            ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed pointer into the string result register
+            // rdx already holds the borrowed length.
+            ctx.emitter.label(&done);
+        }
+    }
+    Ok(())
+}
+
+/// Releases the stringified source copy saved by `load_json_source_string`, preserving the result.
+fn release_json_source_temp(ctx: &mut FunctionContext<'_>, reserved: bool) {
+    if !reserved {
+        return;
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    let skip = ctx.next_label("json_source_no_temp");
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", result, skip));      // a borrowed string has no persisted copy
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result, result));   // a borrowed string has no persisted copy
+            ctx.emitter.instruction(&format!("jz {}", skip));                   // skip the free when the source was borrowed
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    ctx.emitter.label(&skip);
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
 
 /// Coerces a dynamic boolean JSON source to PHP's string form.

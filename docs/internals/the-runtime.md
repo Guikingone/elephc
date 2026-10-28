@@ -1186,6 +1186,13 @@ validation enters `__rt_json_decode` for unescaping, avoiding another trim and
 legacy-decoder call for every scalar or nested container. Both architecture
 emitters preserve the same numeric overflow, error and ownership boundaries.
 
+`json_decode()` and `json_validate()` accept a boxed source as well as a concrete
+string. A string payload is borrowed directly from the live `Mixed` cell, so the
+common `$json = json_encode(...)` source no longer persists (and leaked) a copy per
+call. Other boxed tags still materialize a string; the backend saves that pointer and
+releases it once the JSON helper returns. The borrowed payload stays valid because the
+call operand owns the source cell for the duration of the helper.
+
 | Structural helper | What it does |
 |---|---|
 | `__rt_json_decode_mixed_value` | Decode one recursive token while keeping the public call's error and ownership boundary outside the recursive walk |

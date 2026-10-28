@@ -16,6 +16,8 @@ mod compatibility_constants;
 mod constants;
 #[path = "json/encode_length_sink.rs"]
 mod encode_length_sink;
+#[path = "json/decode_ownership.rs"]
+mod decode_ownership;
 #[path = "json/last_error.rs"]
 mod last_error;
 #[path = "json/last_error_msg.rs"]
