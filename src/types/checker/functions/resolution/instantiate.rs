@@ -139,8 +139,8 @@ impl Checker {
             // its own included: `<T : Cmp<T>>` asks for `Cmp<Word>` once `T` is `Word`.
             // Resolving it unsubstituted asked whether `Word` implements `Cmp<T>`, a class that
             // does not exist, and rejected every F-bounded call.
-            let bound_ty = self.resolve_type_expr(&bound.substitute_type_params(&bindings), span)?;
-            let argument_ty = self.resolve_type_expr(argument, span)?;
+            let bound_ty = self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), span)?;
+            let argument_ty = self.resolve_generic_bound_argument(argument, span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
                 return Err(CompileError::new(
                     span,
@@ -232,17 +232,17 @@ impl Checker {
             .map(|declared| {
                 declared
                     .as_ref()
-                    .map(|ty| ty.substitute_type_params(&bindings))
+                    .map(|ty| generics::substitute_value_type(ty, &bindings))
             })
             .collect();
         instantiated_decl.return_type = decl
             .return_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(&bindings));
+            .map(|ty| generics::substitute_value_type(ty, &bindings));
         instantiated_decl.variadic_type = decl
             .variadic_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(&bindings));
+            .map(|ty| generics::substitute_value_type(ty, &bindings));
         self.fn_decls
             .insert(instantiated.clone(), instantiated_decl);
         Ok(instantiated)

@@ -19,6 +19,7 @@ mod packed_nested_fields;
 mod packed_field_narrowing;
 mod data_widths;
 mod generics;
+mod generic_native_storage;
 mod generics_review;
 mod generics_constructors;
 mod generics_named_spreads;
