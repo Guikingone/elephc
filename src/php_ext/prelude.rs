@@ -188,18 +188,35 @@ pub(crate) fn is_wrapper_plumbing_method(
     method: &str,
 ) -> bool {
     let key = crate::names::php_symbol_key(method);
+    let hosted = |name: &str| {
+        classes.get(name).is_some_and(|info| info.interfaces.iter().any(|i| i.trim_start_matches('\\') == OBJECT_INTERFACE))
+    };
+    // Other preludes' `__elephc…` methods (PDO, bcmath) are reached by name at run time, so
+    // only a hosted wrapper's are hidden here.
     if key.starts_with("__elephc") {
-        return true;
+        return info.interfaces.iter().any(|i| i.trim_start_matches('\\') == OBJECT_INTERFACE);
     }
     if !matches!(key.as_str(), "__get" | "__set" | "__isset" | "__unset" | "__clone") {
         return false;
     }
-    let hosted = |name: &str| {
-        classes.get(name).is_some_and(|info| info.interfaces.iter().any(|i| i.trim_start_matches('\\') == OBJECT_INTERFACE))
-    };
     info.method_impl_classes.get(&key).is_some_and(|owner| {
         hosted(owner) && classes.get(owner).and_then(|owner| owner.parent.as_deref()).is_none_or(|parent| !hosted(parent))
     })
+}
+
+/// Whether a function, class or method name belongs to the extension host's plumbing, which
+/// PHP code can never reach by name (`$f()`, `new $k`, `[$o, $m]()`, `instanceof $k`): its
+/// classes and interfaces, its prelude functions and engine entry points, and the methods every
+/// wrapper declares. Other preludes' `__elephc…` symbols stay reachable, since their own code
+/// names them at run time (`stream_wrapper_register(…, self::class)` in PDO).
+pub(crate) fn is_host_internal_symbol(name: &str) -> bool {
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    ["__elephcphpext", "__elephc_php_ext_", "elephc_php_ext_", "__elephc_zval_"]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+        || [OBJECT_METHOD, ADOPT_METHOD, WRAP_METHOD, DEBUG_INFO_METHOD, CLONE_METHOD, OBJECT_VARS_METHOD, OBJECT_CAST_METHOD]
+            .iter()
+            .any(|method| crate::names::php_symbol_key(method) == key)
 }
 
 /// Whether a property or class-like name is compiler-internal (`__elephc…`), which PHP code
@@ -227,7 +244,11 @@ pub(crate) const CLASS_VARS_FUNCTION: &str = "__elephc_php_ext_class_vars";
 /// The protected wrapper property repeating its table slot. `clone` copies it
 /// (the table is keyed by object id, which a clone does not share), so
 /// `__clone` knows which engine object to clone.
-pub(crate) const HANDLE_PROPERTY: &str = "__elephcHandle";
+///
+/// The `.` keeps it, and `OWNER_PROPERTY`, out of reach of the program's subclasses: no PHP
+/// identifier contains one, so `$this->__elephcOwner` names an ordinary undeclared property, and
+/// the runtime-name ladders (`$this->$name`) leave both out (`is_host_plumbing_property`).
+pub(crate) const HANDLE_PROPERTY: &str = "__elephc.handle";
 /// The hidden final class owning one engine object for its wrapper (see `owner_class`). Its
 /// instances take no PHP object handle, so `spl_object_id()` and `var_dump()`'s `#N` count
 /// only the objects PHP itself would have created.
@@ -239,8 +260,16 @@ pub(crate) const MAGIC_SCOPE_CELL: &str = "elephc_php_ext_magic_scope";
 /// The `__elephc_php_ext_property` op of a write the hosted class makes itself, in the engine
 /// object's own scope (`elephc_php_ext_property_invoke`'s 6).
 const PROPERTY_SEED_OP: i64 = 6;
-/// The protected wrapper property holding its `OWNER_CLASS` instance.
-pub(crate) const OWNER_PROPERTY: &str = "__elephcOwner";
+/// The protected wrapper property holding its `OWNER_CLASS` instance. Clearing it would release
+/// the engine object under a live wrapper, hence the spelling no program can write (see
+/// `HANDLE_PROPERTY`).
+pub(crate) const OWNER_PROPERTY: &str = "__elephc.owner";
+
+/// Whether a declared property is one of a hosted wrapper's bookkeeping slots, which a property
+/// access by run-time name never resolves to.
+pub(crate) fn is_host_plumbing_property(name: &str) -> bool {
+    name == HANDLE_PROPERTY || name == OWNER_PROPERTY
+}
 
 thread_local! {
     /// The next wrapper call site number: each site caches what its first call

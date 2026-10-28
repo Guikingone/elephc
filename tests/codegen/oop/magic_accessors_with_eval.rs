@@ -57,3 +57,18 @@ var_dump($m->b);
     assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "set b\nget b\nint(2)\nbool(true)\nbool(false)\nget b\nint(2)\n");
 }
+
+/// An eval class's `__get` and `__isset` run at most once per object and property at a time, as
+/// php's guards do: the same access inside the hook reaches the property itself instead of
+/// recursing until the stack runs out.
+#[test]
+fn magic_accessors_with_eval_hooks_do_not_recurse() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class M { public function __get($n) { echo "get $n\n"; return isset($this->$n) ? "set" : "unset"; } public function __isset($n) { echo "isset $n\n"; return isset($this->$n); } }');
+eval('$m = new M; var_dump($m->x); var_dump(isset($m->y));');
+"#,
+    );
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "get x\nisset x\nstring(5) \"unset\"\nisset y\nbool(false)\n");
+}

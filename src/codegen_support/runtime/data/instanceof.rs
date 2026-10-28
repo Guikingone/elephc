@@ -22,9 +22,9 @@ pub(super) fn emit_instanceof_target_lookup_data(
     sorted_interfaces: &[(&String, &InterfaceInfo)],
     sorted_classes: &[(&String, &ClassInfo)],
 ) {
-    // A compiler-internal class or interface (`__Elephc…`) has no name PHP code can reach:
-    // `new $name`, `$x instanceof $name` and the other string lookups never find it.
-    let visible = |name: &str| !name.to_ascii_lowercase().starts_with("__elephc");
+    // The extension host's classes and interfaces have no name PHP code can reach: `new $name`,
+    // `$x instanceof $name` and the other string lookups never find them.
+    let visible = |name: &str| !crate::php_ext::prelude::is_host_internal_symbol(name);
     let lookup_classes = sorted_classes.iter().filter(|(name, _)| visible(name)).collect::<Vec<_>>();
     let lookup_interfaces = sorted_interfaces.iter().filter(|(name, _)| visible(name)).collect::<Vec<_>>();
     let entry_count = (lookup_classes.len() + lookup_interfaces.len()) * 2;

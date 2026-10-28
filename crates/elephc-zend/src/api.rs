@@ -1105,7 +1105,10 @@ pub unsafe fn destroy_regular_resources() {
             doomed.push((*p).val.value.res);
         }
     }
-    hash::zend_hash_clean(list);
+    // The list itself is request memory, as `init_executor` creates it for each request: its
+    // storage goes now, not with the request sweep while the list still points at it.
+    hash::zend_hash_destroy(list);
+    hash::init(list, 8, None, false);
     for res in doomed {
         free(res.cast());
     }

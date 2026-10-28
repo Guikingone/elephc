@@ -1012,6 +1012,10 @@ pub(super) fn eval_magic_property_get(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let identity = values.object_identity(object)?;
+    let Some(_guard) = EvalPropertyHookGuard::enter("__get", identity, property_name) else {
+        return Ok(None);
+    };
     let property = values.string(property_name)?;
     eval_dynamic_method_with_values(
         &declaring_class,
@@ -1080,6 +1084,10 @@ pub(super) fn eval_magic_property_isset(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let identity = values.object_identity(object)?;
+    let Some(_guard) = EvalPropertyHookGuard::enter("__isset", identity, property_name) else {
+        return Ok(None);
+    };
     let property = values.string(property_name)?;
     let result = eval_dynamic_method_with_values(
         &declaring_class,
@@ -1104,7 +1112,7 @@ pub(super) fn eval_magic_property_unset(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let identity = values.object_identity(object)?;
-    let Some(_guard) = EvalPropertyUnsetGuard::enter(identity, property_name) else {
+    let Some(_guard) = EvalPropertyHookGuard::enter("__unset", identity, property_name) else {
         return Ok(false);
     };
     eval_magic_property_unset_inner(object, object_class_name, property_name, context, values)

@@ -272,19 +272,20 @@ but cannot be called yet: it throws an `Error` saying why.
   `php_sapi_name()` answers. Resources still open when a request ends are
   closed then, and persistent resources at program exit, as in PHP.
 - **A request ends in PHP's order**, at a program's exit and between two
-  requests of a `--web` worker: RSHUTDOWN, then the request's extension
-  objects are released, then its resources close (newest first), any
-  extension object a leaked instance still holds is freed, the INI directives
-  it changed at run time go back to their configured values, the
-  post-deactivate hooks run, and the request allocations (`emalloc` and
-  friends) it did not free are freed; an `ini_set`-style change never reaches
-  the next request. Each step runs on its own, as in PHP: a fatal error in one
-  extension's RSHUTDOWN skips none of the others, nor the rest of the
-  teardown, and the program then exits with status 255.
-  Allocations an extension makes in MINIT or with `pemalloc(…, 1)` are kept,
-  and so are the strings and arrays the engine builds for it (`zend_string`,
-  `HashTable`): an extension that leaks those on every request still grows a
-  `--web` worker, where PHP would reclaim them.
+  requests of a `--web` worker: RSHUTDOWN, then its resources close (newest
+  first), then the request's extension objects are released and any extension
+  object a leaked instance still holds is freed, the INI directives it changed
+  at run time go back to their configured values, the post-deactivate hooks
+  run, and the request memory it did not free is freed: `emalloc` and friends,
+  non-persistent `zend_string`s, arrays and hash storage, and objects. An
+  `ini_set`-style change never reaches the next request. Each step runs on its
+  own, as in PHP: a fatal error in one extension's RSHUTDOWN skips none of the
+  others, nor the rest of the teardown, and the program then exits with status
+  255. Allocations an extension makes in MINIT or with `pemalloc(…, 1)` (or a
+  persistent string or table) are kept, as in PHP.
+  One difference remains: an extension object a global variable shares with
+  another, or a static property holds, is freed with the program's globals,
+  before RSHUTDOWN, where PHP frees it after the resources close.
 - **Integrations with other extensions are compiled out.** Elephc does not
   host `session`, `pcre`, streams or output buffering, so an optional
   integration guarded by `HAVE_PHP_SESSION` and the like (msgpack's and

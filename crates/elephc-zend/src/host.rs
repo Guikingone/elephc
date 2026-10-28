@@ -211,7 +211,14 @@ unsafe extern "C" fn lifecycle_trampoline(phase: *mut c_void, step: *mut c_void)
             // `shutdown_executor`: every resource the request left open is closed, then the
             // objects no wrapper released are freed.
             DEACTIVATE_CLOSE_RESOURCES => crate::api::close_regular_resources(),
-            DEACTIVATE_FREE_OBJECTS => free_held_objects(),
+            DEACTIVATE_FREE_OBJECTS => {
+                // The request's symbol table goes with it (`init_executor` makes a new one), before
+                // the request sweep would free its storage under it.
+                let symbols = &mut eg().symbol_table as *mut HashTable;
+                hash::zend_hash_destroy(symbols);
+                hash::init(symbols, 8, Some(zval_ptr_dtor), false);
+                free_held_objects()
+            }
             // `zend_deactivate`: the INI directives the request changed go back to their
             // configured values, then the closed resources go.
             DEACTIVATE_RESTORE_INI => crate::ini::zend_ini_deactivate(),
@@ -276,12 +283,19 @@ unsafe fn run_step(phase: usize, step: *mut c_void) {
 /// Request shutdown: RSHUTDOWN for every module in the request, in reverse start order, each in its
 /// own bailout frame as php-src's `zend_deactivate_modules` runs them. The modules await
 /// deactivation from the start, so a fatal RSHUTDOWN never cancels it.
+///
+/// The regular resources close here too, before the caller releases the request's objects:
+/// `shutdown_executor` runs `zend_close_rsrc_list` before
+/// `zend_objects_store_free_object_storage`, so a resource destructor still finds the objects it
+/// refers to, and a `free_obj` handler finds its resources closed. Deactivation's own close step
+/// then finds nothing left open.
 unsafe fn shut_down_request() {
     let modules = std::mem::take(IN_REQUEST.get());
     DEACTIVATING.get().extend(modules.iter().copied());
     for &module in modules.iter().rev() {
         run_step(PHASE_REQUEST_SHUTDOWN, module.cast());
     }
+    run_step(PHASE_REQUEST_DEACTIVATE, DEACTIVATE_CLOSE_RESOURCES as *mut c_void);
 }
 
 /// Request deactivation, one bailout frame per step.
@@ -291,7 +305,8 @@ unsafe fn deactivate_request() {
     }
 }
 
-/// Ends the request that finished: request shutdown (RSHUTDOWN) for every module in it. The
+/// Ends the request that finished: request shutdown (RSHUTDOWN) for every module in it, then the
+/// request's open resources close (`shut_down_request`). The
 /// program calls it once the request's destructors have run and before it releases the request's
 /// objects; `elephc_php_ext_request_deactivate` follows once they are gone, as php-src orders
 /// `zend_deactivate_modules` before `zend_deactivate`. Does nothing before any hosted extension
@@ -307,8 +322,8 @@ pub unsafe extern "C" fn elephc_php_ext_request_shutdown() {
     (*ptr::addr_of_mut!(crate::startup::sapi_globals)).global_request_time = 0.0;
 }
 
-/// Finishes tearing down the request after the program released its objects: regular resources
-/// close, the INI directives the request changed are restored, the post-deactivate hooks run and
+/// Finishes tearing down the request after the program released its objects: the objects nobody
+/// released are freed, the INI directives the request changed are restored, the post-deactivate hooks run and
 /// the request's leftover allocations are freed, in php-src's order. Does nothing when no request
 /// is being torn down.
 /// c: hidden

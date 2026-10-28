@@ -874,15 +874,11 @@ fn runtime_callable_name_is_reachable(
     candidate_names.iter().any(|candidate| candidate == &key)
 }
 
-/// Whether a PHP callable name (`function` or `Class::method`) names a compiler-internal
-/// symbol PHP code never sees.
+/// Whether a PHP callable name (`function` or `Class::method`) names an extension-host symbol
+/// PHP code never sees (`crate::php_ext::prelude::is_host_internal_symbol`).
 pub(crate) fn is_compiler_internal_callable_name(name: &str) -> bool {
-    let name = name.trim_start_matches('\\');
-    let internal = |part: &str| {
-        let lower = part.to_ascii_lowercase();
-        lower.starts_with("__elephc") || lower.starts_with("elephc_php_ext_")
-    };
-    match name.split_once("::") {
+    let internal = crate::php_ext::prelude::is_host_internal_symbol;
+    match name.trim_start_matches('\\').split_once("::") {
         Some((class, method)) => internal(class) || internal(method),
         None => internal(name),
     }

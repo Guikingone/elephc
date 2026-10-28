@@ -1380,8 +1380,11 @@ fn a_request_is_torn_down_in_php_order_and_leaves_nothing_behind() {
         LIFECYCLE.lock().unwrap().clear();
         TEARDOWN_SEEN.lock().unwrap().clear();
         let seen = || std::mem::take(&mut *LIFECYCLE.lock().unwrap());
+        // Between the two calls the program releases the request's objects (its hosting tables):
+        // `OBJ` marks where, so the order pins resources closing before any object is freed.
         let next_request = || {
             crate::host::elephc_php_ext_request_shutdown();
+            event("OBJ");
             crate::host::elephc_php_ext_request_deactivate();
             crate::host::elephc_php_ext_request_startup();
         };
@@ -1390,8 +1393,9 @@ fn a_request_is_torn_down_in_php_order_and_leaves_nothing_behind() {
         assert_eq!(seen(), ["MINIT", "RINIT"]);
 
         // A runtime override lasts the request: RSHUTDOWN still sees 9, the next RINIT sees 1.
-        let name = crate::string::new(b"teardown.level");
-        let nine = crate::string::new(b"9");
+        // Persistent: these outlive the request they are made in, which sweeps request strings.
+        let name = crate::string::zend_string_init(c"teardown.level".as_ptr(), 14, true);
+        let nine = crate::string::zend_string_init(c"9".as_ptr(), 1, true);
         assert_eq!(crate::ini::zend_alter_ini_entry(name, nine, ZEND_INI_USER, ZEND_INI_STAGE_RUNTIME), SUCCESS);
         let persistent = crate::alloc::__zend_malloc(64);
         let freed = crate::alloc::emalloc(32);
@@ -1399,24 +1403,33 @@ fn a_request_is_torn_down_in_php_order_and_leaves_nothing_behind() {
         let moved = crate::alloc::erealloc(crate::alloc::emalloc(16), 4096);
         crate::alloc::efree(moved);
         next_request();
-        assert_eq!(seen(), ["RSHUTDOWN", "RSRC", "INI", "POST", "RINIT"], "php_request_shutdown order");
+        assert_eq!(seen(), ["RSHUTDOWN", "RSRC", "OBJ", "INI", "POST", "RINIT"], "php_request_shutdown order");
         assert_eq!(*TEARDOWN_SEEN.lock().unwrap(), [1, 9, 1], "RINIT 1, RSHUTDOWN 9, next RINIT 1");
         assert_eq!(teardown_level(), 1);
 
         let baseline = crate::alloc::elephc_zend_live_blocks();
         for _ in 0..100 {
+            // A request block grown through the persistent `perealloc` backend moves: the sweep
+            // must free it at its new address, never the old one.
+            crate::alloc::__zend_realloc(crate::alloc::emalloc(16), 8192);
+            // A request string and a request array (header and bucket storage) nobody releases
+            // go with the request too, as php-src's memory manager frees them.
+            crate::string::zend_string_alloc(32, false);
+            let leaked = crate::hash::_zend_new_array(0);
+            crate::hash::zend_hash_next_index_insert(leaked, &mut std::mem::zeroed());
             next_request();
         }
         assert_eq!(crate::alloc::elephc_zend_live_blocks(), baseline, "each request's leftovers go with it");
         *persistent.cast::<u8>() = 1;
         crate::alloc::free(persistent);
 
-        // Each further request: RSHUTDOWN, its resource, post-deactivate, the next RINIT (no INI
-        // phase: nothing was changed). The program's exit then ends the last request the same way.
+        // Each further request: RSHUTDOWN, its resource, its objects, post-deactivate, the next
+        // RINIT (no INI phase: nothing was changed). The program's exit then ends the last request
+        // the same way.
         crate::host::elephc_php_ext_exit_hook();
         let events = seen();
-        assert_eq!(events.len(), 100 * 4 + 3, "{events:?}");
-        assert_eq!(&events[..4], ["RSHUTDOWN", "RSRC", "POST", "RINIT"]);
+        assert_eq!(events.len(), 100 * 5 + 3, "{events:?}");
+        assert_eq!(&events[..5], ["RSHUTDOWN", "RSRC", "OBJ", "POST", "RINIT"]);
         assert_eq!(&events[events.len() - 3..], ["RSHUTDOWN", "RSRC", "POST"]);
         crate::string::zend_string_release(name);
         crate::string::zend_string_release(nine);

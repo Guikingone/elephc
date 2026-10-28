@@ -2957,10 +2957,11 @@ fn emit_classes_by_name_table(
             escaped_ascii(class_name)
         ));
     }
-    // A compiler-internal class (`__Elephc…`) has no name PHP code can construct it by.
+    // The extension host's classes have no name PHP code can construct them by. Other
+    // preludes' `__Elephc…` classes stay: PDO registers its BLOB stream wrapper by class name.
     let by_name = sorted_classes
         .iter()
-        .filter(|(class_name, _)| !class_name.to_ascii_lowercase().starts_with("__elephc"))
+        .filter(|(class_name, _)| !crate::php_ext::prelude::is_host_internal_symbol(class_name))
         .collect::<Vec<_>>();
     out.push_str(".p2align 3\n");
     out.push_str(".globl _classes_by_name_count\n_classes_by_name_count:\n");

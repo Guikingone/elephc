@@ -52,6 +52,17 @@ fn record(ptr: *mut c_void) -> *mut c_void {
     ptr
 }
 
+/// Records a block a `pemalloc`-style allocation handed out unless it is persistent: strings,
+/// arrays, hash storage and objects come from php-src's request allocator unless their persistent
+/// flag says otherwise, so the request's end frees the ones an extension leaks.
+pub fn record_unless_persistent(ptr: *mut c_void, persistent: bool) -> *mut c_void {
+    if persistent {
+        ptr
+    } else {
+        record(ptr)
+    }
+}
+
 /// Forgets a block that is being released or moved; true when it was a recorded request block.
 fn forget(ptr: *mut c_void) -> bool {
     let blocks = unsafe { REQUEST_BLOCKS.get() };
@@ -283,7 +294,8 @@ pub unsafe extern "C" fn __zend_realloc(p: *mut c_void, len: usize) -> *mut c_vo
 pub unsafe extern "C" fn zend_object_alloc(obj_size: usize, ce: *mut crate::abi::zend_class_entry) -> *mut c_void {
     let slots = crate::object::properties_size(ce);
     let total = (obj_size as isize + slots).max(obj_size as isize) as usize;
-    let obj = alloc(total);
+    // php-src's `emalloc`: an object nobody freed goes with its request.
+    let obj = record(alloc(total));
     let head = obj_size.saturating_sub(std::mem::size_of::<crate::abi::zend_object>());
     std::ptr::write_bytes(obj.cast::<u8>(), 0, head);
     obj

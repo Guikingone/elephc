@@ -761,9 +761,10 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     let (static_properties, hosting_tables) =
         super::runtime_metadata::static_properties_hosting_last(ctx.module);
     emit_main_static_property_cleanup(ctx, static_properties);
-    // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
-    // hosting tables release the engine objects (`free_obj` may still use module state), then the
-    // request deactivates (resources, INI restore, post-deactivate, request heap), and the exit
+    // Hosted extensions end the request (RSHUTDOWN, then the open resources close) after the
+    // program's destructors, then their hosting tables release the engine objects (`free_obj` may
+    // still use module state), then the request deactivates (INI restore, post-deactivate,
+    // request heap), and the exit
     // sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object store
     // before `zend_post_deactivate_modules` and both before `php_module_shutdown`. The hook's own
     // request phases then find no request left.

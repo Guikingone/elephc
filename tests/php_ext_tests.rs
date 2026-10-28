@@ -146,14 +146,29 @@ fn strict_code_assigns_hosted_typed_properties_strictly() {
 /// callable, a method by name, `new` of a class name) gets what PHP gives for a missing one.
 #[test]
 fn host_internals_are_not_reachable_by_name() {
+    // One program, one case per run (`argv[1]`): a hosted build is slow enough that a compile per
+    // case brought the test to the suite's per-test limit.
     let dir = project("internals");
     let run = compile_and_run(
         &dir,
         "<?php
+$case = $argv[1] ?? '';
 $c = new DemoCounter(3);
-$n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
-var_dump(is_callable($n));
-var_dump($c->value());
+if ($case === '') {
+    $n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
+    var_dump(is_callable($n));
+    var_dump($c->value());
+} elseif ($case === 'function') {
+    $n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
+    $n(1);
+    echo 'reached';
+} elseif ($case === 'method') {
+    $m = $argc > 5 ? 'x' : '__elephcObject';
+    var_dump($c->$m());
+} else {
+    $k = $argc > 5 ? 'x' : '__ElephcPhpExtOwner';
+    var_dump(new $k);
+}
 ",
     );
     assert_success(&run, "compiled program");
@@ -162,30 +177,15 @@ int(3)
 ");
     // Elephc ends the program on these misses where PHP throws a catchable Error; what matters
     // here is that none of them reaches the internal symbol.
-    let main = dir.join("main.php");
-    for (source, refused) in [
-        ("<?php
-$n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
-$n(1);
-echo 'reached';
-", "undefined function"),
-        ("<?php
-$c = new DemoCounter(3);
-$m = $argc > 5 ? 'x' : '__elephcObject';
-var_dump($c->$m());
-", "callable array"),
-        ("<?php
-$k = $argc > 5 ? 'x' : '__ElephcPhpExtOwner';
-var_dump(new $k);
-", "Class \"__ElephcPhpExtOwner\" not found"),
+    for (case, refused) in [
+        ("function", "undefined function"),
+        ("method", "callable array"),
+        ("class", "Class \"__ElephcPhpExtOwner\" not found"),
     ] {
-        fs::write(&main, source).unwrap();
-        let compile = Command::new(elephc()).current_dir(&dir).arg(&main).output().expect("run elephc");
-        assert_success(&compile, "compile");
-        let run = Command::new(dir.join("main")).current_dir(&dir).output().expect("run the compiled program");
+        let run = Command::new(dir.join("main")).arg(case).current_dir(&dir).output().expect("run the compiled program");
         let all = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
-        assert!(!run.status.success() && !all.contains("reached") && !all.contains("int(") && !all.contains("object("), "{all}");
-        assert!(all.contains(refused), "{all}");
+        assert!(!run.status.success() && !all.contains("reached") && !all.contains("int(") && !all.contains("object("), "{case}: {all}");
+        assert!(all.contains(refused), "{case}: {all}");
     }
     fs::remove_dir_all(dir).unwrap();
 }
@@ -1013,6 +1013,75 @@ fn the_extension_is_shut_down_when_the_program_ends() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// An engine object still alive when the request ends (held in a cycle) is freed after the
+/// request's resources close, as php-src's `shutdown_executor` runs `zend_close_rsrc_list` before
+/// freeing the object store: a resource destructor still finds the objects it refers to.
+#[test]
+fn live_engine_objects_are_freed_after_resources_close() {
+    let dir = project("teardown-order");
+    let source = "<?php\n$cycle = new stdClass;\n$cycle->self = $cycle;\n$cycle->counter = new DemoCounter(9);\ndemo_open_handle('h');\necho \"end\\n\";\n";
+    let (traced, status, stdout) = run_traced(&dir, source);
+    assert_eq!((status, stdout.as_str()), (Some(0), "end\n"));
+    assert_eq!(
+        traced,
+        ["RINIT", "RSHUTDOWN Hello", "CLOSE h alive=1", "FREE counter 9", "POST_DEACTIVATE Hello", "MSHUTDOWN"]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// An engine error thrown from a guarded property write inside a method is caught by the caller:
+/// on linux-x86_64 the rethrow reached the unwinder by `jmp`, and the destructors it ran called
+/// into the engine on a misaligned stack (a segfault with no output).
+#[test]
+fn a_readonly_write_inside_a_method_throws_a_catchable_error() {
+    let dir = project("readonly-in-method");
+    let run = compile_and_run(
+        &dir,
+        "<?php
+class Kid extends DemoRecord {
+    public function bad(): void { $this->number = 9; }
+}
+try { (new Kid(3))->bad(); } catch (Throwable $e) { echo $e->getMessage(), \"\\n\"; }
+echo \"done\\n\";
+",
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "Cannot modify readonly property DemoRecord::$number\ndone\n");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A program subclass cannot reach the wrapper's bookkeeping: `$this->__elephcOwner`, by literal
+/// or run-time name, is an ordinary dynamic property on the object (PHP's deprecation included),
+/// and clearing it leaves the engine object alive.
+#[test]
+fn subclasses_cannot_reach_the_wrapper_bookkeeping() {
+    let dir = project("bookkeeping");
+    let run = compile_and_run(
+        &dir,
+        "<?php
+class C extends DemoCounter {
+    public function clearLiteral(): void { $this->__elephcOwner = null; }
+    public function clearDynamic(string $n): void { $this->$n = null; }
+    public function readDynamic(string $n): mixed { return $this->$n ?? 'unset'; }
+}
+$c = new C(4);
+$c->clearLiteral();
+echo $c->value(), \"\\n\";
+$d = new C(5);
+$d->clearDynamic('__elephc' . 'Owner');
+echo $d->value(), \"\\n\";
+var_dump($d->readDynamic('__elephc' . 'Handle') === 'unset');
+",
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n5\nbool(true)\n");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr).matches("Creation of dynamic property C::$__elephcOwner is deprecated").count(),
+        2
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// A request's resources close after RSHUTDOWN and before post-deactivation, newest first, while
 /// the request state their destructor reads is still there (#2104), and a fatal error in
 /// RSHUTDOWN cancels none of the deactivation: resources still close, the INI change is still
@@ -1174,11 +1243,12 @@ fn web_requests_free_their_resources_and_leaked_objects() {
     let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
     fs::remove_dir_all(dir).unwrap();
     assert_eq!(bodies, ["persistent banner 0", "persistent banner 1", "persistent banner 2"], "{output}");
+    // The counter the leaked cycle holds is freed after the request's resource closes.
     assert_eq!(
-        &traced[..9],
+        &traced[..11],
         [
-            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "POST_DEACTIVATE Hello",
-            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "POST_DEACTIVATE Hello", "RINIT",
+            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "FREE counter 1", "POST_DEACTIVATE Hello",
+            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "FREE counter 1", "POST_DEACTIVATE Hello", "RINIT",
         ],
         "{output}"
     );
