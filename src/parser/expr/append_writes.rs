@@ -449,7 +449,11 @@ impl AppendLowerer {
         // Give the edge-key call a borrowed local; an owned nested projection must not escape
         // through its argument lifetime. Retire that local before the operation can run user code.
         let container = self.bind(base.clone());
-        let boxed_key = self.bind(self.global_call("array_key_last", vec![container.clone()]));
+        // A null, false or undefined base is an array once the push ran: the cast says so.
+        let as_array = Expr::new(ExprKind::Cast {
+            target: crate::parser::ast::CastType::Array, expr: Box::new(container.clone()),
+        }, Span::synthetic());
+        let boxed_key = self.bind(self.global_call("array_key_last", vec![as_array]));
         let index = self.bind(self.global_call("intval", vec![boxed_key.clone()]));
         self.unset_temps(vec![container, boxed_key]);
         Ok(Expr::new(ExprKind::ArrayAccess {

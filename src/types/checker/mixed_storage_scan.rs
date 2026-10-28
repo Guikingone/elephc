@@ -90,6 +90,13 @@ struct NameFacts {
     assigns: Vec<AssignSite>,
     /// Set by any write or aliasing shape that is not a plain statement-form assignment.
     disqualified: bool,
+    /// Set when an element write (`$a[] = …`, `$a[k] = …`, `$a[k][j] = …`) is rooted at the name.
+    element_written: bool,
+    /// Set by a disqualification other than an element write or an inexactly typed assignment:
+    /// a reference, `global`, `static`, a `foreach` binding, a compound self-read and the like.
+    unsafe_to_box: bool,
+    /// Set when an assignment's value has no exact syntactic type, so its store is not recorded.
+    inexact_assign: bool,
 }
 
 /// Everything one scan of one body collects.
@@ -218,6 +225,10 @@ impl Checker {
         // name ordering the evidence map imposes. The flag is "say it out loud".
         let mut marks: Vec<(Span, String, String, bool)> = Vec::new();
         for (name, name_facts) in &facts.names {
+            if self.scalar_seeded_element_write(name, name_facts) {
+                marks.push((name_facts.assigns[0].span, name.clone(), String::new(), false));
+                continue;
+            }
             // Eligibility first, so the transparency vector below — O(regions x sites) — is only
             // built for names that can still be marked.
             if !self.name_is_markable(name, name_facts) {
@@ -342,6 +353,28 @@ impl Checker {
         if facts.disqualified || facts.assigns.len() < 2 {
             return false;
         }
+        self.storage_is_markable(name, facts)
+    }
+
+    /// Returns whether `name` is a local the body assigns `null` or `false` and also writes
+    /// elements of: php turns that value into an array on the write, which `null`/`bool`
+    /// storage cannot hold, so the local takes boxed storage and the run-time writer converts
+    /// it. Every store must be a recorded literal assignment, and no reference, `global`,
+    /// `static` or `foreach` binding may reach the name.
+    fn scalar_seeded_element_write(&self, name: &str, facts: &NameFacts) -> bool {
+        facts.element_written
+            && !facts.unsafe_to_box
+            && !facts.inexact_assign
+            && facts
+                .assigns
+                .iter()
+                .any(|site| matches!(site.ty, PhpType::Void | PhpType::Bool | PhpType::False))
+            && self.storage_is_markable(name, facts)
+    }
+
+    /// The safety half of [`Self::name_is_markable`], shared with
+    /// [`Self::scalar_seeded_element_write`].
+    fn storage_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
         // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
         // slot, and for a `use (&$m)` capture that slot IS the caller's storage, so the boxed
         // pointer would be written straight through the alias into the enclosing frame. Measured
@@ -602,6 +635,7 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
     // programs the checker rejects without it.
     if !has_exact_syntactic_type(value) {
         entry.disqualified = true;
+        entry.inexact_assign = true;
         return;
     }
     let site = entry.assigns.len();
@@ -620,7 +654,29 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
 
 /// Marks `name` as never eligible for mixed storage in this body.
 fn disqualify(facts: &mut Facts, name: &str) {
-    facts.names.entry(name.to_string()).or_default().disqualified = true;
+    let entry = facts.names.entry(name.to_string()).or_default();
+    entry.disqualified = true;
+    entry.unsafe_to_box = true;
+}
+
+/// Records an element write rooted at `name`: it disqualifies the ordinary marking, but leaves
+/// the name eligible for [`Checker::scalar_seeded_element_write`].
+fn record_element_write(facts: &mut Facts, name: &str) {
+    let entry = facts.names.entry(name.to_string()).or_default();
+    entry.disqualified = true;
+    entry.element_written = true;
+}
+
+/// Returns the variable at the root of an element-access chain (`$a[1][2]` → `a`).
+fn element_root(expr: &Expr) -> Option<&str> {
+    let mut current = expr;
+    loop {
+        match &current.kind {
+            ExprKind::Variable(name) => return Some(name),
+            ExprKind::ArrayAccess { array, .. } => current = array,
+            _ => return None,
+        }
+    }
 }
 
 /// Disqualifies the local at the root of an lvalue/reference access chain.
@@ -849,16 +905,19 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
             collect_expr(checker, source, depth, facts);
         }
         StmtKind::ArrayAssign { array, index, value } => {
-            disqualify(facts, array);
+            record_element_write(facts, array);
             collect_expr(checker, index, depth, facts);
             collect_expr(checker, value, depth, facts);
         }
         StmtKind::ArrayPush { array, value } => {
-            disqualify(facts, array);
+            record_element_write(facts, array);
             collect_expr(checker, value, depth, facts);
         }
         StmtKind::NestedArrayAssign { target, value } => {
-            disqualify_root(facts, target);
+            match element_root(target) {
+                Some(root) => record_element_write(facts, root),
+                None => disqualify_root(facts, target),
+            }
             collect_expr(checker, target, depth, facts);
             collect_expr(checker, value, depth, facts);
         }

@@ -87,12 +87,17 @@ pub(in crate::parser::stmt) fn parse_reference_store(
         let base = &target[..target.len() - 2];
         rebind.extend_from_slice(base);
         // A push always lands on an integer key: `intval` states it for the element reference.
+        // The base was null, false or undefined before the push and is an array after it; the
+        // `(array)` cast tells the checker so.
         rebind.extend([
             token(Token::LBracket),
             token(Token::Identifier("intval".to_string())),
             token(Token::LParen),
             token(Token::Identifier("array_key_last".to_string())),
             token(Token::LParen),
+            token(Token::LParen),
+            token(Token::Identifier("array".to_string())),
+            token(Token::RParen),
         ]);
         rebind.extend_from_slice(base);
         rebind.extend([token(Token::RParen), token(Token::RParen), token(Token::RBracket)]);

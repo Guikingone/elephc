@@ -265,3 +265,40 @@ a(); b(); c(7); d(); e();
     );
     assert!(!run.stderr.contains("Undefined variable"), "{}", run.stderr);
 }
+
+/// php turns a `null` or `false` variable into an array on its first element write (`false`
+/// with a deprecation): a literal-seeded local, an untyped parameter called with either, and a
+/// nested write whose integer key skips past the end (hash storage, never null-filled). `true`
+/// stays an `Error` (output measured with php 8.5).
+#[test]
+fn test_element_write_converts_null_and_false() {
+    let run = compile_and_run_with_heap_debug(r#"<?php
+function collect(array $items) {
+    $r = null;
+    foreach ($items as $v) { $r[] = "v" . $v; }
+    return $r;
+}
+echo json_encode(collect([1, 2])), json_encode(collect([])), "\n";
+function nested($k) { $t = false; $t[$k][] = "x"; $t[$k][] = "y"; return $t; }
+echo json_encode(nested(5)), "\n";
+function param($a) { $a[7] = "s"; $a[] = "t"; return $a; }
+echo json_encode(param(false)), json_encode(param(null)), "\n";
+function gap(mixed $a) { $a[3][] = 1; return $a; }
+echo json_encode(gap([])), "\n";
+function truthy() { $x = true; try { $x[] = 1; } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+truthy();
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout,
+        "[\"v1\",\"v2\"]null\n{\"5\":[\"x\",\"y\"]}\n{\"7\":\"s\",\"8\":\"t\"}{\"7\":\"s\",\"8\":\"t\"}\n\
+         {\"3\":[1]}\nCannot use a scalar value as an array\n"
+    );
+    assert_eq!(
+        run.stdout_raw.matches("Deprecated: Automatic conversion of false to array is deprecated").count(),
+        2,
+        "{}",
+        run.stdout_raw
+    );
+    assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
+}

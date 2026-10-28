@@ -208,7 +208,21 @@ impl Checker {
         let mut seen_idx = 0usize;
 
         for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            let mut actual_ty = self.infer_type(arg, caller_env)?;
+            // php turns a null or false parameter into an array on its first element write; a
+            // body specialized to `null`/`bool` storage cannot hold that array, so such a
+            // parameter takes boxed storage and the run-time write path converts it.
+            if seen_idx < regular_param_count
+                && matches!(actual_ty, PhpType::Void | PhpType::Bool | PhpType::False)
+                && !stored_sig.declared_params.get(seen_idx).copied().unwrap_or(false)
+                && param_types.get(seen_idx).is_some_and(|(param, _)| {
+                    self.fn_decls.get(name).is_some_and(|decl| {
+                        crate::undefined_reads::writes_elements_of(&decl.body, param)
+                    })
+                })
+            {
+                actual_ty = PhpType::Mixed;
+            }
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }

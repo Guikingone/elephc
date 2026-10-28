@@ -65,6 +65,8 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         load_array_local_for_write(ctx, array, span)
     };
     let array_ty = ctx.builder.value_php_type(array_value.value);
+    // php turns a false local into an array, with its deprecation, before the append.
+    super::static_false_parent::normalize_for_update(ctx, array_value, span);
     let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,

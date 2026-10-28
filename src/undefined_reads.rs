@@ -1014,6 +1014,26 @@ fn vivify_children(stmt: &mut Stmt, seen: &mut HashSet<String>) -> Vec<String> {
     }
 }
 
+/// Returns whether some statement of `stmts` (nested blocks included, nested functions not)
+/// writes an element of the variable `name`.
+pub(crate) fn writes_elements_of(stmts: &[Stmt], name: &str) -> bool {
+    stmts.iter().any(|stmt| {
+        if element_write_root(stmt).as_deref() == Some(name) {
+            return true;
+        }
+        // A compound element update (`$a[] += 1`) is an assignment expression whose prelude
+        // holds the element writes.
+        if let StmtKind::ExprStmt(Expr { kind: ExprKind::Assignment { prelude, .. }, .. }) = &stmt.kind {
+            if writes_elements_of(prelude, name) {
+                return true;
+            }
+        }
+        let mut found = false;
+        for_each_child_body(stmt, &mut |body| found = found || writes_elements_of(body, name));
+        found
+    })
+}
+
 /// Returns the variable a statement writes an element of, if it is that kind of statement.
 fn element_write_root(stmt: &Stmt) -> Option<String> {
     match &stmt.kind {

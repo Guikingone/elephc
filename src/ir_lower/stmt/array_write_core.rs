@@ -477,6 +477,8 @@ pub(super) fn lower_boxed_array_set(
 ) {
     let (array, receiver_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
     with_write_key_and_value(ctx, index, value, WriteValuePolicy::Borrowed, |ctx, index, value| {
+        // php turns a false boxed local into an array, with its deprecation, after the operands.
+        super::static_false_parent::normalize_for_update(ctx, array, span);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, index.value, value.value],
