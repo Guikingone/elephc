@@ -448,9 +448,10 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 // pointer than the container itself, so comparing them would read "not aliased"
                 // for a value the result does own, and release it twice. Same restriction the
                 // ABI-side cleanup slots already apply via `call_result_can_alias_mixed_temp`.
-                // A string argument the caller owns outright (claimed with `EnsureOwned`, or an
-                // acquired copy) is decided the same way when a USER function produced the
-                // result. A `Str` result compares by payload pointer, the string's whole
+                // A string argument the caller owns outright (claimed with `EnsureOwned`, an
+                // acquired copy, or a `StrPersist` of a normalized string cast) is decided the
+                // same way when a USER function produced the result. A `Str` result compares
+                // by payload pointer, the string's whole
                 // identity: a PHP function persists every builtin result it returns, so an equal
                 // pointer means the callee handed the block back and a different one means the
                 // caller still owns it. Any other result that can alias it is a boxed `Mixed`
@@ -465,7 +466,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                     let owned_string_arg = arg_repr == PhpType::Str
                         && matches!(
                             ctx.builder.value_defining_op(lowered.value),
-                            Some(Op::EnsureOwned | Op::Acquire)
+                            Some(Op::EnsureOwned | Op::Acquire | Op::StrPersist)
                         );
                     let user_call_result = matches!(
                         ctx.builder.value_defining_op(result),

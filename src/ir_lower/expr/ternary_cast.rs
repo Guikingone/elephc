@@ -152,10 +152,11 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
 /// Normalizes a string that may carry the missing-entry sentinel.
 ///
 /// The cast starts borrowed: it aliases a real string or the canonical empty
-/// string. A local load and any other owning source are copied with
-/// `StrPersist` before that source is released, so the result does not point
-/// at freed bytes. Element reads that nobody owns stay borrowed. A `string`
-/// parameter whose slot is still that parameter is elided before this copy.
+/// string. A local load is copied with `StrPersist` before its provisional
+/// release. Finalization drops that copy and the release together when the
+/// slot stays a concrete string, so a normal string is not duplicated. A slot
+/// that widened to mixed, and a `??` temporary, keep the copy because their
+/// source is actually freed. Element reads that nobody owns stay borrowed.
 fn normalize_missing_string_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,

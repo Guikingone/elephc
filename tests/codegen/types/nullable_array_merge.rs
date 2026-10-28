@@ -648,6 +648,61 @@ n
 1600
 ";
 
+/// `(string)` passed to a function or `trim` does not copy a live string each iteration.
+///
+/// `$vals` is a typed string array, so a present element is a normal string and a
+/// suppressed miss is the empty cast. PHP 8.2–8.5 prints `<ggg>ggg` then `<>`.
+/// One hundred iterations must not leave a block per call.
+#[test]
+fn test_string_cast_call_argument_is_heap_clean() {
+    assert_string_cast_call_argument();
+}
+
+/// The call-argument cast stays heap-clean when EIR optimization is off.
+#[test]
+fn test_string_cast_call_argument_is_heap_clean_no_ir_opt() {
+    without_ir_opt(assert_string_cast_call_argument);
+}
+
+/// Runs the call-argument cast fixture and checks PHP's bytes and a clean heap.
+fn assert_string_cast_call_argument() {
+    assert_merge(STRING_CAST_CALL_ARGUMENT, STRING_CAST_CALL_ARGUMENT_OUT, 0);
+}
+
+/// Fixture for `id((string)$s)` and `trim((string)$s)` over a typed string array.
+const STRING_CAST_CALL_ARGUMENT: &str = r#"<?php
+function id(string $x): string { return "<".$x.">"; }
+class Box {
+    function id(string $x): string { return "<".$x.">"; }
+}
+function show(int $key): void {
+    $vals = ["a"];
+    $box = new Box();
+    $s = str_repeat("g", 3);
+    for ($i = 0; $i < 100; $i++) {
+        if ($i < 4) {
+            echo id((string)$s);
+            echo $box->id((string)$s);
+            echo trim((string)$s), "\n";
+        } else {
+            id((string)$s);
+            $box->id((string)$s);
+            trim((string)$s);
+        }
+        $s = $i % 2 ? str_repeat("g", 3) : @$vals[$key];
+    }
+}
+show($argc + 5);
+"#;
+
+/// PHP 8.5 stdout for [`STRING_CAST_CALL_ARGUMENT`], stable across PHP 8.2–8.5.
+const STRING_CAST_CALL_ARGUMENT_OUT: &str = "\
+<ggg><ggg>ggg
+<><>
+<ggg><ggg>ggg
+<><>
+";
+
 /// A miss returned by a call or ternary and then stored casts to an empty string.
 ///
 /// PHP 8.2–8.5 prints `NULL` for the stored return itself and `string(0) ""` for `(string)` of
