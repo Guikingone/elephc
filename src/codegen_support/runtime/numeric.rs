@@ -264,3 +264,73 @@ pub fn emit_abs_int(emitter: &mut Emitter) {
     emitter.label("__rt_abs_int_done");
     emitter.instruction("ret");                                                 // return the non-negative integer unchanged
 }
+
+/// PHP's exact warning for casting a negative integer square root (NAN) to int.
+pub(crate) const SQRT_NAN_WARNING: &str =
+    "Warning: The float NAN is not representable as an int, cast occurred\n";
+
+/// Emits `__rt_sqrt_add_int`, the fused `(int)sqrt(a + b)` reducer for integer operands.
+///
+/// # Input
+/// - AArch64: `x0`/`x1` = the two integer addends; x86_64: `rdi`/`rsi`.
+///
+/// # Output
+/// - AArch64: `x0` = the truncated square root; x86_64: `rax`.
+///
+/// The integer sum follows PHP's checked-add promotion: an overflowing add is recomputed as a
+/// double sum before the square root. A negative sum yields NAN, which PHP's int cast warns
+/// about and converts to zero. Every non-negative result is at most `sqrt(2^64)`, so hardware
+/// truncation is always in range.
+pub fn emit_sqrt_add_int(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: sqrt_add_int ---");
+        emitter.label_global("__rt_sqrt_add_int");
+        emitter.instruction("mov rax, rdi");                                    // start from the left addend
+        emitter.instruction("add rax, rsi");                                    // apply PHP's checked integer addition
+        emitter.instruction("jo __rt_sqrt_add_int_overflow_x86");               // an overflowing sum promotes to a double
+        emitter.instruction("cvtsi2sd xmm0, rax");                              // convert the in-range sum to double
+        emitter.instruction("jmp __rt_sqrt_add_int_sqrt_x86");                  // share the square-root and result tail
+        emitter.label("__rt_sqrt_add_int_overflow_x86");
+        emitter.instruction("cvtsi2sd xmm0, rdi");                              // convert the left addend for the promoted sum
+        emitter.instruction("cvtsi2sd xmm1, rsi");                              // convert the right addend for the promoted sum
+        emitter.instruction("addsd xmm0, xmm1");                                // compute PHP's promoted double sum
+        emitter.label("__rt_sqrt_add_int_sqrt_x86");
+        emitter.instruction("sqrtsd xmm0, xmm0");                               // compute the hardware square root
+        emitter.instruction("ucomisd xmm0, xmm0");                              // identify the NAN produced by a negative sum
+        emitter.instruction("jp __rt_sqrt_add_int_nan_x86");                    // negative sums warn and cast to zero
+        emitter.instruction("cvttsd2si rax, xmm0");                             // truncate toward zero like PHP's cast
+        emitter.instruction("ret");                                             // return the integer square root
+        emitter.label("__rt_sqrt_add_int_nan_x86");
+        crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_diag_sqrt_nan_warning");
+        crate::codegen_support::abi::emit_load_int_immediate(emitter, "rsi", SQRT_NAN_WARNING.len() as i64);
+        crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning");
+        emitter.instruction("xor eax, eax");                                    // PHP casts NAN to zero after the warning
+        emitter.instruction("ret");                                             // return the warned zero result
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: sqrt_add_int ---");
+    emitter.label_global("__rt_sqrt_add_int");
+    emitter.instruction("adds x2, x0, x1");                                     // apply PHP's checked integer addition
+    emitter.instruction("b.vs __rt_sqrt_add_int_overflow");                     // an overflowing sum promotes to a double
+    emitter.instruction("scvtf d0, x2");                                        // convert the in-range sum to double
+    emitter.instruction("b __rt_sqrt_add_int_sqrt");                            // share the square-root and result tail
+    emitter.label("__rt_sqrt_add_int_overflow");
+    emitter.instruction("scvtf d0, x0");                                        // convert the left addend for the promoted sum
+    emitter.instruction("scvtf d1, x1");                                        // convert the right addend for the promoted sum
+    emitter.instruction("fadd d0, d0, d1");                                     // compute PHP's promoted double sum
+    emitter.label("__rt_sqrt_add_int_sqrt");
+    emitter.instruction("fsqrt d0, d0");                                        // compute the hardware square root
+    emitter.instruction("fcmp d0, d0");                                         // identify the NAN produced by a negative sum
+    emitter.instruction("b.vs __rt_sqrt_add_int_nan");                          // negative sums warn and cast to zero
+    emitter.instruction("fcvtzs x0, d0");                                       // truncate toward zero like PHP's cast
+    emitter.instruction("ret");                                                 // return the integer square root
+    emitter.label("__rt_sqrt_add_int_nan");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_diag_sqrt_nan_warning");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x2", SQRT_NAN_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning");
+    emitter.instruction("mov x0, xzr");                                         // PHP casts NAN to zero after the warning
+    emitter.instruction("ret");                                                 // return the warned zero result
+}

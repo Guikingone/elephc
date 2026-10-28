@@ -22,6 +22,7 @@ mod buffer_property_reuse_test;
 mod buffer_property_loops_test;
 mod buffer_object_loops_test;
 mod abs_int_sink_test;
+mod sqrt_add_int_sink_test;
 mod strpos_int_sink_test;
 mod array_sum_int_sink_test;
 mod checked_int_sink_test;

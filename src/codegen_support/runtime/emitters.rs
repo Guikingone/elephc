@@ -31,6 +31,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     numeric::emit_php_float_to_int(emitter);
     numeric::emit_php_float_to_int_cap(emitter);
     numeric::emit_abs_int(emitter);
+    numeric::emit_sqrt_add_int(emitter);
     round_mode::emit_round_mode(emitter);
 
     // String runtime functions

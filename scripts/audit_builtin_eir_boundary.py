@@ -54,6 +54,7 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "AbsInt",
     "Base64EncodedLen",
     "StrposInt",
+    "SqrtAddInt",
     "ArrayElementTypeCheck",
     "ArrayFilterCountMod",
     "ArrayMapSumAdd",

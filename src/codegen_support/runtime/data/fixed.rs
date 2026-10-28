@@ -919,6 +919,7 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_diag_float_key_precision_suffix", " to int loses precision\n"),
         ("_diag_float_key_range_prefix", "Warning: The float "),
         ("_diag_float_key_range_suffix", " is not representable as an int, cast occurred\n"),
+        ("_diag_sqrt_nan_warning", crate::codegen_support::runtime::numeric::SQRT_NAN_WARNING),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }

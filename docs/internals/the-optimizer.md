@@ -682,6 +682,14 @@ boxed result is observed only through one `(int)` cast, the call becomes
 promotes to the float `2^63` and terminates in PHP's warned float-to-int
 conversion. Floats and general Mixed operands keep the boxed `abs()` call.
 
+`src/ir_passes/sqrt_add_int_sink.rs` fuses `(int)sqrt($a + $b)` when both addends are
+concrete PHP ints, the boxed `ichecked_add` result is observed only by the `sqrt()`
+call, and the square root keeps the cast-only observation rule. The call becomes
+`SqrtAddInt` over the two raw addends, which reproduces PHP's checked-add overflow
+promotion, the NAN warning for a negative sum, and truncation toward zero. A float
+addend, another observer of the sum, or a non-cast observer of the root keeps the
+boxed graph.
+
 `src/ir_passes/strpos_int_sink.rs` does the same for `strpos()`. The search keeps
 its original arguments, offsets, coercion and `ValueError` behavior; only the
 result representation changes from the boxed `int|false` cell to a raw `I64`

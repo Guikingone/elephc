@@ -425,6 +425,8 @@ pub enum RuntimeFnId {
     Sin,
     Sinh,
     Sqrt,
+    /// Raw `(int)sqrt(a + b)` for integer operands observed only through an int cast.
+    SqrtAddInt,
     Tan,
     Tanh,
     ElephcCloneOverrideReferenceGuard,
@@ -885,6 +887,7 @@ impl RuntimeFnId {
             RuntimeFnId::AbsInt => Some((1, Some(1))),
             RuntimeFnId::Base64EncodedLen => Some((1, Some(1))),
             RuntimeFnId::StrposInt => Some((2, Some(3))),
+            RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             _ => None,
         }
     }
@@ -1714,7 +1717,9 @@ impl RuntimeFnId {
             // The encoded-length helper reads only the already-materialized string length.
             RuntimeFnId::Base64EncodedLen => E::PURE,
             // The raw position keeps the search's offset-validation and coercion effects.
-            RuntimeFnId::StrposInt => self.effects(),
+            RuntimeFnId::StrposInt => RuntimeFnId::Strpos.effects(),
+            // A negative integer sum has a NAN square root and PHP's cast warning.
+            RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
@@ -2432,6 +2437,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMapSumAddSafe
                 | RuntimeFnId::AbsInt
                 | RuntimeFnId::Base64EncodedLen
+                | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
@@ -2762,7 +2768,6 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrWordCount
                 | RuntimeFnId::Stripos
                 | RuntimeFnId::Strpos
-                | RuntimeFnId::StrposInt
                 | RuntimeFnId::Strripos
                 | RuntimeFnId::Strrpos
                 // `strip_tags()` publishes its concat reservation and then persists it before
@@ -3192,6 +3197,7 @@ impl RuntimeFnId {
             RuntimeFnId::Sin => "sin",
             RuntimeFnId::Sinh => "sinh",
             RuntimeFnId::Sqrt => "sqrt",
+            RuntimeFnId::SqrtAddInt => "sqrt_add_int",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
             RuntimeFnId::ElephcCloneOverrideReferenceGuard => {

@@ -297,6 +297,20 @@ avoid it differently:
 **Input:** `d0` / `xmm0` = source double
 **Output:** Both helpers return the PHP integer value in `x9` / `r11`.
 
+### `__rt_sqrt_add_int` — fused integer square root
+
+**File:** `numeric.rs`
+
+Computes PHP's `(int)sqrt($a + $b)` for two integer addends in one call. The add uses a
+checked integer sequence; an overflowing sum is recomputed as the exact double sum PHP's
+`int + int` overflow produces before `fsqrt`/`sqrtsd`. A negative sum yields NAN, which the
+cold path reports with PHP's `The float NAN is not representable as an int, cast occurred`
+warning and converts to zero. Every non-negative square root is at most `sqrt(2^64)`, so the
+final truncation is always inside the signed range.
+
+**Input:** AArch64 `x0`/`x1`, x86_64 `rdi`/`rsi` = the two integer addends
+**Output:** AArch64 `x0`, x86_64 `rax` = truncated square root
+
 ### `__rt_str_eq` — String equality
 
 **File:** `strings/str_eq.rs`

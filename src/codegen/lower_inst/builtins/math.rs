@@ -146,6 +146,28 @@ pub(crate) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     store_if_result(ctx, inst)
 }
 
+/// Lowers the fused `(int)sqrt(a + b)` target selected by the sqrt add sink.
+///
+/// Both operands are proven concrete integers by the producing pass; the runtime helper keeps
+/// PHP's checked-add promotion, NAN warning and truncation semantics.
+pub(crate) fn lower_sqrt_add_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "sqrt", 2)?;
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(lhs, "x0")?;
+            ctx.load_value_to_reg(rhs, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(lhs, "rdi")?;
+            ctx.load_value_to_reg(rhs, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_sqrt_add_int");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `is_nan()` by checking whether the normalized float is unordered with itself.
 pub(crate) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_nan", 1)?;
