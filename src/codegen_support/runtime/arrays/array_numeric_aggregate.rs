@@ -228,6 +228,7 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
     emitter.label(&format!("{prefix}_maybe_escape"));
     abi::load_at_offset(emitter, result, ESCAPED);
     abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_return"));
+    release_slot(emitter, CARRY);
     abi::load_at_offset(emitter, low_reg(emitter), PREVIOUS);
     clear_slot(emitter, PREVIOUS);
     abi::emit_load_int_immediate(emitter, result, 0);

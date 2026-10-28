@@ -40,3 +40,36 @@ echo 'ok';
     assert_eq!(result.stdout, b"ok");
     assert!(result.stderr.is_empty());
 }
+
+/// Successful reentry cannot erase an outer host exception while committing its own state.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn successful_reentry_preserves_pending_host_status() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("status_reentry", r#"<?php
+#[Export] function php_status_outer(array $value): void {
+    try { echo $value['missing']; } finally { echo 'cleanup'; }
+}
+#[Export] function php_status_tick(): int {
+    static $state = 0;
+    return ++$state;
+}
+"#);
+    let result = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+$nested = [];
+ob_start(function ($bytes) use (&$nested) {
+    if ($bytes !== '') { $nested[] = php_status_tick(); }
+    return '';
+}, 1);
+set_error_handler(function () { throw new LogicException('host'); });
+try { php_status_outer([]); $caught = 'missing'; }
+catch (Throwable $error) { $caught = get_class($error) . ':' . $error->getMessage(); }
+restore_error_handler();
+ob_end_clean();
+echo json_encode([$caught, $nested, php_status_tick()]);
+"#]).output().unwrap();
+    assert!(result.status.success(), "{:?}: {}", result.status, String::from_utf8_lossy(&result.stderr));
+    assert_eq!(result.stdout, br#"["LogicException:host",[1],2]"#);
+    assert!(result.stderr.is_empty(), "{}", String::from_utf8_lossy(&result.stderr));
+}

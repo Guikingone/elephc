@@ -37,9 +37,10 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     let args = 8;
     let status = 16;
     let concat = 24;
-    let saved_result = 32;
-    let boxes = (0..export.source_sig.params.len()).map(|i| 40 + i * 8).collect::<Vec<_>>();
-    let mut used = 32 + boxes.len() * 8;
+    let saved_boundary_status = 32;
+    let saved_result = 40;
+    let boxes = (0..export.source_sig.params.len()).map(|i| 48 + i * 8).collect::<Vec<_>>();
+    let mut used = 40 + boxes.len() * 8;
     let mut params = Vec::new();
     for (_, ty) in &export.source_sig.params {
         let mut slots = Vec::new();
@@ -62,6 +63,8 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     for slot in boxes.iter().copied().chain([saved_result]) {
         abi::emit_store_zero_to_local_slot(emitter, slot);
     }
+    abi::emit_load_symbol_to_reg(emitter, result, BOUNDARY_STATUS, 0);
+    abi::store_at_offset(emitter, result, saved_boundary_status);
     boundary::emit_initialize_hidden_collector_owner(emitter, hidden);
     emitter.bl_c("elephc_php_stack_floor");                                      // use the current PHP thread or Fiber boundary instead of process stack limits
     abi::emit_store_reg_to_symbol(emitter, result, "_stack_limit", 0);
@@ -159,6 +162,8 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
         abi::emit_call_label(emitter, "__rt_decref_mixed");
     }
     boundary::emit_leave_boundary(emitter, concat);
+    abi::load_at_offset(emitter, result, saved_boundary_status);
+    abi::emit_store_reg_to_symbol(emitter, result, BOUNDARY_STATUS, 0);
     abi::load_at_offset(emitter, result, status);
     for (reg, offset) in &preserved { abi::load_at_offset(emitter, reg, *offset); }
     abi::emit_frame_restore(emitter, frame);

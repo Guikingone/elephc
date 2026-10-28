@@ -119,7 +119,8 @@ fn phpext_validation_rejects_unaudited_core_builtins() {
     let project = Project::new();
     let source = project.0.join("core.php");
     for body in ["trigger_error('boom', E_USER_WARNING);", "error_reporting(0);",
-        "debug_print_backtrace();", "set_error_handler(function () { file_put_contents('unsafe', 'value'); return true; });"] {
+        "debug_print_backtrace();", "array_count_values([[]]);",
+        "set_error_handler(function () { file_put_contents('unsafe', 'value'); return true; });"] {
         fs::write(&source, format!("<?php #[Export] function php_core(): void {{ {body} }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());

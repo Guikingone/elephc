@@ -38,6 +38,7 @@ pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
 
 /// Converts a guarded host callback failure into a contained native cleanup unwind.
 pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
+    let status_ready = format!("{done}_host_status_ready");
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("cbz w0, {done}")),       // inspect the C int result at its declared width
         Arch::X86_64 => {
@@ -45,7 +46,10 @@ pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
             emitter.instruction(&format!("jz {done}"));                         // resume normal native execution only after a successful host callback
         }
     }
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), BOUNDARY_STATUS, 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, &status_ready);
     abi::emit_store_imm_to_symbol(emitter, BOUNDARY_STATUS, 0, STATUS_PHP_EXCEPTION as i64);
+    emitter.label(&status_ready);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_jump(emitter, "__rt_throw_current");
 }

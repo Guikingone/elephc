@@ -144,7 +144,11 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     /* Native finally blocks run while the first host callback exception is pending.
      * Temporarily park it so later cleanup output and warnings can invoke PHP just as
      * Zend does, then restore it behind any replacement exception. */
-    bool saved_exception = EG(exception) != NULL;
+    zend_object *saved_exception_object = EG(exception);
+    bool saved_exception = saved_exception_object != NULL;
+    bool saved_exception_can_anchor = saved_exception
+        && !zend_is_unwind_exit(saved_exception_object)
+        && !zend_is_graceful_exit(saved_exception_object);
     if (saved_exception) { zend_exception_save(); }
     zend_try {
         if (warning) {
@@ -159,6 +163,9 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     call->parked_warning_buffer = NULL;
     bool callback_exception = EG(exception) != NULL;
     if (saved_exception) { zend_exception_restore(); }
+    if (callback_exception) {
+        call->previous_exception_anchor = saved_exception_can_anchor ? saved_exception_object : NULL;
+    }
     call->host_exception = EG(exception) != NULL;
     /* The module-local normal mutex remains initialized for every active request. */
     pthread_mutex_lock(&ep_native_lock);
@@ -190,14 +197,10 @@ void elephc_php_unsupported_result(void)
     }
 }
 
-/* Copy a compact native Throwable while its owned message remains live. */
-static int ep_copy_exception(ep_call *call, const uintptr_t *object, bool previous)
+/* Copy compact native Throwable fields while their owned message remains live. */
+static int ep_copy_exception(ep_call *call, const uintptr_t *object, char **name,
+    size_t *name_len, char **message, size_t *message_len, zend_long *code)
 {
-    char **name = previous ? &call->previous_exception_name : &call->exception_name;
-    size_t *name_len = previous ? &call->previous_exception_name_len : &call->exception_name_len;
-    char **message = previous ? &call->previous_exception_message : &call->exception_message;
-    size_t *message_len = previous ? &call->previous_exception_message_len : &call->exception_message_len;
-    zend_long *code = previous ? &call->previous_exception_code : &call->exception_code;
     uintptr_t id = object[0];
     if (id < ep_class_name_count) {
         *name_len = ep_class_name_entries[id * 2 + 1];
@@ -219,8 +222,20 @@ static int ep_copy_exception(ep_call *call, const uintptr_t *object, bool previo
 void elephc_php_previous_exception(const uintptr_t *object)
 {
     ep_call *call = ep_current;
-    if (!call || !object || call->error || call->previous_exception_message) { return; }
-    ep_copy_exception(call, object, true);
+    if (!call || !object || call->error) { return; }
+    ep_exception_copy *copy = ep_alloc(call, sizeof(ep_exception_copy));
+    if (!copy || ep_copy_exception(call, object, &copy->name, &copy->name_len,
+        &copy->message, &copy->message_len, &copy->code)) {
+        return;
+    }
+    copy->anchor = call->previous_exception_anchor;
+    call->previous_exception_anchor = NULL;
+    if (call->previous_exceptions_tail) {
+        call->previous_exceptions_tail->next = copy;
+    } else {
+        call->previous_exceptions = copy;
+    }
+    call->previous_exceptions_tail = copy;
 }
 
 /* Copy the primary compact native Throwable at the invocation boundary. */
@@ -235,7 +250,8 @@ int elephc_php_exception(const uintptr_t *object, uintptr_t status)
             (status == 3 ? "elephc heap allocation failed" : "elephc native runtime failed");
         return 1;
     }
-    return ep_copy_exception(call, object, false);
+    return ep_copy_exception(call, object, &call->exception_name, &call->exception_name_len,
+        &call->exception_message, &call->exception_message_len, &call->exception_code);
 }
 
 /* Resolve existing host Throwable classes without invoking user autoloaders. */
@@ -256,19 +272,50 @@ static zend_class_entry *ep_exception_class(char *name, size_t name_len)
 }
 
 /* Materialize one copied native Throwable without invoking a user autoloader. */
-static void ep_materialize_exception(ep_call *call, zval *value, bool previous)
+static void ep_materialize_exception(char *name, size_t name_len, char *message,
+    size_t message_len, zend_long code, zval *value)
 {
-    char *name = previous ? call->previous_exception_name : call->exception_name;
-    size_t name_len = previous ? call->previous_exception_name_len : call->exception_name_len;
-    char *message = previous ? call->previous_exception_message : call->exception_message;
-    size_t message_len = previous ? call->previous_exception_message_len : call->exception_message_len;
-    zend_long code = previous ? call->previous_exception_code : call->exception_code;
     zend_class_entry *ce = ep_exception_class(name, name_len);
     object_init_ex(value, ce);
     zend_object *exception = Z_OBJ_P(value);
     zend_update_property_stringl(ce, exception, "message", sizeof("message") - 1,
         message, message_len);
     zend_update_property_long(ce, exception, "code", sizeof("code") - 1, code);
+}
+
+/* Throwable previous properties are private on either the Exception or Error base. */
+static zend_object *ep_host_previous(zend_object *exception)
+{
+    zval rv;
+    zval *previous = zend_read_property(zend_get_exception_base(exception), exception,
+        "previous", sizeof("previous") - 1, true, &rv);
+    ZVAL_DEREF(previous);
+    return Z_TYPE_P(previous) == IS_OBJECT ? Z_OBJ_P(previous) : NULL;
+}
+
+/* Insert a transported native Throwable at the host-chain point where it arose. */
+static void ep_insert_previous(ep_exception_copy *copy)
+{
+    zval value;
+    ep_materialize_exception(copy->name, copy->name_len, copy->message,
+        copy->message_len, copy->code, &value);
+    if (copy->anchor) {
+        zend_object *cursor = EG(exception);
+        while (cursor) {
+            zend_object *previous = ep_host_previous(cursor);
+            if (previous == copy->anchor) {
+                GC_ADDREF(copy->anchor);
+                zend_exception_set_previous(Z_OBJ(value), copy->anchor);
+                zend_update_property(zend_get_exception_base(cursor), cursor,
+                    "previous", sizeof("previous") - 1, &value);
+                zval_ptr_dtor(&value);
+                return;
+            }
+            cursor = previous;
+        }
+    }
+    zend_exception_set_previous(EG(exception), Z_OBJ(value));
+    ZVAL_UNDEF(&value);
 }
 
 /* No Zend frame, allocation or callback lies below the native invocation. */
@@ -339,12 +386,10 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
             call->host_exception = false;
         }
         bool restore_host_exception = !host_exit && call->exception_message && EG(exception);
-        if (!host_exit && call->previous_exception_message && EG(exception)) {
-            zval previous;
-            ep_materialize_exception(call, &previous, true);
-            /* zend_exception_set_previous consumes this owner and appends it at the chain tail. */
-            zend_exception_set_previous(EG(exception), Z_OBJ(previous));
-            ZVAL_UNDEF(&previous);
+        if (!host_exit && EG(exception)) {
+            for (ep_exception_copy *copy = call->previous_exceptions; copy; copy = copy->next) {
+                ep_insert_previous(copy);
+            }
         }
         if (restore_host_exception) {
             /* A native exception from finally replaces the host callback exception and keeps
@@ -355,7 +400,9 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
             if (call->error) {
                 zend_throw_error(NULL, "%s", call->error);
             } else if (call->exception_message) {
-                ep_materialize_exception(call, &call->pending_exception, false);
+                ep_materialize_exception(call->exception_name, call->exception_name_len,
+                    call->exception_message, call->exception_message_len,
+                    call->exception_code, &call->pending_exception);
                 zval thrown = call->pending_exception;
                 ZVAL_UNDEF(&call->pending_exception);
                 zend_throw_exception_object(&thrown);

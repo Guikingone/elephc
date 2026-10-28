@@ -112,7 +112,7 @@ pub(crate) fn runtime_supported(target: crate::ir::RuntimeFnId) -> bool {
         | R::ArrayKeyLast | R::ArrayKeys | R::ArrayValues | R::ArrayReverse | R::ArraySlice
         | R::ArrayMerge | R::ArrayPop | R::ArrayPush | R::ArrayShift | R::ArrayUnshift
         | R::ArraySum | R::ArrayProduct | R::ArraySearch | R::ArrayChunk | R::ArrayColumn
-        | R::ArrayFlip | R::ArrayFill | R::ArrayFillKeys | R::ArrayCombine | R::ArrayCountValues
+        | R::ArrayFlip | R::ArrayFill | R::ArrayFillKeys | R::ArrayCombine
         | R::StrRepeat)
 }
 

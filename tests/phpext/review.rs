@@ -384,6 +384,63 @@ foreach ($cases as [$function, $value]) {
 "#);
 }
 
+/// Repeated aggregate warning escapes retire their partial carry on a small native heap.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn aggregate_warning_escapes_reuse_small_heaps() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile_with_options("aggregate_heap", r#"<?php
+#[Export] function php_sum_escape(array $value): mixed { return array_sum($value); }
+#[Export] function php_product_escape(array $value): mixed { return array_product($value); }
+#[Export] function php_after_aggregate(): int { return 42; }
+"#, &["--heap-size=65536"]);
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+set_error_handler(function () { throw new LogicException('host'); });
+for ($i = 0; $i < 4000; $i++) {
+    $function = ($i & 1) ? 'php_sum_escape' : 'php_product_escape';
+    try { $function([1, []]); exit(10); }
+    catch (LogicException $error) {}
+}
+restore_error_handler();
+if (php_after_aggregate() !== 42) { exit(11); }
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// Native infrastructure failures stay authoritative over throwing cleanup output handlers.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn infrastructure_status_survives_finally_output_exceptions() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("infra_status", r#"<?php
+#[Export] function php_infra_then_output(): void {
+    try { array_fill(0, 100000, 0); } finally { echo 'cleanup'; }
+}
+#[Export] function php_after_infra(): int { return 42; }
+"#);
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+ob_start(function ($bytes) {
+    if ($bytes !== '') { throw new LogicException('output'); }
+    return '';
+}, 1);
+try { php_infra_then_output(); $caught = 'missing'; }
+catch (Throwable $error) { $caught = get_class($error) . ':' . $error->getMessage(); }
+ob_end_clean();
+echo json_encode([$caught, php_after_infra()]);
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    let json = output.stdout.iter().rposition(|byte| *byte == b'[').unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout[json..]).unwrap();
+    assert_eq!(value[1], 42);
+    assert!(value[0].as_str().unwrap().starts_with("Error:"), "{}", String::from_utf8_lossy(&output.stdout));
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 /// An outer native finally return discards both the host exception and its stored native tail.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
@@ -419,6 +476,35 @@ try { php_previous_then_throw([]); }
 catch (Throwable $error) {
     while ($error) {
         echo get_class($error), ':', $error->getMessage(), ':', $error->getCode(), '|';
+        $error = $error->getPrevious();
+    }
+}
+"#);
+}
+
+/// Multiple transported native exceptions are spliced at their original host-chain anchors.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn transported_native_exceptions_keep_host_chain_order() {
+    compare(r#"<?php
+#[Export] function php_anchored_chain(array $value): void {
+    try {
+        try {
+            try { echo $value['first']; }
+            finally { throw new RuntimeException('native1'); }
+        } finally { echo $value['second']; }
+    } finally {
+        try { throw new TypeError('native2'); }
+        finally { echo $value['third']; }
+    }
+}
+"#, r#"
+$host = 0;
+set_error_handler(function () use (&$host) { throw new LogicException('host' . ++$host); });
+try { php_anchored_chain([]); }
+catch (Throwable $error) {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
         $error = $error->getPrevious();
     }
 }
