@@ -2912,11 +2912,16 @@ fn emit_classes_by_name_table(
             escaped_ascii(class_name)
         ));
     }
+    // A compiler-internal class (`__Elephc…`) has no name PHP code can construct it by.
+    let by_name = sorted_classes
+        .iter()
+        .filter(|(class_name, _)| !class_name.to_ascii_lowercase().starts_with("__elephc"))
+        .collect::<Vec<_>>();
     out.push_str(".p2align 3\n");
     out.push_str(".globl _classes_by_name_count\n_classes_by_name_count:\n");
-    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str(&format!("    .quad {}\n", by_name.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
-    for (class_name, class_info) in sorted_classes {
+    for (class_name, class_info) in by_name {
         let obj_size = class_object_payload_size(class_name, class_info)
             + usize::from(crate::codegen_support::throwable_layout::ordinary_creation_line_offset(class_name, classes).is_some()) * 8;
         out.push_str(&format!(

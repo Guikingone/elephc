@@ -44,7 +44,10 @@ pub(super) fn dynamic_new_candidates(
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in sorted_classes {
-        if !class_is_same_or_descends_from(ctx, class_name, required_parent) {
+        // A compiler-internal class (`__Elephc…`) is not a class PHP code can name.
+        if !class_is_same_or_descends_from(ctx, class_name, required_parent)
+            || class_name.to_ascii_lowercase().starts_with("__elephc")
+        {
             continue;
         }
         if let Some(candidate) =

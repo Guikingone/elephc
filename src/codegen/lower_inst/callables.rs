@@ -856,16 +856,36 @@ fn runtime_string_descriptor_cases_at_arity(
     Ok(cases)
 }
 
-/// Returns whether one PHP callable name belongs to a finite reachable target set.
+/// Returns whether one PHP callable name belongs to a finite reachable target set. A
+/// compiler-internal function, class or method (`__elephc…`, or the extension host's
+/// `elephc_php_ext_…` entry points) is never reachable by name: PHP code that names one gets
+/// the undefined-function error PHP gives, since no such symbol exists there.
 fn runtime_callable_name_is_reachable(
     name: &str,
     candidate_names: Option<&[String]>,
 ) -> bool {
+    if is_compiler_internal_callable_name(name) {
+        return false;
+    }
     let Some(candidate_names) = candidate_names else {
         return true;
     };
     let key = php_symbol_key(name.trim_start_matches('\\'));
     candidate_names.iter().any(|candidate| candidate == &key)
+}
+
+/// Whether a PHP callable name (`function` or `Class::method`) names a compiler-internal
+/// symbol PHP code never sees.
+pub(crate) fn is_compiler_internal_callable_name(name: &str) -> bool {
+    let name = name.trim_start_matches('\\');
+    let internal = |part: &str| {
+        let lower = part.to_ascii_lowercase();
+        lower.starts_with("__elephc") || lower.starts_with("elephc_php_ext_")
+    };
+    match name.split_once("::") {
+        Some((class, method)) => internal(class) || internal(method),
+        None => internal(name),
+    }
 }
 
 /// Builds runtime descriptor cases for extern functions declared in the EIR module.
@@ -1667,6 +1687,7 @@ fn runtime_array_instance_method_targets_for_descriptor(
                 .method_visibilities
                 .get(method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+                || is_compiler_internal_callable_name(&format!("{class_name}::{method_name}"))
             {
                 continue;
             }
@@ -1826,6 +1847,7 @@ fn runtime_array_instance_method_targets(
                 .method_visibilities
                 .get(method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+                || is_compiler_internal_callable_name(&format!("{class_name}::{method_name}"))
             {
                 continue;
             }
