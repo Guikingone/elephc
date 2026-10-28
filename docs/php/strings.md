@@ -152,7 +152,8 @@ $copy[0] = "!";   // $s is unchanged: strings are copied on write
 - An empty value (including `null` and `false`) throws `Error: Cannot assign an empty string
   to a string offset`.
 - An offset still before the start after counting from the end warns
-  `Illegal string offset -N` and writes nothing, even for an empty value.
+  `Illegal string offset -N` and writes nothing, even for an empty value. The RHS is not
+  converted to a string on this path, so a Stringable object's `__toString()` is skipped.
 - The offset follows the string read's rules: an integer, a float (truncated, with
   `String offset cast occurred`), or a numeric string literal such as `"1"`. Other offset
   expressions are compile errors.

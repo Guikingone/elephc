@@ -155,6 +155,12 @@ retains the cell across the helper whenever it can warn; if the retained
 reference is the last one afterwards, a handler replaced the variable, and the
 write is abandoned and the cell released, as PHP does.
 
+EIR checks whether the resolved offset reaches the string before converting the
+RHS. An invalid negative offset passes an empty placeholder to the helper, which
+emits the warning without calling the RHS object's `__toString()`. Raw RHS owners
+and generated assignment captures are retired after the write; converted bytes
+and expression results stay protected if that cleanup invokes a throwing destructor.
+
 ## String routines
 
 **Source:** `src/codegen_support/runtime/strings/`

@@ -19,6 +19,7 @@ function boxed(mixed $s, mixed $key, string $value): mixed {
     return ($s[$key] = $value);
 }
 $nested = ['abc']; $nested[0][1] = 'N';
+$typed = new SplFixedArray(1); $typed[0] = 'typed'; echo $typed[0];
 echo direct(str_repeat('a', $argc + 2), $argc, 'D');
 echo boxed('abc', $argc, 'B'), json_encode($nested);
 "#;

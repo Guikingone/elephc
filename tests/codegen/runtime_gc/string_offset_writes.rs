@@ -278,3 +278,46 @@ restore_error_handler(); $g = null;
 "#);
     assert_clean(out, "String offset cast occurred|ZZZ|String offset cast occurred|NULL|ZZZ");
 }
+
+/// Invalid negative writes skip Stringable conversion and retire the RHS after the warning.
+#[test]
+fn test_string_offset_write_negative_skips_rhs_conversion() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class OffsetValue {
+    public function __toString(): string { echo 'S|'; return 'X'; }
+    public function __destruct() { echo 'D|'; }
+}
+set_error_handler(function(int $level, string $message): bool { echo 'W|'; return true; });
+function direct_negative(string $s): void { $s[-9] = new OffsetValue(); echo $s, '|'; }
+function boxed_negative(mixed $s): void { $s[-9] = new OffsetValue(); echo $s, '|'; }
+function expression_negative(mixed $s): mixed { return ($s[-9] = new OffsetValue()); }
+direct_negative('abc'); boxed_negative('abc');
+echo var_export(expression_negative('abc'), true);
+restore_error_handler();
+"#);
+    assert_clean(out, "W|D|abc|W|D|abc|W|D|NULL");
+}
+
+/// A throwing temporary RHS destructor observes the completed write without leaking its bytes.
+#[test]
+fn test_string_offset_write_rhs_destructor_throw_keeps_heap() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingOffsetValue {
+    public function __toString(): string { return 'X'; }
+    public function __destruct() { throw new RuntimeException('rhs'); }
+}
+function plain(): string {
+    $s = 'abc';
+    try { $r = ($s[0] = new ThrowingOffsetValue()); } catch (RuntimeException $e) { }
+    return $s;
+}
+function boxed(mixed $s): mixed {
+    try { $r = ($s[0] = new ThrowingOffsetValue()); } catch (RuntimeException $e) { }
+    return $s;
+}
+$out = '';
+for ($i = 0; $i < 20; $i++) { $out = plain() . '|' . boxed('abc'); }
+echo $out;
+"#);
+    assert_clean(out, "Xbc|Xbc");
+}

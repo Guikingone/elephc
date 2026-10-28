@@ -85,12 +85,12 @@ pub(in crate::ir_lower) fn lower_string_offset_write(
     let (index_value, value_value, index_pins) = lower_write_key_and_value(ctx, index, value);
     let value_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_value.value], span);
     let offset = lower_string_write_offset(ctx, index_value, index.span);
-    let value_str = crate::ir_lower::expr::coerce_to_string_at_span(ctx, value_value, Some(span));
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
     let subject = ctx.load_local(name, Some(span));
     // Only an offset still before the start after counting back from the end writes nothing,
     // and the subject length is what that is measured against: `offset + strlen >= 0`.
-    let wrote = want_result.then(|| offset_reaches_string(ctx, offset, subject, span));
+    let wrote = offset_reaches_string(ctx, offset, subject, span);
+    let value_str = lower_checked_write_value(ctx, value_value, wrote, span);
+    let subject = ctx.load_local(name, Some(span));
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_str.value], span);
     let updated = ctx.emit_value(
         Op::RuntimeCall,
@@ -106,12 +106,14 @@ pub(in crate::ir_lower) fn lower_string_offset_write(
         Some(span),
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
-    let byte = want_result.then(|| first_byte(ctx, value_str, span));
     crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(span));
-    release_persisted_string_operand(ctx, value_str, span);
     ctx.store_local(name, updated, PhpType::Str, Some(span));
-    Some(StringOffsetWriteResult { wrote: wrote?, byte: byte? })
+    retire_raw_write_value(ctx, value_value, value_str, span);
+    let byte = want_result.then(|| first_byte(ctx, value_str, span));
+    release_persisted_string_operand(ctx, value_str, span);
+    Some(StringOffsetWriteResult { wrote, byte: byte? })
 }
 
 /// Lowers `$name[$index] = $value` on a boxed local that holds a string at run time, and
@@ -134,25 +136,36 @@ pub(in crate::ir_lower) fn lower_boxed_string_offset_write(
     let (index_value, value_value, index_pins) = lower_write_key_and_value(ctx, index, value);
     let value_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_value.value], span);
     let offset = lower_string_write_offset(ctx, index_value, index.span);
-    let value_str = crate::ir_lower::expr::coerce_to_string_at_span(ctx, value_value, Some(span));
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
     let subject = crate::ir_lower::expr::coerce_to_string_at_span(ctx, cell, Some(span));
     let reaches = offset_reaches_string(ctx, offset, subject, span);
     let live = boxed_receiver_has_owner(ctx, cell, span);
     let wrote = ctx.emit_value(Op::IBitAnd, vec![reaches.value, live.value], None,
         PhpType::Bool, Op::IBitAnd.default_effects(), Some(span));
     release_persisted_string_operand(ctx, subject, span);
+    let value_str = lower_checked_write_value(ctx, value_value, wrote, span);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_str.value], span);
     emit_boxed_string_set(ctx, cell, offset, value_str, live, span);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, value_pins, span);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
-    let byte = first_byte(ctx, value_str, span);
     crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(span));
+    retire_raw_write_value(ctx, value_value, value_str, span);
+    let byte = first_byte(ctx, value_str, span);
     release_persisted_string_operand(ctx, value_str, span);
     if let Some(owner) = cell_owner {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
     }
     StringOffsetWriteResult { wrote, byte }
+}
+
+/// Protects converted bytes while a temporary RHS destructor can throw after the write.
+fn retire_raw_write_value(
+    ctx: &mut LoweringContext<'_, '_>, raw: LoweredValue,
+    string: LoweredValue, span: Span,
+) {
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[string.value], span);
+    crate::ir_lower::ownership::release_if_owned(ctx, raw, Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
 /// Normalizes a write offset through the same typed EIR operation as nested string writes.
@@ -171,6 +184,12 @@ pub(super) fn lower_boxed_set(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
+    if ctx.builder.value_php_type(receiver.value).codegen_repr() != PhpType::Mixed {
+        ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
+            Op::RuntimeCall.default_effects(), Some(span));
+        return;
+    }
     let string = ctx.emit_value(
         Op::TypePredicate, vec![receiver.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
@@ -225,14 +244,82 @@ fn emit_boxed_string_set(
         else_target: done, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(write);
-    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, offset.value, value.value], None,
+    let prepared = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str {
+        None
+    } else {
+        let subject = crate::ir_lower::expr::coerce_to_string_at_span(ctx, receiver, Some(span));
+        let reaches = offset_reaches_string(ctx, offset, subject, span);
+        release_persisted_string_operand(ctx, subject, span);
+        Some(lower_checked_write_value(ctx, value, reaches, span))
+    };
+    let rhs = prepared.unwrap_or(value);
+    let pins = prepared.map(|rhs| {
+        crate::ir_lower::expr::pin_in_flight_owners(ctx, &[rhs.value], span)
+    }).unwrap_or_default();
+    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, offset.value, rhs.value], None,
         Op::RuntimeCall.default_effects(), Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    if let Some(rhs) = prepared { release_persisted_string_operand(ctx, rhs, span); }
     branch_to(ctx, done);
     ctx.builder.position_at_end(done);
     ctx.restore_initialized_slots(initialized);
 }
 
-/// Emits `offset + strlen(subject) >= 0`: whether a resolved string offset reaches the string.
+/// Converts a RHS only when the write reaches its receiver, retaining raw input ownership.
+fn lower_checked_write_value(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
+    writable: LoweredValue, span: Span,
+) -> LoweredValue {
+    let name = ctx.declare_owned_hidden_temp(PhpType::Str);
+    let convert = ctx.builder.create_named_block("string.offset.value.convert", Vec::new());
+    let skip = ctx.builder.create_named_block("string.offset.value.skip", Vec::new());
+    let done = ctx.builder.create_named_block("string.offset.value.done", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: writable.value, then_target: convert, then_args: Vec::new(),
+        else_target: skip, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(convert);
+    let ty = ctx.builder.value_php_type(value.value);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None, ty.clone(),
+        Op::Borrow.default_effects(), Some(span));
+    if Ownership::php_type_needs_lifetime_tracking(&ty) {
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    }
+    let string = if ty.codegen_repr() == PhpType::Callable {
+        let boxed = ctx.emit_owned_value(Op::MixedBox, vec![borrowed.value], None,
+            PhpType::Mixed, Op::MixedBox.default_effects(), Some(span));
+        let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[boxed.value], span);
+        let string = ctx.emit_value(Op::Cast, vec![boxed.value],
+            Some(Immediate::CastTarget(IrType::Str)), PhpType::Str,
+            Op::Cast.default_effects(), Some(span));
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(span));
+        string
+    } else if matches!(ty.codegen_repr(), PhpType::Bool | PhpType::False) {
+        ctx.emit_value(Op::BoolToStr, vec![borrowed.value], None, PhpType::Str,
+            Op::BoolToStr.default_effects(), Some(span))
+    } else {
+        crate::ir_lower::expr::coerce_to_string_at_span(ctx, borrowed, Some(span))
+    };
+    crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, string, span);
+    let converted_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(skip);
+    ctx.restore_initialized_slots(initialized);
+    let empty = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(String::new()), span));
+    crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, empty, span);
+    let skipped_initialized = ctx.initialized_slots_snapshot();
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(converted_initialized.intersection(&skipped_initialized).copied().collect());
+    let detached = crate::ir_lower::expr::take_owned_temp(ctx, &name, span);
+    // A detached merge result owns its bytes; ordinary local loads are excluded from unwind pins.
+    ctx.emit_owned_value(Op::EnsureOwned, vec![detached.value], None, PhpType::Str,
+        Op::EnsureOwned.default_effects(), Some(span))
+}
+
+/// Tests whether an offset reaches the string without rejecting overflowing positive offsets.
 fn offset_reaches_string(
     ctx: &mut LoweringContext<'_, '_>,
     offset: LoweredValue,
@@ -256,14 +343,19 @@ fn offset_reaches_string(
         Some(span),
     );
     let zero = ctx.builder.emit_const_i64(0);
-    ctx.emit_value(
+    let from_end = ctx.emit_value(
         Op::ICmp,
         vec![from_start.value, zero],
         Some(Immediate::CmpPredicate(CmpPredicate::Sge)),
         PhpType::Bool,
         Op::ICmp.default_effects(),
         Some(span),
-    )
+    );
+    let nonnegative = ctx.emit_value(Op::ICmp, vec![offset.value, zero],
+        Some(Immediate::CmpPredicate(CmpPredicate::Sge)), PhpType::Bool,
+        Op::ICmp.default_effects(), Some(span));
+    ctx.emit_value(Op::IBitOr, vec![nonnegative.value, from_end.value], None,
+        PhpType::Bool, Op::IBitOr.default_effects(), Some(span))
 }
 
 /// Emits the first byte of an already converted value string as an owned one-byte string.

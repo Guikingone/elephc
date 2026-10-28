@@ -33,6 +33,7 @@ pub(super) fn lower_string_offset_assignment_expr(
     target: &Expr,
     value: &Expr,
     result_target: Option<&Expr>,
+    prelude: &[Stmt],
     span: Span,
     key_already_diagnosed: bool,
 ) -> Option<LoweredValue> {
@@ -42,23 +43,22 @@ pub(super) fn lower_string_offset_assignment_expr(
     let ExprKind::Variable(name) = &array.kind else {
         return None;
     };
-    if crate::ir_lower::stmt::local_is_string_offset_target(ctx, name) {
-        return Some(lower_known_string_offset_assign_expr(ctx, name, index, value, span));
-    }
-    let result_target = result_target?;
-    if !crate::ir_lower::stmt::local_may_hold_boxed_string(ctx, name) {
+    let known = crate::ir_lower::stmt::local_is_string_offset_target(ctx, name);
+    if !known && (!crate::ir_lower::stmt::local_may_hold_boxed_string(ctx, name)
+        || result_target.is_none())
+    {
         return None;
     }
-    Some(lower_boxed_offset_assign_expr(
-        ctx,
-        name,
-        index,
-        target,
-        value,
-        result_target,
-        span,
-        key_already_diagnosed,
-    ))
+    let owner = result_target.and_then(|result| {
+        super::assignment_rhs_capture::publish_assignment_rhs(ctx, target, value, result, prelude, span)
+    });
+    let result = if known {
+        lower_known_string_offset_assign_expr(ctx, name, index, value, span)
+    } else {
+        lower_boxed_offset_assign_expr(ctx, name, index, target, value, result_target.unwrap(),
+            span, key_already_diagnosed)
+    };
+    Some(super::assignment_rhs_capture::finish_assignment_rhs(ctx, owner, result, span))
 }
 
 /// The PHP type of a string offset assignment expression: the written byte or `null`.

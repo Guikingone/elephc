@@ -88,6 +88,7 @@ fn test_string_offset_write_empty_value_throws_error() {
 $s = 'abc';
 try { $s[0] = ''; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
 try { $s[1] = null; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+try { $s[1] = false; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
 try { $s[-9] = ''; } catch (Error $e) { echo "unexpected\n"; }
 echo $s, "\n";
 "#,
@@ -95,6 +96,7 @@ echo $s, "\n";
     assert_eq!(
         out.stdout,
         "Error: Cannot assign an empty string to a string offset\n\
+         Error: Cannot assign an empty string to a string offset\n\
          Error: Cannot assign an empty string to a string offset\nabc\n"
     );
     assert!(out.stderr.contains("Warning: Illegal string offset -9"), "{}", out.stderr);
