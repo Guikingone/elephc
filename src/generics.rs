@@ -21,6 +21,7 @@
 
 pub mod classes;
 mod constructors;
+mod function_variants;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
 mod report;
@@ -208,6 +209,7 @@ where
     check_result.warnings = collected_warnings;
     // A template is not a function: its annotations name types with no representation, so it
     // must never reach lowering. Every instantiation the program reaches now exists.
+    let program = function_variants::specialize(program, &mut check_result);
     let program = strip_templates(program);
     // A generic METHOD is a template too, and lives on a class that itself survives. Its body
     // names types with no representation — `new Box<U>` — so leaving it in reaches lowering and

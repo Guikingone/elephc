@@ -176,6 +176,11 @@ pub(super) fn walk_trait_uses<P: Pass>(
 }
 
 pub(crate) trait Pass {
+    /// Transforms a rebuilt statement after its children have been visited.
+    fn transform_stmt(&self, stmt: crate::parser::ast::Stmt) -> crate::parser::ast::Stmt {
+        stmt
+    }
+
     /// Transforms a magic constant node (e.g., `__FILE__`, `__LINE__`) into its
     /// substituted expression. Called for every `MagicConstant` encountered during the walk.
     fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind;
