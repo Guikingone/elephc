@@ -2297,6 +2297,23 @@ echo (is_null($tab) ? "n" : "s"), "|", $calls;
     assert_eq!(out, "X|X|X|n|3");
 }
 
+/// Verifies `/x` keeps leading PCRE2 verbs at the start of the pattern.
+///
+/// `(*UTF)`, `(*ANYCRLF)`, and similar directives are valid only before any other
+/// pattern item. Prefixing `(?x)` makes `preg_match` return false and the replace
+/// calls return null. PHP 8.2–8.5 returns a match and the replacement.
+#[test]
+fn test_preg_extended_leading_verbs_stay_at_pattern_start() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match("/(*UTF)a/x", "a"), "|";
+echo preg_replace("/(*ANYCRLF)a/x", "Y", "ab"), "|";
+echo preg_replace_callback("/(*UTF)a/x", function ($m) { return "X"; }, "ab");
+"#,
+    );
+    assert_eq!(out, "1|Yb|Xb");
+}
+
 /// Verifies a small callback replacement allocates its output block with the
 /// right size on x86_64 and that an empty subject returns an empty string.
 #[test]

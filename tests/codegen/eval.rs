@@ -8169,6 +8169,25 @@ return $nl . ":" . $sp . ":" . $cr . ":" . (is_null($tab) ? "n" : "s");
     assert_eq!(out, "X:X:X:n");
 }
 
+/// Verifies eval `/x` keeps leading PCRE2 verbs at the start of the pattern.
+///
+/// Eval compiles through the same shim as compiled code. `(*UTF)` and
+/// `(*ANYCRLF)` stay valid, and the replacements match PHP.
+#[test]
+fn test_eval_preg_extended_leading_verbs_stay_at_pattern_start() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_verb_repl($matches) { return "X"; }
+$match = preg_match("/(*UTF)a/x", "a");
+$replaced = preg_replace("/(*ANYCRLF)a/x", "Y", "ab");
+$callback = preg_replace_callback("/(*UTF)a/x", "eval_verb_repl", "ab");
+return $match . ":" . $replaced . ":" . $callback;
+');
+"#,
+    );
+    assert_eq!(out, "1:Yb:Xb");
+}
+
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {

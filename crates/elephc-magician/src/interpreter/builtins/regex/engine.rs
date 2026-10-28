@@ -24,7 +24,7 @@ const REG_DOTALL: c_int = 0x0010;
 const REG_STARTEND: c_int = 0x0080;
 const ELEPHC_PCRE2_GLOBAL_NEXT: u32 = 1 << 16;
 const REG_UNGREEDY: c_int = 0x0200;
-/// Private compile flag. The PCRE2 shim prefixes `(?x)` and clears this bit.
+/// Private compile flag. The PCRE2 shim compiles with `PCRE2_EXTENDED` and clears this bit.
 const ELEPHC_PCRE2_EXTENDED: c_int = 0x2000;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;

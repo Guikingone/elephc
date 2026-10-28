@@ -2,7 +2,6 @@
 #include <stddef.h>
 #include <limits.h>
 #include <stdlib.h>
-#include <string.h>
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 #include <pcre2posix.h>
@@ -11,6 +10,53 @@
 #define ELEPHC_PCRE2_GLOBAL_NEXT (1u << 16)
 /* Private compile flag. pcre2posix has no PCRE2_EXTENDED bit (REG_EXTENDED is 0). */
 #define ELEPHC_PCRE2_EXTENDED 0x2000
+
+/* Compiles with PCRE2_EXTENDED while filling the same POSIX regex_t pcre2_regcomp uses.
+ * An option group inserted before the pattern would hide (*UTF), (*ANYCRLF), (*CRLF),
+ * and (*LIMIT_...) verbs, which PCRE2 accepts only at the very start. PHP passes /x
+ * as a compile option. */
+static int elephc_pcre2_compile_extended(regex_t *preg, const char *pattern, int cflags)
+{
+    uint32_t options = PCRE2_EXTENDED;
+    uint32_t capture_count = 0;
+    int errorcode = 0;
+    PCRE2_SIZE erroffset = 0;
+    pcre2_code *code;
+
+    if ((cflags & REG_ICASE) != 0) options |= PCRE2_CASELESS;
+    if ((cflags & REG_NEWLINE) != 0) options |= PCRE2_MULTILINE;
+    if ((cflags & REG_DOTALL) != 0) options |= PCRE2_DOTALL;
+    if ((cflags & REG_NOSPEC) != 0) options |= PCRE2_LITERAL;
+    if ((cflags & REG_UTF) != 0) options |= PCRE2_UTF;
+    if ((cflags & REG_UCP) != 0) options |= PCRE2_UCP;
+    if ((cflags & REG_UNGREEDY) != 0) options |= PCRE2_UNGREEDY;
+
+    preg->re_cflags = cflags;
+    preg->re_pcre2_code = NULL;
+    preg->re_match_data = NULL;
+    code = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED, options,
+        &errorcode, &erroffset, NULL);
+    preg->re_erroffset = erroffset;
+    if (code == NULL) {
+        (void)errorcode;
+        return REG_BADPAT;
+    }
+    if (pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &capture_count) != 0
+        || capture_count == UINT32_MAX) {
+        pcre2_code_free(code);
+        return REG_BADPAT;
+    }
+    preg->re_nsub = (size_t)capture_count;
+    preg->re_pcre2_code = code;
+    preg->re_match_data = pcre2_match_data_create(capture_count + 1, NULL);
+    if (preg->re_match_data == NULL) {
+        pcre2_code_free(code);
+        preg->re_pcre2_code = NULL;
+        return REG_ESPACE;
+    }
+    preg->re_erroffset = (size_t)(-1);
+    return 0;
+}
 
 typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
@@ -41,25 +87,8 @@ int32_t elephc_pcre2_v1_compile(
         return (int32_t)REG_ESPACE;
     }
     if ((cflags & ELEPHC_PCRE2_EXTENDED) != 0) {
-        size_t length = strlen(pattern_z);
-        char *extended;
         cflags &= ~(uint32_t)ELEPHC_PCRE2_EXTENDED;
-        if (length > SIZE_MAX - 5) {
-            free(handle);
-            return (int32_t)REG_ESPACE;
-        }
-        extended = (char *)malloc(length + 5);
-        if (extended == NULL) {
-            free(handle);
-            return (int32_t)REG_ESPACE;
-        }
-        /* PHP's /x is PCRE2_EXTENDED. A leading (?x) is the same mode, including
-         * character classes, escapes, and # comments, and can still be turned off
-         * by a later (?-x). */
-        memcpy(extended, "(?x)", 4);
-        memcpy(extended + 4, pattern_z, length + 1);
-        result = pcre2_regcomp(&handle->regex, extended, (int)cflags);
-        free(extended);
+        result = elephc_pcre2_compile_extended(&handle->regex, pattern_z, (int)cflags);
     } else {
         result = pcre2_regcomp(&handle->regex, pattern_z, (int)cflags);
     }
