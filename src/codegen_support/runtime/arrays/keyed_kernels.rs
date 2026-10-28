@@ -240,11 +240,13 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
 
     emitter.label(vector_tail);
     emitter.instruction("movq rax, xmm1");                                      // move the guard's low 64-bit lane to an integer register
+    emitter.instruction("movdqa xmm5, xmm1");                                   // copy the guard before extracting its high lane
     emitter.instruction("psrldq xmm5, 8");                                      // move the guard's high 64-bit lane into the low lane
     emitter.instruction("movq r11, xmm5");                                      // copy the high guard lane into an integer register
     emitter.instruction("or rax, r11");                                         // combine both halves of the high-dword guard
     emitter.instruction(&format!("jnz {vector_restart}"));                      // any wide element restarts the exact scalar sequence
     emitter.instruction("movq rax, xmm0");                                      // move the accumulator's low 64-bit lane to an integer register
+    emitter.instruction("movdqa xmm5, xmm0");                                   // copy the accumulator before extracting its high lane
     emitter.instruction("psrldq xmm5, 8");                                      // move the accumulator's high 64-bit lane into the low lane
     emitter.instruction("movq r11, xmm5");                                      // copy the high accumulator lane into an integer register
     emitter.instruction("add rax, r11");                                        // fold both accumulated lanes into the result
@@ -550,6 +552,7 @@ fn emit_filter_count_mod_x86_64(emitter: &mut Emitter) {
 
     emitter.label(vector_tail);
     emitter.instruction("movq rax, xmm0");                                      // move the counter's low 64-bit lane to an integer register
+    emitter.instruction("movdqa xmm5, xmm0");                                   // copy the counter before extracting its high lane
     emitter.instruction("psrldq xmm5, 8");                                      // move the counter's high 64-bit lane into the low lane
     emitter.instruction("movq r11, xmm5");                                      // copy the high counted lane into an integer register
     emitter.instruction("add rax, r11");                                        // fold both counted lanes into the result
