@@ -1203,6 +1203,15 @@ call operand owns the source cell for the duration of the helper.
 | `__rt_json_integer_tree_try` | Select the bounded integer-tree path, allocate its result once, or return an unsupported-shape result to ordinary dispatch |
 | `__rt_json_integer_tree_write` | Write a proved integer tree into the sized allocation without callbacks or further allocation |
 
+The associative-array encoder has three direct-write fast paths for the common object
+shape: a key of at most 8 plain printable ASCII bytes (no quote, backslash or slash, and no
+active JSON flag) is written as `"key"` at the cursor; a string value of at most 16 such bytes
+takes the same path; an integer value is formatted with `__rt_itoa_into` into a reserved
+21-byte window and shifted onto the cursor. These paths skip the shared itoa scratch, the
+string escaping passes and the generic append copy. Flags, escapes, non-ASCII or control
+bytes, slashes and longer strings keep the full encoder, and the per-value `strbuf_sync` is
+emitted only in the branches that actually use formatter scratch.
+
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
 | Routine | What it does | Input | Output |
