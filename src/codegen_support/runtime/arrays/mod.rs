@@ -32,6 +32,7 @@ mod array_diff;
 mod array_diff_refcounted;
 mod array_diff_key;
 mod array_edge_key;
+mod array_edge_value;
 mod array_ensure_unique;
 mod array_take_boxed;
 mod array_fill;
@@ -173,6 +174,7 @@ mod hash_unset;
 mod heap_alloc;
 pub(crate) mod heap_live_bases;
 mod heap_grow_tail;
+mod heap_consolidate;
 mod heap_debug_check_live;
 mod heap_debug_fail;
 mod heap_debug_report;
@@ -258,6 +260,8 @@ pub use array_diff_key::emit_array_diff_key;
 /// Emit array difference by key helper.
 pub use array_edge_key::emit_array_edge_key;
 /// Emit array first/last key helper (array_key_first / array_key_last).
+pub use array_edge_value::emit_array_edge_value;
+/// Emit array first/last value helper (array_first / array_last).
 pub use array_internal_pointer::emit_array_ptr_key;
 /// Emit the internal-array-pointer key boxing helper (key()).
 pub use array_internal_pointer::emit_array_ptr_seek;
@@ -501,6 +505,10 @@ pub use hash_union::emit_hash_union;
 pub use hash_unset::emit_hash_unset;
 /// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;
+/// Emit the bin-merging consolidation pass and the bin reset helper.
+pub use heap_consolidate::emit_heap_consolidate;
+/// Bytes of the exact size-class bin table the runtime data reserves.
+pub(crate) use heap_consolidate::{heap_bin_mark_bytes, HEAP_BIN_TABLE_BYTES};
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;
 /// Emit heap debug live check helper.

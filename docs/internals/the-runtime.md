@@ -809,7 +809,8 @@ The five `__rt_memory_*` helpers are constant-time leaf routines that never allo
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |
 | `__rt_heap_debug_check_live` | Reject `incref` / `decref` operations on already-freed heap blocks | `x0` = pointer | — |
-| `__rt_heap_debug_validate_free_list` | Validate the ordered free list and small-bin chains before allocator mutations | — | — |
+| `__rt_heap_debug_validate_free_list` | Validate the ordered free list and the exact size-class bins before allocator mutations | — | — |
+| `__rt_heap_consolidate` | Merge every free block (bins and ordered list) by one walk over the heap; on heap exhaustion and in `gc_mem_caches()` | `x0` = 0 rebin / 1 list all | `x0` = bytes drained from bins, `x1` = changed |
 | `__rt_heap_debug_report` | Print heap-debug exit summary with leak/high-water stats | — | — |
 | `__rt_heap_kind` | Return the uniform heap-kind tag for a heap-backed pointer | `x0` = pointer | `x0` = kind |
 | `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
@@ -1096,18 +1097,13 @@ elephc lowers exceptions with a small runtime layer around the libc `_setjmp` / 
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
 
-The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`,
-which reads the published `_exc_value` and writes
-`Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stdout before exiting
-with status 255. The class name comes from `_class_name_entries` and the message
-from payload offsets 8/16. The report and public getters share
-`__rt_throwable_location_borrowed`, which resolves creation metadata and independent
-`ErrorException` filename/line overrides without allocating. Getter strings are
-persisted by their public adapter; the report borrows bytes from the published
-receiver and saves pointer, length, and line across syscalls. An explicit zero
-line or empty filename remains visible. A separate known-origin flag omits the
-suffix for synthesized errors with no source location. An empty message drops
-the `": "` separator.
+The report and public getters share `__rt_throwable_location_borrowed`, which
+resolves creation metadata and independent `ErrorException` filename/line overrides
+without allocating. Getter strings are persisted by their public adapter; the report
+borrows bytes from the receiver it is printing. An explicit zero line or empty
+filename remains visible. A separate known-origin flag omits the ` in <file>:<line>`
+suffix and the closing `thrown in` line for synthesized errors with no source
+location. An empty message drops the `": "` separator.
 
 Ordinary Throwable objects, including `ErrorException` and subclasses with extra
 properties, reserve a creation-line word after declared properties and the optional
@@ -1120,6 +1116,9 @@ ordinary metadata from the existing compact Throwable prefix. `ErrorException`
 location getters use an explicit constructor override when present, including line zero. Explicit eval calls to
 `__construct` reuse the constructor signature registration when ordinary method
 metadata is absent, so named arguments and defaults use the same binding as `new`.
+The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes PHP's complete report to stdout through `__rt_stdout_write` (after clearing the `print_r`/handler capture flags and draining `ob_*`) before exiting with status 255. `__rt_uncaught_render_chain` recurses through `__rt_throwable_previous` so the innermost previous exception prints first, each outer one after `\n\nNext `; `__rt_uncaught_render_one` prints `<Class>[: <message>][ in <file>:<line>]`, `\nStack trace:\n`, the frames and `#<n> {main}`. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, and the file and line from `__rt_throwable_location_borrowed` (described above), the line formatted through `__rt_itoa`.
+
+The frames come from `__rt_uncaught_write_trace`, which walks `_exc_call_frame_top` and calls the frame reader each function prologue publishes at `[activation + 24]` in print mode (the routine behind `debug_print_backtrace()`; it prints `#<n> <file>(<caller line>): <call>(<args>)`). The prologue copies `_php_backtrace_next_line`, set by every call site, into `[activation + 32]`; a call site must never overwrite that word. Modules without a `throw` publish no reader (see `frame::module_uses_backtrace`) and print only `#0 {main}`. An exception escaping a run-time `__debugInfo()` enters through `__rt_report_debuginfo_exception`, which selects `Warning: Uncaught ...` and appends `__rt_debuginfo_fatal_text`.
 
 Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
 
@@ -1292,8 +1291,8 @@ a package.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
-| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
+| `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees. The removed `/e` modifier and a failed compile return the failure sentinel before a match result is produced | pattern + subject strings | `x0`/`rax` = 1 (match), 0 (no match), or -1 (PHP `false`) |
+| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings. `/e` is rejected before compilation. The -1 path still returns a fresh empty array so the caller can release it without storing it | pattern + subject strings | `x0`/`rax` = 1, 0, or -1; `x1`/`rdx` = matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
 | `__rt_preg_match_all_capture` | Fill `preg_match_all()`'s by-reference `$matches` for numbered groups. `PREG_PATTERN_ORDER` uses `$matches[group][match]`, `PREG_SET_ORDER` uses `$matches[match][group]`, `PREG_OFFSET_CAPTURE` boxes `[value, offset]`, and `PREG_UNMATCHED_AS_NULL` uses null (offset `-1` with offset capture). Unsupported extra flag bits, or both order bits at once, return count 0 and `[]` | pattern + subject strings + flags | `x0`/`rax` = match count, `x1`/`rdx` = matches array |
 | `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
@@ -1419,7 +1418,7 @@ The `--web` capture branch is emitted only when compiling with `--web`, so ordin
 
 ### print_r rendering and capture routines
 
-`print_r()` uses walker helpers that mirror the var_dump family — `__rt_print_r_spaces`, `__rt_print_r_open` / `__rt_print_r_close`, `__rt_print_r_int_key` / `__rt_print_r_str_key`, `__rt_print_r_value`, `__rt_print_r_indexed`, and `__rt_print_r_hash` (whose entry lines come from `__rt_print_r_hash_entries`) — all writing through `__rt_pr_write`. Object bodies (`__rt_var_dump_object`, `__rt_print_r_object`, and the `__rt_obj_prop_*` accessors behind `var_export`) list the declared properties from the per-class descriptor, then the instance's dynamic-property hash in insertion order, located by `__rt_obj_dump_dyn_props` (`__rt_obj_dyn_prop_at` for indexed access). The `_class_dump_dyn_prop_flags` table gates that tail off for classes whose `__debugInfo()` folded into a projection. Return mode (`print_r($value, true)`) is backed by three capture helpers in `io/print_r_buffer.rs`:
+`print_r()` uses walker helpers that mirror the var_dump family — `__rt_print_r_spaces`, `__rt_print_r_open` / `__rt_print_r_close`, `__rt_print_r_int_key` / `__rt_print_r_str_key`, `__rt_print_r_value`, `__rt_print_r_indexed`, and `__rt_print_r_hash` (whose entry lines come from `__rt_print_r_hash_entries`) — all writing through `__rt_pr_write`. Object bodies (`__rt_var_dump_object`, `__rt_print_r_object`, and the `__rt_obj_prop_*` accessors behind `var_export`) list the declared properties from the per-class descriptor, then the instance's dynamic-property hash in insertion order, located by `__rt_obj_dump_dyn_props` (`__rt_obj_dyn_prop_at` for indexed access). The `_class_dump_dyn_prop_flags` table gates that tail off for classes whose `__debugInfo()` folded into a projection. A user class whose `__debugInfo()` does NOT fold (a body that computes its entries) gets a non-zero `_class_debuginfo_ptrs[class_id]` entry instead: `__rt_var_dump_value` and `__rt_print_r_object` call `__rt_vd_debuginfo_object` / `__rt_pr_debuginfo_object` right after pushing the object on the `_vd_seen` guard, which run the method through `__rt_obj_debuginfo_fetch`, classify the owned result by heap kind (indexed array, hash, or boxed `Mixed` wrapping either; null is an empty array) and dump it under the object header with the returned entry count, then release the result. A non-array result raises a catchable `TypeError` (`__debuginfo() must return an array`), where PHP raises an uncatchable fatal error; a method with a statically scalar/string return type keeps the declared-property dump. `var_export()` never reads this table. Return mode (`print_r($value, true)`) is backed by three capture helpers in `io/print_r_buffer.rs`:
 
 | Routine | What it does |
 |---|---|
@@ -1680,7 +1679,7 @@ Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, 
 
 The tables above document the public runtime operations. The emitters also split complex operations into the following internal symbols so the linker can dead-strip each unit independently:
 
-- **Arrays, hashes, and Mixed values:** `__rt_abs_mixed`, `__rt_amr_box_value`, `__rt_array_edge_key`, `__rt_array_ensure_elem_for_write`, `__rt_array_fill_assoc`, `__rt_array_fill_str`, `__rt_array_find_any_all`, `__rt_array_get_mixed_key`, `__rt_array_is_list`, `__rt_array_merge_recursive`, `__rt_array_multisort`, `__rt_array_replace`, `__rt_array_replace_recursive`, `__rt_array_set_int`, `__rt_array_set_mixed`, `__rt_array_set_mixed_key`, `__rt_array_set_refcounted`, `__rt_array_set_str`, `__rt_array_sum_mixed`, `__rt_array_to_hash`, `__rt_array_udiff_uintersect`, `__rt_array_walk_recursive`, `__rt_assoc_diff_intersect`, `__rt_hash_flip`, `__rt_hash_map`, `__rt_hash_sum_mixed`, `__rt_hash_to_indexed_array`, `__rt_in_array_mixed_int`, `__rt_mixed_array_append`, `__rt_mixed_array_get_for_write`, `__rt_mixed_cell_autovivify_array`, `__rt_mixed_cell_promote_to_hash`, `__rt_mixed_new_empty_array_cell`, and `__rt_mixed_numeric_common`.
+- **Arrays, hashes, and Mixed values:** `__rt_abs_mixed`, `__rt_amr_box_value`, `__rt_array_edge_key`, `__rt_array_edge_value`, `__rt_array_ensure_elem_for_write`, `__rt_array_fill_assoc`, `__rt_array_fill_str`, `__rt_array_find_any_all`, `__rt_array_get_mixed_key`, `__rt_array_is_list`, `__rt_array_merge_recursive`, `__rt_array_multisort`, `__rt_array_replace`, `__rt_array_replace_recursive`, `__rt_array_set_int`, `__rt_array_set_mixed`, `__rt_array_set_mixed_key`, `__rt_array_set_refcounted`, `__rt_array_set_str`, `__rt_array_sum_mixed`, `__rt_array_to_hash`, `__rt_array_udiff_uintersect`, `__rt_array_walk_recursive`, `__rt_assoc_diff_intersect`, `__rt_hash_flip`, `__rt_hash_map`, `__rt_hash_sum_mixed`, `__rt_hash_to_indexed_array`, `__rt_in_array_mixed_int`, `__rt_mixed_array_append`, `__rt_mixed_array_get_for_write`, `__rt_mixed_cell_autovivify_array`, `__rt_mixed_cell_promote_to_hash`, `__rt_mixed_new_empty_array_cell`, and `__rt_mixed_numeric_common`.
 - **Strings, dates, JSON, and serialization:** `__rt_concat_append`, `__rt_date_entry`, `__rt_json_validate_number`, `__rt_json_validate_string`, `__rt_microtime_build_into`, `__rt_microtime_mixed`, `__rt_microtime_str`, `__rt_mktime_shifted`, `__rt_serialize_begin`, `__rt_serialize_hash_body`, `__rt_serialize_indexed_body`, `__rt_serialize_pstr`, `__rt_serialize_uint`, `__rt_unser_at`, and `__rt_unser_key`.
 - **Objects, callables, resources, and zvals:** `__rt_box_wrapper_stat_result`, `__rt_function_exists_lookup`, `__rt_obj_store_prop`, `__rt_object_handle_acquire`, `__rt_object_handle_of`, `__rt_object_handle_release`, `__rt_resource_id_mint`, `__rt_resource_id_of`, `__rt_resource_type_name`, `__rt_spl_object_hash`, `__rt_zval_pack_element`.
 - **Files, streams, sockets, and networking:** `__rt_addr_is_udp`, `__rt_build_sockaddr_in6`, `__rt_chgrp_group`, `__rt_chown_user`, `__rt_disk_space`, `__rt_fd_write`, `__rt_file_get_contents_maybe_url`, `__rt_format_sockaddr_in`, `__rt_format_sockaddr_in6`, `__rt_format_sockaddr_unix`, `__rt_fsockopen`, `__rt_fwrite`, `__rt_get_int_context_option`, `__rt_get_string_context_option`, `__rt_http_build_copy_aarch64`, `__rt_http_build_copy_x86`, `__rt_inet6_pton`, `__rt_inet_addr_parse`, `__rt_lchgrp_group`, `__rt_lchown_user`, `__rt_opendir`, `__rt_opendir_glob`, `__rt_path_is_wrapper`, `__rt_popen`, `__rt_readdir`, `__rt_readfile_wrapper`, `__rt_rewinddir`, `__rt_servent_load`, `__rt_stash_connect_host`, `__rt_stream_wrapper_register`, and `__rt_stream_wrapper_unregister`.
@@ -1741,10 +1740,11 @@ _print_r_cap: .quad 65536   ; current capture capacity
 .comm _fiber_main_saved_exc, 8 ; saved main exception-handler chain while running a fiber
 .comm _fiber_main_saved_call_frame, 8 ; saved main cleanup-frame chain while running a fiber
 .comm _rt_diag_suppression, 8 ; nested runtime warning-suppression depth for @
-.comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
+.comm _heap_buf, 134217728   ; 128MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
 .comm _heap_free_list, 8     ; head of the general address-ordered free list
-.comm _heap_small_bins, 32   ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
+.comm _heap_small_bins, 2048 ; 256 x 8-byte heads, one per exact payload size 8..2048
+.comm _heap_bin_marks, N     ; heap/16 + 2 bytes: one "parked in a bin" byte per granule
 .comm _heap_debug_enabled, 8 ; BSS-backed debug flag, set to 1 in _main when compiled with --heap-debug
 .comm _buffer_registry, 196656 ; reserved slot 0 + 4096 generation-safe 48-byte descriptors
 .comm _buffer_registry_free, 8 ; recycled descriptor-index free-list head
@@ -1771,7 +1771,7 @@ _buffer_registry_next:
 .comm _json_error_scan_count, 8 ; completed diagnostic location scans
 .comm _json_error_scan_bytes, 8 ; source bytes loaded by those scans
 _heap_max:
-    .quad 8388608            ; configured heap size limit
+    .quad 134217728          ; configured heap size limit (--heap-size, default 128 MB)
 .comm _gc_allocs, 8          ; allocation counter
 .comm _gc_frees, 8           ; free counter
 .comm _gc_live, 8            ; current live heap footprint in bytes
@@ -1841,7 +1841,7 @@ Additionally, the runtime emits static data tables:
 - `static_property_symbol(...)`-derived `.comm` slots — 16-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
 - `enum_case_symbol(...)`-derived `.comm` slots — singleton backing storage for enum cases emitted from user program metadata
 
-When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or small-bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
+When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 
 Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, and `6=throwable` (the compact runtime-thrown exception/error payloads, accepted by the release dispatchers and routed through the object release path), which lets runtime dispatch stay independent from each payload's internal layout. Generator frames use heap kind `4` because `Generator` is a built-in object with a custom payload layout. On x86_64 the kind word additionally carries the ASCII marker `"ELPH"` in its high 32 bits; every stamp is built through the shared `codegen_support::sentinels` helpers (`x86_64_heap_kind_word()` / `X86_64_HEAP_MAGIC_HI32`) rather than hand-typed immediates, and the refcount/free helpers ignore pointers whose header lacks the marker. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, `_class_static_vtable_ptrs`, and static-property storage slots so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support inherited instance dispatch, static-property reads/writes, and late static binding.
 

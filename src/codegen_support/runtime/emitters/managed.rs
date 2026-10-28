@@ -19,6 +19,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
     arrays::emit_heap_grow_tail(emitter);
+    arrays::emit_heap_consolidate(emitter);
     super::super::reference_cells::emit_reference_cells(emitter);
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
@@ -114,6 +115,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_is_list(emitter);
     arrays::emit_array_edge_key(emitter);
+    arrays::emit_array_edge_value(emitter);
     arrays::emit_array_ptr_seek(emitter);
     arrays::emit_array_ptr_key(emitter);
     arrays::emit_array_ptr_value(emitter);
@@ -282,6 +284,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_pr_obj_desc(emitter);
     objects::emit_print_r_object(emitter);
     objects::emit_obj_dump_dyn_props(emitter);
+    objects::emit_obj_debuginfo_fetch(emitter);
+    objects::emit_vd_debuginfo_object(emitter);
+    objects::emit_pr_debuginfo_object(emitter);
     objects::emit_obj_dyn_prop_at(emitter);
     objects::emit_obj_prop_count(emitter);
     objects::emit_obj_prop_name(emitter);
