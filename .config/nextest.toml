@@ -168,6 +168,17 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# The EIR example corpus lowers every example in-process. It now runs about 240s on a
+# fast host and crossed the 180s retry budget on a Linux x86_64 shard; a bounded 300s
+# period keeps a real hang detectable without dropping the corpus from the suite.
+[[profile.default.overrides]]
+filter = 'test(lowers_examples_corpus)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(lowers_examples_corpus)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
