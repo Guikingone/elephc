@@ -12,6 +12,8 @@
 //!   from a call or ternary and then stored casts to an empty string too.
 //! - A loop that stores an untyped array element does not leak the previous string.
 //!   Mixed locals, `??`, and nested indexes print the same bytes as PHP.
+//! - An empty cast of a mixed local does not allocate when it is passed through
+//!   `trim` into a call, concatenation, a hash key, `yield`, or `try`.
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
@@ -701,6 +703,109 @@ const STRING_CAST_CALL_ARGUMENT_OUT: &str = "\
 <><>
 <ggg><ggg>ggg
 <><>
+";
+
+/// An empty cast of a mixed local does not leave a block inside `trim`, concat, a key, `yield`, or `try`.
+///
+/// Once `$s` holds a missing typed-array element it is `null|int|string`. `(string)$s`
+/// is `""`. Copying that empty string allocated one block per use when the copy was
+/// nested under `id(trim(...))`, concatenation, a hash key, `yield`, or `try`.
+/// PHP 8.5 prints the real string on the first iteration and the empty cast after that.
+#[test]
+fn test_empty_mixed_string_cast_copy_is_heap_clean() {
+    assert_empty_mixed_string_cast_copy();
+}
+
+/// The empty mixed cast stays heap-clean when EIR optimization is off.
+#[test]
+fn test_empty_mixed_string_cast_copy_is_heap_clean_no_ir_opt() {
+    without_ir_opt(assert_empty_mixed_string_cast_copy);
+}
+
+/// Runs the nested empty-cast fixture and checks PHP's bytes and a clean heap.
+fn assert_empty_mixed_string_cast_copy() {
+    assert_merge(
+        EMPTY_MIXED_STRING_CAST_COPY,
+        EMPTY_MIXED_STRING_CAST_COPY_OUT,
+        0,
+    );
+}
+
+/// Fixture for an empty `(string)` of a mixed local used beyond a direct call.
+const EMPTY_MIXED_STRING_CAST_COPY: &str = r#"<?php
+function id(string $x): string { return "<".$x.">"; }
+function show_call(int $key): void {
+    $vals = ["a"];
+    $s = str_repeat("g", 3);
+    for ($i = 0; $i < 100; $i++) {
+        $a = id(trim((string)$s));
+        if ($i < 2) { echo "call:", $a, "\n"; }
+        $s = $key == 99 ? 42 : @$vals[$key];
+    }
+}
+function show_concat(int $key): void {
+    $vals = ["a"];
+    $s = str_repeat("g", 3);
+    for ($i = 0; $i < 100; $i++) {
+        $a = trim((string)$s) . trim((string)$s);
+        if ($i < 2) { echo "cat:", $a, "\n"; }
+        $s = $key == 99 ? 42 : @$vals[$key];
+    }
+}
+function show_key(int $key): void {
+    $vals = ["a"];
+    $keys = ["ggg" => "hit", "" => "empty"];
+    $s = str_repeat("g", 3);
+    for ($i = 0; $i < 100; $i++) {
+        $a = $keys[(string)$s] ?? "x";
+        if ($i < 2) { echo "key:", $a, "\n"; }
+        $s = $key == 99 ? 42 : @$vals[$key];
+    }
+}
+function gen(int $key): Generator {
+    $vals = ["a"];
+    $s = str_repeat("g", 3);
+    for ($i = 0; $i < 100; $i++) {
+        yield trim((string)$s);
+        $s = $key == 99 ? 42 : @$vals[$key];
+    }
+}
+function show_try(int $key): void {
+    $vals = ["a"];
+    $s = str_repeat("g", 3);
+    for ($i = 0; $i < 100; $i++) {
+        try {
+            $a = id(trim((string)$s));
+        } catch (Throwable $e) {
+            $a = $e->getMessage();
+        }
+        if ($i < 2) { echo "try:", $a, "\n"; }
+        $s = $key == 99 ? 42 : @$vals[$key];
+    }
+}
+show_call($argc + 5);
+show_concat($argc + 5);
+show_key($argc + 5);
+$n = 0;
+foreach (gen($argc + 5) as $v) {
+    if ($n < 2) { echo "yield:", $v, "\n"; }
+    $n++;
+}
+show_try($argc + 5);
+"#;
+
+/// PHP 8.5 stdout for [`EMPTY_MIXED_STRING_CAST_COPY`], stable across PHP 8.2–8.5.
+const EMPTY_MIXED_STRING_CAST_COPY_OUT: &str = "\
+call:<ggg>
+call:<>
+cat:gggggg
+cat:
+key:hit
+key:empty
+yield:ggg
+yield:
+try:<ggg>
+try:<>
 ";
 
 /// A miss returned by a call or ternary and then stored casts to an empty string.

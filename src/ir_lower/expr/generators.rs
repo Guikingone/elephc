@@ -20,9 +20,13 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
     } else {
         None
     };
-    if let Some(value) = value {
-        operands.push(lower_expr(ctx, value).value);
-    }
+    let yielded = if let Some(value) = value {
+        let yielded = lower_expr(ctx, value);
+        operands.push(yielded.value);
+        Some(yielded)
+    } else {
+        None
+    };
     if key_owner.is_some() && ctx.builder.value_php_type(operands[0]).codegen_repr() == PhpType::Str {
         let owner = key_owner.take().unwrap();
         // The key's box must own its bytes before its source owner retires. Transfer this
@@ -38,6 +42,13 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
         Op::GeneratorYield.default_effects(), Some(expr.span));
     if let Some(owner) = key_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
+    }
+    // The yield boxes its own copy of the string. The cast copy under `trim`
+    // is not that cell and would otherwise stay live for every suspension.
+    if let Some(yielded) = yielded {
+        crate::ir_lower::ownership::release_marked_normalized_cast_copies(
+            ctx, yielded, Some(expr.span),
+        );
     }
     result
 }

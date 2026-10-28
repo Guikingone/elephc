@@ -333,11 +333,44 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers string persistence by copying the string into runtime-owned storage.
+///
+/// A normalized `(string)` cast is marked `Bool(true)`. Its empty result is the
+/// canonical empty literal. Copying that literal allocated a block which
+/// `id(trim(...))`, concatenation, array keys, `yield`, and `try` never released.
 pub(super) fn lower_str_persist(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(value)?, inst)?;
-    super::ownership::persist_loaded_string(ctx, value)?;
+    if inst.immediate == Some(Immediate::Bool(true)) {
+        copy_normalized_cast_unless_empty(ctx, value)?;
+    } else {
+        super::ownership::persist_loaded_string(ctx, value)?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Copies a normalized string cast, and reuses the canonical empty string when it is empty.
+fn copy_normalized_cast_unless_empty(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<()> {
+    let (_, length_reg) = abi::string_result_regs(ctx.emitter);
+    let empty = ctx.next_label("str_cast_empty");
+    let done = ctx.next_label("str_cast_persist_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {length_reg}, {empty}"));     // an empty cast reuses the canonical empty literal
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {length_reg}, {length_reg}")); // an empty cast reuses the canonical empty literal
+            ctx.emitter.instruction(&format!("jz {empty}"));                    // skip the heap copy when the cast length is zero
+        }
+    }
+    super::ownership::persist_loaded_string(ctx, value)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&empty);
+    emit_canonical_empty_string(ctx);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers a float-to-string conversion through the existing runtime formatter.

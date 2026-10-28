@@ -513,6 +513,11 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                             Some(span),
                         );
                     }
+                    // `trim((string)$s)` is not itself the owned copy. The copy is the
+                    // cast underneath it. A user call that may return its argument skips
+                    // releasing `trim`'s result, so the copy has to be released here
+                    // unless that call handed the same block back.
+                    release_marked_cast_copies_unless_returned(ctx, lowered, result, span);
                 }
                 continue;
             }
@@ -521,6 +526,48 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     }
     if let Some(value) = guarded_result {
         ctx.unguard_call_argument(value, span);
+    }
+}
+
+/// Releases a normalized string-cast copy nested under a call argument.
+///
+/// `id(trim((string)$s))` skips releasing `trim`'s result because the callee may
+/// return that argument. The owned copy is the cast underneath `trim`. Free that
+/// copy when the callee returned a different block, and leave it alone when the
+/// callee handed the same block back.
+fn release_marked_cast_copies_unless_returned(
+    ctx: &mut LoweringContext<'_, '_>,
+    argument: LoweredValue,
+    result: ValueId,
+    span: Span,
+) {
+    let Some(inst) = ctx.builder.value_defining_instruction(argument.value) else {
+        return;
+    };
+    if inst.op != Op::RuntimeCall {
+        return;
+    }
+    let copies = inst
+        .operands
+        .iter()
+        .copied()
+        .filter(|operand| {
+            ctx.builder
+                .value_defining_instruction(*operand)
+                .is_some_and(|producer| {
+                    producer.op == Op::StrPersist
+                        && producer.immediate == Some(Immediate::Bool(true))
+                })
+        })
+        .collect::<Vec<_>>();
+    for copy in copies {
+        ctx.emit_void(
+            Op::ReleaseUnlessAliases,
+            vec![copy, result],
+            None,
+            Op::ReleaseUnlessAliases.default_effects(),
+            Some(span),
+        );
     }
 }
 

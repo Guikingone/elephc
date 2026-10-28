@@ -272,7 +272,11 @@ pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: Value
     let ty = ctx.load_value_to_result(value)?;
     match ty {
         PhpType::Str => {
+            // Free this string before nested cast copies. The nested release
+            // reloads its own pointer, so doing it first would free that copy
+            // twice and leak this one.
             release_loaded_string(ctx);
+            release_normalized_string_cast_copies(ctx, value)?;
         }
         PhpType::Callable => {
             abi::emit_decref_if_refcounted(ctx.emitter, &ty);
@@ -378,10 +382,25 @@ fn release_normalized_string_cast_copies(
         }) else {
             return Ok(());
         };
-        if inst.op != Op::RuntimeCall || !runtime_call_discards_string_argument(inst) {
+        let subject = if inst.op == Op::StrPersist {
+            let Some(operand) = inst.operands.first().copied() else {
+                return Ok(());
+            };
+            let Some(subject) = ctx.function.value(operand).and_then(|value| match value.def {
+                ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+                _ => None,
+            }) else {
+                return Ok(());
+            };
+            subject
+        } else {
+            inst
+        };
+        if subject.op != Op::RuntimeCall || !runtime_call_discards_string_argument(subject) {
             return Ok(());
         }
-        inst.operands
+        subject
+            .operands
             .iter()
             .copied()
             .filter(|operand| {
