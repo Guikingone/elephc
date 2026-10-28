@@ -14,8 +14,9 @@
 //! - The regex fixtures prepare a managed PCRE2 project, lock, receipt, and host provider
 //!   through `tests/support/managed_pcre2.rs`, then pass that cache as `ELEPHC_NATIVE_CACHE`.
 //!   They assert compilation and the PHP output. Linux, macOS, and CI panic when that
-//!   provider is missing. A skip is printed only on a host where the archives are not
-//!   expected. A compile or link failure is never a pass.
+//!   provider is missing. The host-provider self-test lives in this binary only, so other
+//!   suites that share the helper do not require the archives. A skip is printed only on
+//!   a host where the archives are not expected. A compile or link failure is never a pass.
 //! - Fixture directories are removed when the test returns, including when an assertion panics.
 
 #[path = "support/managed_pcre2.rs"]
@@ -26,6 +27,8 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use elephc::codegen::platform::Target;
 
 /// Isolated directory for one string-capacity fixture.
 ///
@@ -256,6 +259,69 @@ echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
         String::from_utf8_lossy(&output.stdout),
         "100002 json-ok\n100012 ser-ok\nsrc-ok\n",
         "large JSON and serialize results must stay byte-identical to PHP"
+    );
+}
+
+/// Linux, macOS, and CI must find the static provider and must not skip.
+///
+/// The branch is the host OS and the `CI` environment variable. It does not repeat
+/// `managed_pcre2_execution_skip_reason`'s result, so a broken prefix search fails
+/// this test instead of taking a matching skip branch. The test is registered only in
+/// this binary: the helper module is shared with suites that do not run regex fixtures.
+#[test]
+fn managed_pcre2_execution_skip_reason_follows_the_host_provider() {
+    let target = Target::detect_host();
+    let provider_is_required_here = cfg!(any(target_os = "linux", target_os = "macos"))
+        || std::env::var_os("CI").is_some();
+    if provider_is_required_here {
+        assert!(
+            managed_pcre2::find_test_pcre2_provider(target).is_some(),
+            "aligned pcre2.h, pcre2posix.h, libpcre2-posix.a, and libpcre2-8.a must be installed for {}",
+            target.as_str()
+        );
+        assert!(
+            managed_pcre2::managed_pcre2_execution_skip_reason(target).is_none(),
+            "Linux, macOS, and CI must run the regex capacity regressions"
+        );
+        return;
+    }
+
+    let reason = managed_pcre2::managed_pcre2_execution_skip_reason(target).unwrap_or_else(|| {
+        panic!(
+            "hosts outside Linux, macOS, and CI must skip explicitly for {}",
+            target.as_str()
+        )
+    });
+    assert!(
+        reason.contains("supported skip") && reason.contains(target.as_str()),
+        "{reason}"
+    );
+}
+
+/// A lookup for one target must survive a later lookup for a different target.
+///
+/// Plain `cargo test` shares one process across tests, and codegen fixtures may ask
+/// for `ELEPHC_TEST_TARGET` while this binary asks for the host. Both entries stay.
+#[test]
+fn managed_pcre2_provider_cache_keeps_distinct_targets() {
+    let host = Target::detect_host();
+    let other_name = if host.as_str() == "linux-x86_64" {
+        "linux-aarch64"
+    } else {
+        "linux-x86_64"
+    };
+    let other = Target::parse(other_name).expect("supported cross target");
+    let host_provider = managed_pcre2::find_test_pcre2_provider(host);
+    let _other_provider = managed_pcre2::find_test_pcre2_provider(other);
+    let host_again = managed_pcre2::find_test_pcre2_provider(host);
+    assert!(
+        match (host_provider, host_again) {
+            (Some(first), Some(second)) => std::ptr::eq(first, second),
+            (None, None) => true,
+            _ => false,
+        },
+        "caching {other_name} must leave the {host} provider entry in place",
+        host = host.as_str()
     );
 }
 
