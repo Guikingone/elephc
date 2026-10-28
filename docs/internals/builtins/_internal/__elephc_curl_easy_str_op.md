@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_str_op() - internals"
 description: "Compiler internals for __elephc_curl_easy_str_op(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1132
+  order: 1134
 ---
 
 ## `__elephc_curl_easy_str_op()` - internals

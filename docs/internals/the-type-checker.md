@@ -85,6 +85,12 @@ again. Generic traits are instantiated before trait flattening. Templates are
 removed before downstream optimization and EIR lowering, which receive ordinary
 concrete declarations such as `Box<int>` and `identity<int>`.
 
+Generated class, interface, and trait declarations precede executable statements.
+This keeps specializations available when the program ends with a terminating
+statement, including the `exit()` appended by the native test driver. A generic
+class reached only from a test method uses the same specialization path as an
+ordinary program.
+
 Included generic functions retain their runtime include dispatch. The checker binds the
 public template at each call and specializes every possible include variant before
 comparing their concrete signatures. Variants must declare matching type parameter

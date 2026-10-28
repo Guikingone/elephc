@@ -34,6 +34,7 @@ mod strict_php;
 mod testing;
 mod testing_command;
 mod testing_generic_functions;
+mod testing_generics;
 mod strict_php_source_guards;
 mod lfc;
 mod benchmarks;
