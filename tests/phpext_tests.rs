@@ -30,6 +30,8 @@ mod validation;
 mod fibers;
 #[path = "phpext/reentry.rs"]
 mod reentry;
+#[path = "phpext/review.rs"]
+mod review;
 
 struct Project(PathBuf);
 
@@ -80,10 +82,15 @@ impl Project {
 
     /// Compiles source with the real compiler binary and requires a loadable producer artifact.
     fn compile(&self, name: &str, source: &str) -> PathBuf {
+        self.compile_with_options(name, source, &["--heap-size=524288"])
+    }
+
+    /// Allows default-configuration regressions without changing the small functional-test heap.
+    fn compile_with_options(&self, name: &str, source: &str, options: &[&str]) -> PathBuf {
         let path = self.0.join(format!("{name}.php"));
         fs::write(&path, source).unwrap();
         let output = Command::new(compiler_binary())
-            .args(["--emit", "phpext", "--heap-size=524288"]).arg(&path).output().unwrap();
+            .args(["--emit", "phpext"]).args(options).arg(&path).output().unwrap();
         assert!(output.status.success(), "compiler failed:\n{}\n{}",
             String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
         let module = self.0.join(format!("{name}.so"));

@@ -19,7 +19,7 @@ function add(int $left, int $right): int
 ```
 
 ```sh
-elephc --emit phpext math.php
+elephc --emit phpext --heap-size=1048576 math.php
 php -n -d extension=./math.so -r 'echo add(right: 22, left: 20), "\n";'
 ```
 
@@ -60,7 +60,8 @@ strings and arrays are copied in each direction. Neither allocator frees the
 other runtime's memory, and changing a returned array cannot mutate an input.
 
 By-reference and variadic exports, objects, resources, callables, recursive
-arrays and references inside arrays are rejected. Nesting is limited to 64
+arrays and shared references inside arrays are rejected. Unshared reference
+wrappers left by a completed by-reference `foreach` are copied as values. Nesting is limited to 64
 arrays. An ordinary reference supplied to a by-value parameter is dereferenced
 and copied. Use the PHP `array` declaration for inputs; Elephc's specialized
 `array<T>` and `array<K,V>` input ABIs are not exposed by this mode.
@@ -77,14 +78,26 @@ state changes. Custom class construction is deferred.
 
 Each request owns a complete native state image, including the fixed heap,
 allocator and GC bookkeeping, globals, statics, scratch buffers and exception
-state. MINIT creates the immutable initial image; RINIT creates the request
-copy; RSHUTDOWN releases it; MSHUTDOWN releases module resources.
+state. MINIT saves initialized data; zero-initialized storage remains sparse in
+the module file. RINIT activates the request, and its snapshot is allocated on
+the first exported call. RSHUTDOWN releases it; MSHUTDOWN releases module resources.
 
 A module-local mutex serializes native execution while the adapter exchanges
 complete request images at stable addresses. This supports independent ZTS
 requests; native calls within one module do not execute in parallel. Snapshot
 copies add time and memory proportional to the native state region, including
 the configured heap. This is a correctness-oriented initial implementation.
+Choose `--heap-size` for the module's workload. The examples use 1 MiB. The
+compiler's general 128 MiB default produces a native state image of roughly
+383 MiB because scratch buffers and allocator metadata also scale with the heap.
+An unused request does not allocate that image, but each active request owns a
+snapshot and native calls exchange the complete configured image.
+
+Compiled `trigger_error`, error-handler registration, `error_reporting` and
+request introspection helpers currently lack a hosted capability policy and
+are rejected. Configure error reporting and handlers in the host PHP program.
+Native warnings, notices and deprecations retain their PHP severity and use
+the host's reporting mask. Host termination prevents further output callbacks.
 
 At output and warning callbacks, the adapter parks the active native image and
 releases the mutex. PHP then runs its output buffers or error handlers at the

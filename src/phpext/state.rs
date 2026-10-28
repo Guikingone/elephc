@@ -1,5 +1,5 @@
 //! Purpose:
-//! Places every native writable datum in one request snapshot region.
+//! Places every native writable datum in initialized and sparse zero-filled snapshot ranges.
 //!
 //! Called from:
 //! - The producer linker before assembling its combined user/runtime object.
@@ -10,7 +10,10 @@
 
 use crate::codegen_support::platform::{Platform, Target};
 
-/// Combines assembly units into a single, explicitly bounded writable state region.
+#[path = "zero_state.rs"]
+mod zero_state;
+
+/// Combines assembly units into bounded initialized and sparse zero-filled state ranges.
 pub fn combine(units: &[&str], target: Target) -> Result<String, String> {
     let section = match target.platform {
         Platform::Linux => ".section .elephc_state,\"aw\",@progbits",
@@ -19,11 +22,12 @@ pub fn combine(units: &[&str], target: Target) -> Result<String, String> {
     };
     let mut out = format!("{section}\n.p2align 4\n.globl {}\n{}:\n",
         target.extern_symbol("elephc_state_begin"), target.extern_symbol("elephc_state_begin"));
-    let mut commons = String::new();
+    let mut zeros = zero_state::ZeroState::default();
     for unit in units {
         // AArch64 user units rely on the assembler's default text section.
         out.push_str(".text\n");
         let mut in_state = false;
+        let mut in_bss = false;
         for line in unit.lines() {
             let trimmed = line.trim();
             if let Some(comm) = trimmed.strip_prefix(".comm ") {
@@ -39,15 +43,11 @@ pub fn combine(units: &[&str], target: Target) -> Result<String, String> {
                 if !bytes.is_power_of_two() {
                     return Err(format!("invalid native common alignment: {line}"));
                 }
-                let alternate = if target.platform == Platform::MacOS {
-                    format!(".alt_entry {}\n", fields[0])
-                } else { String::new() };
-                commons.push_str(&format!(".balign {bytes}\n.globl {symbol}\n{alternate}{symbol}:\n.zero {size}\n",
-                    symbol = fields[0], size = fields[1]));
+                zeros.allocate(fields[0], fields[1].parse().unwrap(), bytes)?;
             } else if matches!(trimmed, ".data" | ".bss") {
                 in_state = true;
-                out.push_str(section);
-                out.push('\n');
+                in_bss = trimmed == ".bss";
+                if !in_bss { out.push_str(section); out.push('\n'); }
             } else if trimmed.starts_with(".section ") && !trimmed.starts_with(".section .text")
                 && !trimmed.starts_with(".section .note.GNU-stack")
             {
@@ -55,7 +55,11 @@ pub fn combine(units: &[&str], target: Target) -> Result<String, String> {
             } else if trimmed == ".subsections_via_symbols" {
                 // Re-emitted once after grouping state labels into the initial region atom.
             } else {
-                if trimmed == ".text" || trimmed.starts_with(".section ") { in_state = false; }
+                if trimmed == ".text" || trimmed.starts_with(".section ") {
+                    in_state = false;
+                    in_bss = false;
+                }
+                if in_bss { zeros.bss_line(line, target)?; continue; }
                 if target.platform == Platform::MacOS && in_state && trimmed.ends_with(':') {
                     let symbol = trimmed.trim_end_matches(':');
                     if !symbol.starts_with('L') && !symbol.bytes().all(|b| b.is_ascii_digit()) {
@@ -69,11 +73,11 @@ pub fn combine(units: &[&str], target: Target) -> Result<String, String> {
     }
     out.push_str(section);
     out.push('\n');
-    out.push_str(&commons);
     let end = target.extern_symbol("elephc_state_end");
     if target.platform == Platform::MacOS { out.push_str(&format!(".alt_entry {end}\n")); }
     out.push_str(&format!(".p2align 4\n.globl {}\n{}:\n",
         target.extern_symbol("elephc_state_end"), target.extern_symbol("elephc_state_end")));
+    out.push_str(&zeros.render(target));
     if target.platform == Platform::MacOS { out.push_str(".subsections_via_symbols\n"); }
     if target.platform == Platform::Linux { out.push_str(".section .note.GNU-stack,\"\",@progbits\n"); }
     Ok(out)
@@ -90,16 +94,17 @@ mod tests {
         for target in [Target::new(Platform::Linux, Arch::X86_64),
             Target::new(Platform::Linux, Arch::AArch64), Target::new(Platform::MacOS, Arch::AArch64)] {
             let align = if target.platform == Platform::MacOS { 3 } else { 8 };
-            let source = format!(".text\nf:\n ret\n.comm _heap, 128, {align}\n.data\nx:\n.quad 7\n");
+            let source = format!(".text\nf:\n ret\n.comm _heap, 128, {align}\n.data\nx:\n.quad 7\n.bss\n.p2align 4\ny:\n.zero 16\n");
             let result = combine(&[&source], target).unwrap();
             assert!(!result.contains(".comm "));
-            assert!(result.contains("_heap:\n.zero 128"));
-            assert!(result.contains(".balign 8\n.globl _heap\n"));
+            assert!(result.contains(&format!(".set _heap,{}+0\n", target.extern_symbol("elephc_state_zero_begin"))));
+            assert!(result.contains(&format!(".set y,{}+128\n", target.extern_symbol("elephc_state_zero_begin"))));
             if target.platform == Platform::MacOS {
-                assert!(result.contains(".alt_entry _heap\n_heap:"));
+                assert!(result.contains(".alt_entry _heap\n"));
+                assert!(result.contains(".zerofill __DATA,__elephc_zero,"));
                 assert!(result.contains(".alt_entry x\nx:"));
                 assert!(result.ends_with(".subsections_via_symbols\n"));
-            }
+            } else { assert!(result.contains(".section .elephc_zero,\"aw\",@nobits")); }
             assert!(result.contains("elephc_state_begin:"));
             assert!(result.contains("elephc_state_end:"));
             assert!(!result.contains("\n.data\n"));

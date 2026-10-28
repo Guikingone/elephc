@@ -129,8 +129,11 @@ static HashTable *ep_array(ep_call *call, const HashTable *source, bool host, un
         }
         if (Z_TYPE_P(value) == IS_UNDEF) { continue; }
         if (Z_TYPE_P(value) == IS_REFERENCE) {
-            call->error = "PHP extension arrays cannot contain references";
-            return NULL;
+            if (host && Z_REFCOUNT_P(value) == 1) { value = Z_REFVAL_P(value); }
+            else {
+                call->error = "PHP extension arrays cannot contain shared references";
+                return NULL;
+            }
         }
         if (dest >= count) {
             call->error = "Invalid PHP extension transport array";

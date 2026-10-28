@@ -369,7 +369,7 @@ elephc app.php --with-eval
 elephc --emit cdylib module.php
 
 # Build a module loaded by real PHP 8.5, using its matching development SDK
-ELEPHC_PHPEXT_PHP_CONFIG=/path/to/php-config elephc --emit phpext module.php
+ELEPHC_PHPEXT_PHP_CONFIG=/path/to/php-config elephc --emit phpext --heap-size=1048576 module.php
 php -n -d extension=./module.so app.php
 
 # Pin the PHP compatibility profile and silence non-error output

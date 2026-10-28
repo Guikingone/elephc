@@ -19,7 +19,7 @@ use crate::codegen::callable_reachability::CallableReachabilityAnalysis;
 use crate::errors::CompileError;
 use crate::ir::function_variants::{collect_dispatch_groups, resolve_variant_callee_name};
 use crate::ir::{
-    Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId, Terminator, ValueDef, ValueId,
+    CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::names::php_symbol_key;
 use crate::types::PhpType;
@@ -103,6 +103,12 @@ fn validate_call_graph(
             let callable_reachability = CallableReachabilityAnalysis::new(module, function);
             for instruction in &function.instructions {
                 if phpext {
+                    // Handler registration and fragment-based diagnostics cannot bypass the host policy.
+                    if instruction.op == Op::CoreBuiltin && !matches!(instruction.immediate.as_ref(),
+                        Some(Immediate::I64(selector)) if *selector == CoreBuiltinOp::DiagnosticCallerLine.as_i64()) {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches a core builtin through {} with no audited request-local PHP extension lifecycle", export.name, path.join(" -> "))));
+                    }
                     if matches!(instruction.op, Op::PromoteLocalRefCell | Op::AliasLocalRefCell
                         | Op::LoadArrayElemRefCell | Op::LoadArrayElemRefCellExisting
                         | Op::BindRefCellPtr | Op::AdoptRefCellPtr | Op::AcquireRefCell) {

@@ -11,6 +11,28 @@
 
 use super::*;
 
+/// Handler registration and direct diagnostic emitters cannot bypass hosted capability checks.
+#[test]
+fn phpext_validation_rejects_unaudited_core_builtins() {
+    let project = Project::new();
+    let source = project.0.join("core.php");
+    for body in ["trigger_error('boom', E_USER_WARNING);", "error_reporting(0);",
+        "debug_print_backtrace();", "set_error_handler(function () { file_put_contents('unsafe', 'value'); return true; });"] {
+        fs::write(&source, format!("<?php #[Export] function php_core(): void {{ {body} }}")).unwrap();
+        for mode in [Some("--check"), Some("--emit-ir"), None] {
+            let mut command = Command::new(compiler_binary());
+            command.args(["--emit", "phpext"]);
+            if let Some(mode) = mode { command.arg(mode); }
+            let output = command.arg(&source)
+                .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{body}, {mode:?} accepted an unaudited operation");
+            assert!(diagnostic.contains("no audited request-local PHP extension lifecycle"), "{body}, {mode:?}: {diagnostic}");
+            assert!(!diagnostic.contains("query php-config"), "{body}, {mode:?}: {diagnostic}");
+        }
+    }
+}
+
 /// Requires all producer terminal modes to reject user-class construction consistently.
 #[test]
 fn phpext_validation_rejects_user_classes_in_eir() {

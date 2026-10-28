@@ -282,11 +282,13 @@ limits, compiled globals/statics, and mutable builtin caches/settings.
 Immutable code, literals, and metadata can remain shared.
 
 The initial producer uses complete request snapshots and a module-local mutex.
-All native writable `.data`, `.bss`, and `.comm` storage is emitted into one
-explicitly bounded section. RINIT copies the immutable initial image into a
-request-owned snapshot. Before each native call, the adapter acquires the mutex
-and restores that snapshot at the section's stable addresses; on return it saves
-the entire image and restores the initial template before releasing the mutex.
+All native writable `.data`, `.bss`, and `.comm` storage is emitted into two
+explicitly bounded ranges: initialized data and sparse zero-filled storage.
+MINIT retains only initialized bytes. RINIT activates an empty request context;
+the first exported call allocates its snapshot lazily. Before each native call,
+the adapter acquires the mutex and restores both ranges at stable addresses;
+on return it saves the entire image, restores initialized data and clears the
+zero range before releasing the mutex.
 This preserves internal pointers, including pointers into the fixed native heap,
 without rewriting ABI-helper or raw assembly symbol accesses. The compiler
 rejects storage sections it has not classified. All native state is covered,

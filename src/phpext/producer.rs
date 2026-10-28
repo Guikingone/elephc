@@ -14,6 +14,8 @@ use super::signature::{default_text, parameter_type};
 /// Renders a complete host adapter using one fixed handler for each exported function.
 pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Result<String, String> {
     let mut registration = super::render_registration(name, version)?;
+    // Select the original MINIT before helper functions add their own success returns.
+    registration = registration.replacen("    return SUCCESS;", "    return ep_module_startup();", 1);
     let ident = format!("elephc_generated_{name}");
     let mut entries = String::new();
     let mut handlers = String::new();
@@ -81,12 +83,11 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
                 }
                 _ => {
                     handlers.push_str(&format!("    zval *arg_{i} = &{value};\n"));
-                    parse.push_str(&format!("        Z_PARAM_ZVAL(arg_{i})\n"));
+                    let array = base.is_php_array() || matches!(base, PhpType::Array(_) | PhpType::AssocArray { .. });
+                    if array { parse.push_str(&format!("        Z_PARAM_ARRAY{suffix}(arg_{i})\n")); }
+                    else { parse.push_str(&format!("        Z_PARAM_ZVAL(arg_{i})\n")); }
                     normalize.push_str(&format!("    ZVAL_DEREF(arg_{i});\n"));
-                    if base.is_php_array() || matches!(base, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                        let null = if nullable { format!(" && Z_TYPE_P(arg_{i}) != IS_NULL") } else { String::new() };
-                        normalize.push_str(&format!("    if (Z_TYPE_P(arg_{i}) != IS_ARRAY{null}) {{ zend_argument_type_error({}, \"must be of type array{}\"); return; }}\n", i + 1, if nullable { "|null" } else { "" }));
-                    } else if base == &PhpType::False {
+                    if base == &PhpType::False {
                         let null = if nullable { format!(" && Z_TYPE_P(arg_{i}) != IS_NULL") } else { String::new() };
                         normalize.push_str(&format!("    if (Z_TYPE_P(arg_{i}) != IS_FALSE{null}) {{ zend_argument_type_error({}, \"must be false{}\"); return; }}\n", i + 1, if nullable { "|null" } else { "" }));
                     } else if base == &PhpType::Void {
@@ -101,14 +102,13 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
     }
     registration = registration.replace("static const zend_function_entry", &format!("{}\n{}\n{handlers}\nstatic const zend_function_entry", include_str!("transport.c"), include_str!("activation.c")));
     registration = registration.replace("    ZEND_FE_END", &format!("{entries}    ZEND_FE_END"));
-    registration = registration.replacen("    return SUCCESS;", "    ep_state_size = (uintptr_t)elephc_state_end - (uintptr_t)elephc_state_begin;\n    ep_template = malloc(ep_state_size);\n    if (!ep_template) { return FAILURE; }\n    memcpy(ep_template, elephc_state_begin, ep_state_size);\n    return SUCCESS;", 1);
     // Registration metadata was validated before inserting the C templates.
     registration = registration.replace("@IDENT@", &ident);
     let shutdown = format!("static PHP_MSHUTDOWN_FUNCTION({ident})\n{{\n    (void)type;\n    (void)module_number;\n");
     registration = registration.replace(&shutdown, &format!("{shutdown}    free(ep_template);\n    ep_template = NULL;\n"));
-    registration = registration.replace("    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    return SUCCESS;", "    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    EP_GLOBAL(active) = NULL;\n    EP_GLOBAL(snapshot) = malloc(ep_state_size);\n    if (!EP_GLOBAL(snapshot)) { return FAILURE; }\n    memcpy(EP_GLOBAL(snapshot), ep_template, ep_state_size);\n    return SUCCESS;");
+    registration = registration.replace("    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    return SUCCESS;", "    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    return ep_request_startup();");
     let rshutdown = format!("static PHP_RSHUTDOWN_FUNCTION({ident})\n{{\n    (void)type;\n    (void)module_number;\n");
-    registration = registration.replace(&rshutdown, &format!("{rshutdown}    free(EP_GLOBAL(snapshot));\n    EP_GLOBAL(snapshot) = NULL;\n    EP_GLOBAL(active) = NULL;\n"));
+    registration = registration.replace(&rshutdown, &format!("{rshutdown}    free(EP_GLOBAL(snapshot));\n    EP_GLOBAL(snapshot) = NULL;\n    EP_GLOBAL(active) = NULL;\n    EP_GLOBAL(initialized) = false;\n"));
     registration = registration.replace("    STANDARD_MODULE_PROPERTIES", &format!("    ZEND_MODULE_GLOBALS({ident}),\n    PHP_GINIT({ident}),\n    PHP_GSHUTDOWN({ident}),\n    NULL,\n    STANDARD_MODULE_PROPERTIES_EX"));
     Ok(registration)
 }

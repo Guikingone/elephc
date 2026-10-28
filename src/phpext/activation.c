@@ -3,6 +3,7 @@
 #include <Zend/zend_exceptions.h>
 
 extern unsigned char elephc_state_begin[], elephc_state_end[];
+extern unsigned char elephc_state_zero_begin[], elephc_state_zero_end[];
 extern const uintptr_t ep_class_name_count __asm__("_class_name_count");
 extern const uintptr_t ep_class_name_entries[] __asm__("_class_name_entries");
 extern uintptr_t ep_native_stack_limit __asm__("_stack_limit");
@@ -12,7 +13,40 @@ typedef void (*ep_native_function)(const zval *const *);
 static pthread_mutex_t ep_native_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned char *ep_template;
 static size_t ep_state_size;
+static size_t ep_data_size, ep_zero_size;
 static ep_call *ep_current;
+
+/* Initialized and zero-filled native storage need not be adjacent in the loaded module. */
+static void ep_state_save(unsigned char *image)
+{
+    memcpy(image, elephc_state_begin, ep_data_size);
+    memcpy(image + ep_data_size, elephc_state_zero_begin, ep_zero_size);
+}
+
+static void ep_state_restore(const unsigned char *image)
+{
+    memcpy(elephc_state_begin, image, ep_data_size);
+    memcpy(elephc_state_zero_begin, image + ep_data_size, ep_zero_size);
+}
+
+/* The initial zero region is implicit, so MINIT stores only initialized bytes. */
+static void ep_state_reset(void)
+{
+    memcpy(elephc_state_begin, ep_template, ep_data_size);
+    memset(elephc_state_zero_begin, 0, ep_zero_size);
+}
+
+static int ep_module_startup(void)
+{
+    ep_data_size = (uintptr_t)elephc_state_end - (uintptr_t)elephc_state_begin;
+    ep_zero_size = (uintptr_t)elephc_state_zero_end - (uintptr_t)elephc_state_zero_begin;
+    if (ep_zero_size > SIZE_MAX - ep_data_size) { return FAILURE; }
+    ep_state_size = ep_data_size + ep_zero_size;
+    ep_template = malloc(ep_data_size ? ep_data_size : 1);
+    if (!ep_template) { return FAILURE; }
+    memcpy(ep_template, elephc_state_begin, ep_data_size);
+    return SUCCESS;
+}
 
 /* Zend knows the current thread or Fiber stack, unlike process RLIMIT_STACK. */
 static uintptr_t ep_stack_floor(void)
@@ -44,26 +78,43 @@ uintptr_t elephc_php_stack_floor(void)
 ZEND_BEGIN_MODULE_GLOBALS(@IDENT@)
     unsigned char *snapshot;
     ep_call *active;
+    bool initialized;
 ZEND_END_MODULE_GLOBALS(@IDENT@)
 ZEND_DECLARE_MODULE_GLOBALS(@IDENT@)
 #define EP_GLOBAL(member) ZEND_MODULE_GLOBALS_ACCESSOR(@IDENT@, member)
+
+/* Requests that never invoke an export do not allocate or touch the native heap. */
+static int ep_request_startup(void)
+{
+    free(EP_GLOBAL(snapshot));
+    EP_GLOBAL(snapshot) = NULL;
+    EP_GLOBAL(active) = NULL;
+    EP_GLOBAL(initialized) = true;
+    return SUCCESS;
+}
 
 /* Native warning lines become length-aware messages for the host error handler. */
 static void ep_issue_warning(ep_call *call)
 {
     const char *message = call->output;
     size_t length = call->output_len;
-    if (length >= 9 && memcmp(message, "Warning: ", 9) == 0) { message += 9; length -= 9; }
+    int level = E_WARNING;
+    size_t prefix = 0;
+    if (length >= 9 && memcmp(message, "Warning: ", 9) == 0) { prefix = 9; }
+    else if (length >= 8 && memcmp(message, "Notice: ", 8) == 0) { prefix = 8; level = E_NOTICE; }
+    else if (length >= 12 && memcmp(message, "Deprecated: ", 12) == 0) { prefix = 12; level = E_DEPRECATED; }
+    message += prefix;
+    length -= prefix;
     while (length && message[length - 1] == '\n') { length--; }
     call->warning = zend_string_init(message, length, false);
-    zend_error_zstr(E_WARNING, call->warning);
+    zend_error_zstr(level, call->warning);
 }
 
 /* Park the native image around a guarded Zend callback, including nested module calls. */
 static int ep_deliver(const char *bytes, size_t length, bool warning)
 {
     ep_call *call = ep_current;
-    if (call->error) { return 1; }
+    if (call->error || call->host_bailout || (EG(exception) && zend_is_unwind_exit(EG(exception)))) { return 1; }
     if (!length) { return 0; }
     if (!call->checkpoint) {
         call->checkpoint = ep_alloc(call, ep_state_size);
@@ -78,8 +129,8 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     }
     memcpy(call->output, bytes, length);
     call->output_len = length;
-    memcpy(call->snapshot, elephc_state_begin, ep_state_size);
-    memcpy(elephc_state_begin, ep_template, ep_state_size);
+    ep_state_save(call->snapshot);
+    ep_state_reset();
     ep_current = NULL;
     pthread_mutex_unlock(&ep_native_lock);
     zend_try {
@@ -95,7 +146,7 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     call->host_exception = EG(exception) != NULL;
     /* The module-local normal mutex remains initialized for every active request. */
     pthread_mutex_lock(&ep_native_lock);
-    memcpy(elephc_state_begin, call->snapshot, ep_state_size);
+    ep_state_restore(call->snapshot);
     ep_native_stack_limit = ep_native_stack_limit_main = call->stack_floor;
     ep_current = call;
     return call->host_bailout || call->host_exception;
@@ -165,7 +216,7 @@ static zend_class_entry *ep_exception_class(ep_call *call)
 static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function, zval *values, size_t count)
 {
     (void)execute_data;
-    if (!EP_GLOBAL(snapshot)) {
+    if (!EP_GLOBAL(initialized)) {
         zend_throw_error(NULL, "elephc PHP extension request is not initialized");
         return;
     }
@@ -174,6 +225,11 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     if (EP_GLOBAL(active) && EP_GLOBAL(active)->fiber_context != EG(current_fiber_context)) {
         zend_throw_error(NULL, "elephc PHP extension has an active native call on another Fiber");
         return;
+    }
+    if (!EP_GLOBAL(snapshot)) {
+        EP_GLOBAL(snapshot) = calloc(1, ep_state_size);
+        if (!EP_GLOBAL(snapshot)) { zend_throw_error(NULL, "PHP extension snapshot allocation failed"); return; }
+        memcpy(EP_GLOBAL(snapshot), ep_template, ep_data_size);
     }
     ep_call *call = calloc(1, sizeof(ep_call));
     if (!call) { zend_throw_error(NULL, "PHP extension activation allocation failed"); return; }
@@ -193,7 +249,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
         if (locked) {
             call->error = "PHP extension runtime lock failed";
         } else {
-            memcpy(elephc_state_begin, EP_GLOBAL(snapshot), ep_state_size);
+            ep_state_restore(EP_GLOBAL(snapshot));
             ep_call *parent = EP_GLOBAL(active);
             EP_GLOBAL(active) = call;
             ep_current = call;
@@ -203,9 +259,9 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
             EP_GLOBAL(active) = parent;
             /* Infrastructure failures can leave partial native imports or results. Roll back
              * the entire image; ordinary PHP exceptions keep their completed state changes. */
-            if (!call->error) { memcpy(call->snapshot, elephc_state_begin, ep_state_size); }
+            if (!call->error) { ep_state_save(call->snapshot); }
             else if (call->checkpoint) { memcpy(call->snapshot, call->checkpoint, ep_state_size); }
-            memcpy(elephc_state_begin, ep_template, ep_state_size);
+            ep_state_reset();
             pthread_mutex_unlock(&ep_native_lock);
         }
     }
@@ -242,6 +298,7 @@ static PHP_GINIT_FUNCTION(@IDENT@)
 {
     @IDENT@_globals->snapshot = NULL;
     @IDENT@_globals->active = NULL;
+    @IDENT@_globals->initialized = false;
 }
 
 /* Also covers partial request startup that never reaches this module's RSHUTDOWN. */
@@ -250,4 +307,5 @@ static PHP_GSHUTDOWN_FUNCTION(@IDENT@)
     free(@IDENT@_globals->snapshot);
     @IDENT@_globals->snapshot = NULL;
     @IDENT@_globals->active = NULL;
+    @IDENT@_globals->initialized = false;
 }
