@@ -12,24 +12,27 @@
 //! - The helper returns one Mixed cell. A replacement string is tag 1. An invalid
 //!   pattern is tag 8 null: unknown modifiers, a missing ending delimiter, a
 //!   compile failure, and the removed `/e` modifier. `/e` is bit 30 from
-//!   `__rt_preg_strip`. Valid modifiers this runtime does not map are not null.
+//!   `__rt_preg_strip`. Space, LF, and CR in the modifier suffix are ignored.
+//!   `/x` sets bit 13 (`0x2000`); the PCRE2 shim compiles that pattern in
+//!   extended mode. Other valid modifiers this runtime does not map are not null.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Branches to `next_label` when `reg` is a modifier the pre-scan must not reject.
 ///
 /// Implemented modifiers and valid PHP modifiers this runtime leaves unmapped
-/// continue the scan. The removed `e` also continues: `__rt_preg_strip` sets
-/// bit 30, and the caller tests that bit immediately after the strip. Any other
-/// byte falls through so the caller can return null.
+/// continue the scan. Space, LF, and CR continue too: PHP ignores those bytes
+/// in the modifier suffix. The removed `e` also continues: `__rt_preg_strip`
+/// sets bit 30, and the caller tests that bit immediately after the strip. Any
+/// other byte falls through so the caller can return null.
 fn emit_branch_if_callback_modifier_continues(
     emitter: &mut Emitter,
     reg: &str,
     next_label: &str,
 ) {
-    // i m s u U x A D S X J n, plus e (bit 30 after the strip).
+    // space, LF, CR, then i m s u U x A D S X J n, plus e (bit 30 after the strip).
     for byte in [
-        105, 109, 115, 117, 85, 120, 65, 68, 83, 88, 74, 110, 101,
+        32, 10, 13, 105, 109, 115, 117, 85, 120, 65, 68, 83, 88, 74, 110, 101,
     ] {
         match emitter.target.arch {
             Arch::AArch64 => {

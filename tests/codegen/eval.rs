@@ -8096,9 +8096,9 @@ return ($invalid === null ? "1" : "0")
 
 /// Verifies eval returns null for unknown modifiers and a missing delimiter.
 ///
-/// A valid modifier this runtime does not implement (`x`) stays the explicit
-/// eval runtime error instead of null. A missing callback is a TypeError even
-/// when the pattern is also invalid, because the callback is checked first.
+/// `/x` is extended mode, so `"a b"` is unchanged and `"ab"` is replaced. A
+/// missing callback is a TypeError even when the pattern is also invalid,
+/// because the callback is checked first.
 #[test]
 fn test_eval_preg_replace_callback_invalid_patterns_and_callback_order() {
     let invalid = compile_and_run_with_regex(
@@ -8136,22 +8136,37 @@ echo eval('try {
         "TypeError:preg_replace_callback(): Argument #2 ($callback) must be a valid callback, function \"missing_cb\" not found or invalid function name"
     );
 
-    let extended = compile_and_run_capture_with_regex(
+    let extended = compile_and_run_with_regex(
         r#"<?php
 echo eval('function eval_extended_repl($matches) { return "X"; }
-return preg_replace_callback("/a b/x", "eval_extended_repl", "a b");');
+$spaced = preg_replace_callback("/a b/x", "eval_extended_repl", "a b");
+$compact = preg_replace_callback("/a b/x", "eval_extended_repl", "ab");
+$class = preg_replace_callback("/[a b]/x", "eval_extended_repl", " ");
+return $spaced . ":" . $compact . ":" . $class;
+');
 "#,
     );
-    assert!(
-        !extended.success,
-        "unmapped modifier returned instead of failing: stdout={:?} stderr={}",
-        extended.stdout, extended.stderr
+    assert_eq!(extended, "a b:X:X");
+}
+
+/// Verifies eval ignores space, LF, and CR in the modifier suffix.
+///
+/// A tab stays an invalid modifier and returns null. The same bytes are covered
+/// by the compiled regression.
+#[test]
+fn test_eval_preg_replace_callback_modifier_whitespace_is_ignored() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_ws_repl($matches) { return "X"; }
+$nl = preg_replace_callback("/a/\n", "eval_ws_repl", "a");
+$sp = preg_replace_callback("/a/ i", "eval_ws_repl", "A");
+$cr = preg_replace_callback("/a/\r", "eval_ws_repl", "a");
+$tab = preg_replace_callback("/a/\t", "eval_ws_repl", "a");
+return $nl . ":" . $sp . ":" . $cr . ":" . (is_null($tab) ? "n" : "s");
+');
+"#,
     );
-    assert!(
-        extended.stderr.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {}",
-        extended.stderr
-    );
+    assert_eq!(out, "X:X:X:n");
 }
 
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.

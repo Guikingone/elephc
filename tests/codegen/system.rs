@@ -2246,8 +2246,8 @@ echo clean("banana");
 ///
 /// `/a/z` is an unknown modifier, `"/abc"` has no ending delimiter, and `/a/e`
 /// is the removed eval modifier. elephc does not emit PHP's preg warning text.
-/// `/a b/x` stays a replacement: `x` is a real modifier this runtime does not map,
-/// so the callback still runs on the literal pattern.
+/// `/a b/x` is extended mode: the pattern is `ab`, so subject `"a b"` is unchanged
+/// and subject `"ab"` is replaced. A space inside a character class still matches.
 #[test]
 fn test_preg_replace_callback_invalid_patterns_return_null() {
     let out = compile_and_run(
@@ -2261,14 +2261,40 @@ $unknown = @preg_replace_callback("/a/z", $callback, "a");
 $missing = @preg_replace_callback("/abc", $callback, "abc");
 $eval = @preg_replace_callback("/a/e", $callback, "a");
 $bare_e = @preg_replace_callback("/abce", $callback, "a");
-$extended = preg_replace_callback("/a b/x", $callback, "a b");
+$spaced = preg_replace_callback("/a b/x", $callback, "a b");
+$compact = preg_replace_callback("/a b/x", $callback, "ab");
+$class = preg_replace_callback("/[a b]/x", $callback, " ");
 echo (is_null($unknown) ? "n" : "s"), (is_string($unknown) ? "s" : "n"), "|";
 echo (is_null($missing) ? "n" : "s"), (is_string($missing) ? "s" : "n"), "|";
 echo (is_null($eval) ? "n" : "s"), (is_null($bare_e) ? "n" : "s"), "|";
-echo $extended, "|", $calls;
+echo $spaced, "|", $compact, "|", $class, "|", $calls;
 "#,
     );
-    assert_eq!(out, "nn|nn|nn|X|1");
+    assert_eq!(out, "nn|nn|nn|a b|X|X|2");
+}
+
+/// Verifies space, LF, and CR in the modifier suffix are ignored, matching PHP.
+///
+/// A tab is not one of those bytes, so PHP treats it as an unknown modifier and
+/// the call returns null. The callback still runs for the ignored whitespace.
+#[test]
+fn test_preg_replace_callback_modifier_whitespace_is_ignored() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "X";
+};
+$nl = preg_replace_callback("/a/\n", $callback, "a");
+$sp = preg_replace_callback("/a/ i", $callback, "A");
+$cr = preg_replace_callback("/a/\r", $callback, "a");
+$tab = @preg_replace_callback("/a/\t", $callback, "a");
+echo $nl, "|", $sp, "|", $cr, "|";
+echo (is_null($tab) ? "n" : "s"), "|", $calls;
+"#,
+    );
+    assert_eq!(out, "X|X|X|n|3");
 }
 
 /// Verifies a small callback replacement allocates its output block with the

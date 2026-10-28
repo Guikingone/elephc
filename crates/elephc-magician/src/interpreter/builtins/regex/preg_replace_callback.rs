@@ -8,9 +8,11 @@
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //!   callback invocation for `preg_replace_callback()`.
 //! - An invalid pattern returns PHP null. A valid PHP modifier this runtime does
-//!   not implement stays an explicit error. The callback is validated before the
-//!   pattern, so a missing callback is a TypeError even when the pattern is bad.
-//!   A successful replacement, including the empty string, stays a string.
+//!   not implement stays an explicit error. Space, LF, and CR in the modifier
+//!   suffix are ignored, and `x` is extended mode. The callback is validated
+//!   before the pattern, so a missing callback is a TypeError even when the
+//!   pattern is bad. A successful replacement, including the empty string, stays
+//!   a string.
 
 use super::super::super::*;
 use super::super::*;

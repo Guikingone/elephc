@@ -8,6 +8,7 @@
 //! - Only eval-supported modifiers are accepted. Other preg builtins report
 //!   malformed patterns as a runtime fatal. `preg_replace_callback()` separates
 //!   invalid patterns, which return null, from valid modifiers it does not map.
+//!   Space, LF, and CR in the modifier suffix are ignored. `x` is extended mode.
 
 use super::super::super::*;
 
@@ -102,7 +103,7 @@ pub(in crate::interpreter) enum EvalPregCallbackPattern {
     Compiled(Regex),
     /// PHP rejects the pattern and `preg_replace_callback()` returns null.
     Invalid,
-    /// A real PHP modifier (`x`, `A`, `D`, `S`, `X`, `J`, `n`) that eval does not implement.
+    /// A real PHP modifier (`A`, `D`, `S`, `X`, `J`, `n`) that eval does not implement.
     UnsupportedModifier,
 }
 
@@ -154,9 +155,10 @@ fn eval_preg_callback_pattern_parts(
 
 /// Parses callback modifiers.
 ///
-/// Implemented modifiers build the flag word. Valid PHP modifiers this runtime
-/// does not map (`x`, `A`, `D`, `S`, `X`, `J`, and PHP 8.4 `n`) are an explicit
-/// error. Any other byte, including the removed `e`, is an invalid pattern.
+/// Implemented modifiers build the flag word. Space, LF, and CR are ignored,
+/// matching PHP. Valid PHP modifiers this runtime does not map (`A`, `D`, `S`,
+/// `X`, `J`, and PHP 8.4 `n`) are an explicit error. Any other byte, including
+/// the removed `e`, is an invalid pattern.
 fn eval_preg_callback_modifiers(
     modifiers: &[u8],
 ) -> Result<EvalPregModifiers, EvalPregCallbackPattern> {
@@ -169,7 +171,9 @@ fn eval_preg_callback_modifiers(
             b's' => parsed.dot_matches_new_line = true,
             b'U' => parsed.swap_greed = true,
             b'u' => parsed.unicode = true,
-            b'x' | b'A' | b'D' | b'S' | b'X' | b'J' | b'n' => unsupported = true,
+            b'x' => parsed.extended = true,
+            b' ' | b'\n' | b'\r' => {}
+            b'A' | b'D' | b'S' | b'X' | b'J' | b'n' => unsupported = true,
             _ => return Err(EvalPregCallbackPattern::Invalid),
         }
     }
@@ -180,6 +184,9 @@ fn eval_preg_callback_modifiers(
 }
 
 /// Parses eval-supported PHP regex modifiers.
+///
+/// Space, LF, and CR are ignored. `x` requests extended mode. Any other byte,
+/// including a valid modifier this runtime does not map, is a runtime fatal.
 pub(in crate::interpreter) fn eval_preg_modifiers(
     modifiers: &[u8],
 ) -> Result<EvalPregModifiers, EvalStatus> {
@@ -191,6 +198,8 @@ pub(in crate::interpreter) fn eval_preg_modifiers(
             b's' => parsed.dot_matches_new_line = true,
             b'U' => parsed.swap_greed = true,
             b'u' => parsed.unicode = true,
+            b'x' => parsed.extended = true,
+            b' ' | b'\n' | b'\r' => {}
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }

@@ -2,12 +2,15 @@
 #include <stddef.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 #include <pcre2posix.h>
 
 /* Private continuation flag; PCRE2 10.47 handles UTF-8, CRLF and empty retries. */
 #define ELEPHC_PCRE2_GLOBAL_NEXT (1u << 16)
+/* Private compile flag. pcre2posix has no PCRE2_EXTENDED bit (REG_EXTENDED is 0). */
+#define ELEPHC_PCRE2_EXTENDED 0x2000
 
 typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
@@ -37,7 +40,29 @@ int32_t elephc_pcre2_v1_compile(
     if (handle == NULL) {
         return (int32_t)REG_ESPACE;
     }
-    result = pcre2_regcomp(&handle->regex, pattern_z, (int)cflags);
+    if ((cflags & ELEPHC_PCRE2_EXTENDED) != 0) {
+        size_t length = strlen(pattern_z);
+        char *extended;
+        cflags &= ~(uint32_t)ELEPHC_PCRE2_EXTENDED;
+        if (length > SIZE_MAX - 5) {
+            free(handle);
+            return (int32_t)REG_ESPACE;
+        }
+        extended = (char *)malloc(length + 5);
+        if (extended == NULL) {
+            free(handle);
+            return (int32_t)REG_ESPACE;
+        }
+        /* PHP's /x is PCRE2_EXTENDED. A leading (?x) is the same mode, including
+         * character classes, escapes, and # comments, and can still be turned off
+         * by a later (?-x). */
+        memcpy(extended, "(?x)", 4);
+        memcpy(extended + 4, pattern_z, length + 1);
+        result = pcre2_regcomp(&handle->regex, extended, (int)cflags);
+        free(extended);
+    } else {
+        result = pcre2_regcomp(&handle->regex, pattern_z, (int)cflags);
+    }
     if (result != 0) {
         free(handle);
         return (int32_t)result;

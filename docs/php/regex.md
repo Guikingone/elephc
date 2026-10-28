@@ -111,8 +111,9 @@ to PCRE2 wrapper flags:
 | `s` | Dotall; `.` can match newlines |
 | `u` | UTF-8 and Unicode-property matching |
 | `U` | Ungreedy matching |
+| `x` | Extended mode: unescaped whitespace and `#` comments in the pattern are ignored; whitespace inside a character class still matches |
 
-Other trailing modifiers are currently not mapped to PCRE2 flags.
+Space, newline, and carriage return in the modifier suffix are ignored. Other trailing modifiers are currently not mapped to PCRE2 flags.
 
 ## Captures and replacements
 
