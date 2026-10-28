@@ -77,6 +77,25 @@ container, sparse graph and memory cases are being prepared with target-matched
 bridge libraries. A new full-work review remains pending. No failed CI run has been
 retried as an infrastructure incident, and queue admission has not been attempted.
 
+## Apple report-entry assembly correction
+
+Claude round14 (`2c0c53ea-64dd-493d-890e-8d76879224da`) returned clean on
+`e22e3b9d1c`, with179 unchanged reviewed source/test/API-doc files. Exact-head CI
+then passed every Linux job, including all four web shards, and all10 PDO live
+jobs. Apple iOS link jobs exposed a gap in the debug-info guard check: it verified
+emitted text without assembling that report subgraph. A raw conditional transfer
+to the global `__rt_debuginfo_fatal` entry is rejected by Mach-O dead stripping.
+The logs for XML, curl and fileinfo, on device and Simulator, show the same error.
+
+The guard now uses the existing target-aware wide equality helper: a local inverted
+condition followed by an unconditional cross-entry transfer. A real report assembly
+regression failed on the old source (queue `4ee3f0a5`) and passes with the correction
+(queue `5034be47`). It covers all five targets, direct/PIC references, dead stripping
+and executable/library boundaries,40 combinations. The warning-free build, the
+existing all-target marker ordering check and both native fatal/error controls pass.
+Another clean full-work review and new exact-head CI remain required before queue
+admission. No failed run was retried as a transient infrastructure problem.
+
 ## Initial implementation delivery, before PR publication, 2026-10-28
 
 Implementation, focused validation, API documentation and the portable example are

@@ -488,7 +488,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_debuginfo_report_value_ready");           // keep the existing null fallback for an absent thrown value
     emitter.instruction("ldr x9, [x9]");                                        // inspect only the class word of the private eight-byte marker
     emitter.instruction("cmn x9, #3");                                          // coroutine cancellation is not a PHP Throwable
-    emitter.instruction("b.eq __rt_debuginfo_fatal");                           // preserve PHP's fatal without reading nonexistent Throwable fields
+    abi::emit_branch_if_equal_wide(emitter, "__rt_debuginfo_fatal");
     emitter.label("__rt_debuginfo_report_value_ready");
     emitter.instruction("mov x10, #1");                                         // select the `Warning: Uncaught ...` + fatal report flavour
     abi::emit_store_reg_to_symbol(emitter, "x10", "_uncaught_report_mode", 0);
@@ -901,6 +901,9 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
 }
 
 #[cfg(test)]
+mod assembly_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
@@ -919,7 +922,7 @@ mod tests {
                 let entry = &assembly[start..];
                 let pre_report = entry.find("__rt_debuginfo_pre_report").unwrap();
                 let (marker, fatal, report) = if target.arch == Arch::AArch64 {
-                    ("cmn x9, #3", "b.eq __rt_debuginfo_fatal", "b __rt_report_uncaught_exception")
+                    ("cmn x9, #3", "b __rt_debuginfo_fatal", "b __rt_report_uncaught_exception")
                 } else {
                     ("cmp QWORD PTR [r10], -3", "je __rt_debuginfo_fatal", "jmp __rt_report_uncaught_exception")
                 };
