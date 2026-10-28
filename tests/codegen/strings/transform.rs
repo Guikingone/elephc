@@ -986,3 +986,44 @@ echo strrev($s), "|", strrev("a"), "|", strrev(""), "|",
     );
     assert_eq!(out, "qponmlkjihgfedcba|a||64|x|120\n");
 }
+
+/// Length-only md5/base64 observations fold to their exact encoded lengths while preserving
+/// operand evaluation, the binary md5 form, and heap ownership.
+#[test]
+fn test_strlen_md5_and_base64_lengths_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = str_repeat("abc", 40);
+echo strlen(md5($s)), '|', strlen(base64_encode($s)), '|';
+foreach ([0, 1, 2, 3, 4, 5, 119, 120, 121] as $n) {
+    $t = str_repeat("a", $n);
+    echo strlen(base64_encode($t)), ',';
+}
+echo '|', strlen(md5('abc', true)), '|';
+$c = 0;
+function f() { global $c; $c++; return 'abc'; }
+echo strlen(md5(f())), '|', $c, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "32|160|0,4,4,4,8,8,160,160,164,|16|32|1\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Disabling EIR optimization keeps the real md5/base64 calls and produces the same lengths.
+#[test]
+fn test_strlen_md5_and_base64_lengths_no_ir_opt() {
+    without_ir_opt(|| {
+        let out = compile_and_run(
+            r#"<?php
+$s = str_repeat("abc", 40);
+echo strlen(md5($s)), '|', strlen(base64_encode($s)), "\n";
+"#,
+        );
+        assert_eq!(out, "32|160\n");
+    });
+}

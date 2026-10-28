@@ -19,7 +19,7 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{
-    expect_operand, io,
+    ensure_arg_count, expect_operand, io,
     load_value_to_first_int_arg, store_if_result,
 };
 
@@ -270,6 +270,37 @@ fn emit_str_pad_argument_guards(ctx: &mut FunctionContext<'_>, has_pad_type: boo
 }
 
 
+
+/// Lowers the length-only `base64_encode()` result selected by the string length sink.
+///
+/// The input is already a PHP string, so the encoded byte count is exactly
+/// `4 * ceil(len / 3)`; no alphabet lookup or output allocation is needed.
+pub(crate) fn lower_base64_encoded_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "base64_encoded_len", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            common::load_value_as_string_to_regs(ctx, value, "base64_encoded_len", "x1", "x2")?;
+            ctx.emitter.instruction("add x0, x2, #2");                          // round the byte count up to a whole 3-byte quantum
+            ctx.emitter.instruction("mov x1, #3");                              // three source bytes produce one quantum
+            ctx.emitter.instruction("udiv x0, x0, x1");                         // number of encoded quanta
+            ctx.emitter.instruction("lsl x0, x0, #2");                          // four base64 characters per quantum
+        }
+        Arch::X86_64 => {
+            common::load_value_as_string_to_regs(ctx, value, "base64_encoded_len", "rax", "rdx")?;
+            ctx.emitter.instruction("mov rax, rdx");                            // start from the source byte count
+            ctx.emitter.instruction("add rax, 2");                              // round up to a whole 3-byte quantum
+            ctx.emitter.instruction("xor edx, edx");                            // clear the high dividend word
+            ctx.emitter.instruction("mov ecx, 3");                              // three source bytes produce one quantum
+            ctx.emitter.instruction("div rcx");                                 // number of encoded quanta
+            ctx.emitter.instruction("shl rax, 2");                              // four base64 characters per quantum
+        }
+    }
+    store_if_result(ctx, inst)
+}
 
 /// Lowers `base64_decode(string, strict?)` and boxes its `string|false` answer as Mixed.
 ///

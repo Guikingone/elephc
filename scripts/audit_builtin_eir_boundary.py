@@ -52,6 +52,7 @@ COMPILER_TRANSFORM_NAMES = {"func_get_arg", "func_get_args", "func_num_args"}
 # arm and a stable `RuntimeFnId` spelling, but they are not part of any builtin's inventory.
 COMPILER_INTERNAL_RUNTIME_FNS = {
     "AbsInt",
+    "Base64EncodedLen",
     "ArrayElementTypeCheck",
     "ArrayFilterCountMod",
     "ArrayMapSumAdd",

@@ -358,6 +358,8 @@ pub enum RuntimeFnId {
     Abs,
     /// Raw integer absolute value observed only through an `(int)` cast.
     AbsInt,
+    /// Length of `base64_encode()` output for a PHP string, without encoding it.
+    Base64EncodedLen,
     Acos,
     Asin,
     Atan,
@@ -879,6 +881,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
             RuntimeFnId::ArraySumInt => Some((1, Some(1))),
             RuntimeFnId::AbsInt => Some((1, Some(1))),
+            RuntimeFnId::Base64EncodedLen => Some((1, Some(1))),
             _ => None,
         }
     }
@@ -1705,6 +1708,8 @@ impl RuntimeFnId {
             ),
             // The raw integer abs returns a scalar; INT_MIN applies the warned float cast.
             RuntimeFnId::AbsInt => E::from_bits_retain(E::MAY_WARN.bits()),
+            // The encoded-length helper reads only the already-materialized string length.
+            RuntimeFnId::Base64EncodedLen => E::PURE,
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
@@ -2421,6 +2426,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArraySumInt
                 | RuntimeFnId::ArrayMapSumAddSafe
                 | RuntimeFnId::AbsInt
+                | RuntimeFnId::Base64EncodedLen
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
@@ -3115,6 +3121,7 @@ impl RuntimeFnId {
             RuntimeFnId::Vfprintf => "vfprintf",
             RuntimeFnId::Abs => "abs",
             RuntimeFnId::AbsInt => "abs_int",
+            RuntimeFnId::Base64EncodedLen => "base64_encoded_len",
             RuntimeFnId::Acos => "acos",
             RuntimeFnId::Asin => "asin",
             RuntimeFnId::Atan => "atan",

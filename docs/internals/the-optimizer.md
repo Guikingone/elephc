@@ -682,6 +682,14 @@ boxed result is observed only through one `(int)` cast, the call becomes
 promotes to the float `2^63` and terminates in PHP's warned float-to-int
 conversion. Floats and general Mixed operands keep the boxed `abs()` call.
 
+`src/ir_passes/string_len_sink.rs` removes a hash/encoding whose bytes are never
+observed. When a one-argument `md5()` or `base64_encode()` call receives an
+already-materialized PHP string and its result feeds only one `str_len` (plus
+release scaffolding), the length observer becomes the constant `32` for md5 or
+`4 * ceil(len / 3)` via `Base64EncodedLen` for base64. The operand evaluation and
+its side effects remain; the binary `md5(..., true)` form, non-string operands
+and any other observer keep the real call.
+
 ## EIR buffer resolution hoisting
 
 `src/ir_passes/buffer_access.rs` runs once after the module fixed point (and
