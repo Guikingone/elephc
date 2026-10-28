@@ -42,6 +42,11 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
             )?
         {
             if !is_static && validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                if let Some(result) =
+                    eval_native_magic_property_call(object, &class_name, property_name, "__get", context, values)?
+                {
+                    return Ok(result);
+                }
                 return eval_throw_property_access_error(
                     &declaring_class,
                     property_name,
@@ -54,6 +59,13 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
                 return eval_native_property_get_authorized(
                     object, &declaring_class, property_name, context, values,
                 );
+            }
+        } else if !eval_object_public_property_exists(object, property_name, values)? {
+            // Neither declared nor set: PHP reads it through the class's `__get()`.
+            if let Some(result) =
+                eval_native_magic_property_call(object, &class_name, property_name, "__get", context, values)?
+            {
+                return Ok(result);
             }
         }
         return values.property_get(object, property_name);
@@ -799,6 +811,30 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         return Ok(!values.is_null(value)?);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        // A property the scope cannot see, or that is neither declared nor set, is PHP's
+        // `__isset()` to answer.
+        let class_name = eval_runtime_object_class_name(object, values)?;
+        let visible = match eval_native_instance_property_metadata_for_access(
+            &class_name,
+            &class_name,
+            property_name,
+            context,
+            values,
+        )? {
+            Some((declaring_class, visibility, _, is_static)) => {
+                is_static || validate_eval_member_access(&declaring_class, visibility, context).is_ok()
+            }
+            None => eval_object_public_property_exists(object, property_name, values)?,
+        };
+        if !visible {
+            if let Some(result) =
+                eval_native_magic_property_call(object, &class_name, property_name, "__isset", context, values)?
+            {
+                let truthy = values.truthy(result)?;
+                values.release(result)?;
+                return Ok(truthy);
+            }
+        }
         // Native typed slots represent unset with an initialization marker.
         // Their ordinary getter deliberately rejects that state, while isset
         // must return false without attempting the read.

@@ -181,6 +181,10 @@ pub(crate) const HANDLE_PROPERTY: &str = "__elephcHandle";
 /// instances take no PHP object handle, so `spl_object_id()` and `var_dump()`'s `#N` count
 /// only the objects PHP itself would have created.
 pub(crate) const OWNER_CLASS: &str = "__ElephcPhpExtOwner";
+/// The engine cell compiled code publishes a magic property accessor's caller scope in
+/// (`elephc_zend::property::elephc_php_ext_magic_scope`): the class name chain's address and
+/// length, which the wrapper's accessor takes on entry.
+pub(crate) const MAGIC_SCOPE_CELL: &str = "elephc_php_ext_magic_scope";
 /// The `__elephc_php_ext_property` op of a write the hosted class makes itself, in the engine
 /// object's own scope (`elephc_php_ext_property_invoke`'s 6).
 const PROPERTY_SEED_OP: i64 = 6;

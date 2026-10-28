@@ -176,9 +176,6 @@ pub(super) fn emit_resolved_method_call(
     Ok(())
 }
 
-/// The engine cell a hosted extension's wrapper reads its magic accessor's caller scope from
-/// (`elephc_zend::property::elephc_php_ext_magic_scope`): the class name's address and length.
-const MAGIC_SCOPE_CELL: &str = "elephc_php_ext_magic_scope";
 
 /// Publishes the caller's lexical class before a `__get`, `__set`, `__isset` or `__unset` call
 /// in a program hosting PHP extensions. A hosted object's properties obey the visibility of the
@@ -236,7 +233,7 @@ fn emit_magic_scope_publish(ctx: &mut FunctionContext<'_>, target: &MethodCallTa
 fn emit_magic_scope_cell_store(ctx: &mut FunctionContext<'_>, scope: Option<&str>) {
     let cell = abi::symbol_scratch_reg(ctx.emitter);
     let value = abi::secondary_scratch_reg(ctx.emitter);
-    let symbol = ctx.emitter.target.extern_symbol(MAGIC_SCOPE_CELL);
+    let symbol = ctx.emitter.target.extern_symbol(crate::php_ext::prelude::MAGIC_SCOPE_CELL);
     abi::emit_extern_symbol_address(ctx.emitter, cell, &symbol);
     match scope {
         Some(class) => {

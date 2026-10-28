@@ -50,9 +50,12 @@ pub(super) fn eval_native_magic_property_unset(
         return Ok(false);
     }
     let name = values.string(property)?;
+    let scope = super::native_property_access::native_magic_scope(context);
+    values.publish_magic_scope(scope.as_deref());
     let result = eval_native_method_with_evaluated_args(
         object, &native_class, "__unset", positional_args(vec![name.borrowed()]), context, values,
     );
+    values.publish_magic_scope(None);
     let result = result.and_then(|result| release_expr_result(result, context, values));
     let released = release_expr_result(name, context, values);
     result.and(released).map(|()| true)

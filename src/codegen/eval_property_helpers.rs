@@ -93,6 +93,29 @@ pub(super) fn emit_eval_property_helpers(
     unset::emit_property_unset_helper(module, emitter, data, &slots);
     emit_property_hash_slot_helper(module, emitter);
     emit_dynamic_property_exists_helper(module, emitter);
+    emit_publish_magic_scope_helper(module, emitter);
+}
+
+/// Emits `__elephc_eval_publish_magic_scope(chain, len)`: Magician publishes the class scope of
+/// an eval property access around the native call, as compiled call sites do, so a hosted PHP
+/// extension's wrapper decides visibility in it. In a program hosting no extension the helper
+/// only returns: there is no wrapper, and no engine cell to write.
+fn emit_publish_magic_scope_helper(module: &Module, emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: publish a magic property access's class scope ---");
+    label_c_global(module, emitter, "__elephc_eval_publish_magic_scope");
+    if module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
+        let cell = abi::symbol_scratch_reg(emitter);
+        let symbol = module.target.extern_symbol(crate::php_ext::prelude::MAGIC_SCOPE_CELL);
+        abi::emit_extern_symbol_address(emitter, cell, &symbol);
+        let (chain, len) = match module.target.arch {
+            Arch::AArch64 => ("x0", "x1"),
+            Arch::X86_64 => ("rdi", "rsi"),
+        };
+        abi::emit_store_to_address(emitter, chain, cell, 0);
+        abi::emit_store_to_address(emitter, len, cell, 8);
+    }
+    emitter.instruction("ret");                                                 // return to Magician with the cell published
 }
 
 /// Returns whether this binary links the eval bridge, and therefore needs these helpers.

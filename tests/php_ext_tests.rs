@@ -99,6 +99,20 @@ fn property_contracts_match_real_php() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A program hosting an extension compiles with `eval()`, and eval code reaches a hosted
+/// object's properties in its own class scope: a protected one from a subclass method, never
+/// from the global scope. Line for line with real PHP.
+#[test]
+fn eval_reaches_hosted_properties_in_its_scope() {
+    let dir = project("eval-properties");
+    let program = fs::read_to_string(fixture_dir().join("eval_property_contracts.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("eval_property_contracts.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// `add` reports the surface and names the function it cannot call yet;
 /// `list` shows the extension as built.
 #[test]
