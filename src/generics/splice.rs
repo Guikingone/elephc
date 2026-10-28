@@ -106,6 +106,15 @@ impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
     ) -> crate::parser::ast::TypeExpr {
         ty.substitute_type_params(self.bindings)
     }
+
+    /// Materializes scalar carriers in PHP annotations while retaining nested storage widths.
+    fn transform_value_type(
+        &self,
+        ty: crate::parser::ast::TypeExpr,
+        _span: crate::span::Span,
+    ) -> crate::parser::ast::TypeExpr {
+        super::substitute_value_type(&ty, self.bindings)
+    }
 }
 
 /// Substitutes type parameters at every type position inside `body`.
@@ -153,7 +162,7 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
                     name.clone(),
                     declared
                         .as_ref()
-                        .map(|ty| ty.substitute_type_params(bindings)),
+                        .map(|ty| super::substitute_value_type(ty, bindings)),
                     default.clone(),
                     *by_ref,
                 )
@@ -164,10 +173,10 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
         variadic_by_ref: *variadic_by_ref,
         variadic_type: variadic_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(bindings)),
+            .map(|ty| super::substitute_value_type(ty, bindings)),
         return_type: return_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(bindings)),
+            .map(|ty| super::substitute_value_type(ty, bindings)),
         by_ref_return: *by_ref_return,
         // The body goes through the exhaustive walker, so a type parameter named in a typed
         // local, a `buffer<T>`, or a nested closure's signature is substituted too — not only

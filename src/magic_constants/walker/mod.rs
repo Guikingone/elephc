@@ -8,6 +8,7 @@
 //! Key details:
 //! - Walkers rebuild AST nodes while preserving spans and delegating context-specific substitutions to `Pass`.
 
+mod call_types;
 mod exprs;
 mod members;
 mod stmts;
@@ -184,7 +185,8 @@ pub(crate) trait Pass {
     fn transform_string(&self, value: String) -> ExprKind {
         ExprKind::StringLiteral(value)
     }
-    /// Transforms a type annotation. Called for EVERY `TypeExpr` position the walk reaches —
+    /// Transforms storage and identity types. The default value-annotation hook delegates here,
+    /// so implementing only this method still reaches every `TypeExpr` position:
     /// typed locals, `buffer<T>` element types, class property, constant and method
     /// annotations, the inheritance clauses' type arguments, and the parameter, variadic and
     /// return types of functions, methods and closures. Default returns it unchanged.
@@ -203,6 +205,12 @@ pub(crate) trait Pass {
         _span: Span,
     ) -> crate::parser::ast::TypeExpr {
         ty
+    }
+
+    /// Transforms a PHP value annotation, as distinct from a storage element or type argument.
+    /// Generic substitution uses scalar carriers here while other passes retain their type hook.
+    fn transform_value_type(&self, ty: TypeExpr, span: Span) -> TypeExpr {
+        self.transform_type(ty, span)
     }
 
     /// Transforms a class NAMED at a use site — a construction or a static receiver.

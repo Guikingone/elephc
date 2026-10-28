@@ -91,6 +91,23 @@ source span, so one template coordinate can select different instantiations.
 Typed arrays retain their declared element or key/value storage, and callable
 signatures carry inference information while keeping ordinary descriptor storage.
 
+Native storage widths remain in generic bindings and specialization identities.
+`generics::substitute_value_type()` maps a bound width to its PHP scalar carrier
+only when materializing a value annotation. The AST walker's `transform_value_type`
+hook covers parameters, returns, ordinary members, locals, and closure signatures;
+buffer allocation elements, nested buffer types, class arguments, and type defaults
+retain raw substitution. Checker-created signatures use the same value helper as
+the spliced AST, so `T = u32` yields an `int` method ABI over `buffer<u32>` storage.
+Concrete bindings recurse through PHP value wrappers before their annotations resolve;
+widths nested inside `buffer<T>` or class arguments remain storage identities. Bounds
+check the same PHP carriers. Written generic call suffixes resolve in caller scope and
+participate in the shared AST type walk. Parser-owned suffixes retain all explicit
+root qualifiers until resolution; no-op type walks preserve their original spelling.
+Resolved suffixes then use canonical specialization names. Rooted width-named classes retain that marker
+through binding adaptation and name decoding, so they cannot be confused with bare
+storage widths. The dispatch stability proof treats native width slots as scalars,
+allowing final accessors to inline without permitting width arguments to widen.
+
 Supported PHPDoc templates are applied per physical file after the strict-PHP
 audit. They affect type checking and specialization in both modes; strict mode
 rejects the native generic syntax. See [Generics](../beyond-php/generics.md) for
