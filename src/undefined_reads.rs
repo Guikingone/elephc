@@ -1396,8 +1396,20 @@ fn undefined_write_roots(stmt: &Stmt, maybe: &HashSet<String>) -> Vec<(String, b
         // A reference stored into an element or property (`$o->p =& $x`, parsed as
         // `<target> = $x; $x =& <target>;`) creates an undefined `$x` silently, as php does.
         StmtKind::Synthetic(body) => {
-            if let Some(Stmt { kind: StmtKind::RefAssign { target, .. }, .. }) = body.last() {
-                add(target, false, &mut roots);
+            // Only the two-statement shape the parser builds: a copy of `$x`, then `$x =& ...`.
+            if let [store, Stmt { kind: StmtKind::RefAssign { target, .. }, .. }] = body.as_slice() {
+                let copies_target = match &store.kind {
+                    StmtKind::ArrayAssign { value, .. }
+                    | StmtKind::ArrayPush { value, .. }
+                    | StmtKind::PropertyAssign { value, .. }
+                    | StmtKind::NestedArrayAssign { value, .. } => {
+                        matches!(&value.kind, ExprKind::Variable(name) if name == target)
+                    }
+                    _ => false,
+                };
+                if copies_target {
+                    add(target, false, &mut roots);
+                }
             }
             return roots;
         }
