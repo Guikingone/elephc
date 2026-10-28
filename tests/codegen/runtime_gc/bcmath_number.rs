@@ -155,7 +155,8 @@ echo 'done';
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// A right operand can replace the left variable without changing the captured operator value.
+/// A right operand that replaces the left variable is seen by the operator: php reads a plain
+/// variable operand when the operator runs (php 8.5 prints `R12|10`).
 #[test]
 fn test_bcmath_number_operand_order_and_capture() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -168,7 +169,7 @@ $n = new BcMath\Number('1.20');
 echo ($n + replace($n))->value, '|', $n->value;
 unset($n);
 "#);
-    assert_eq!(out.stdout, "R3.20|10", "{}", out.stderr);
+    assert_eq!(out.stdout, "R12|10", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

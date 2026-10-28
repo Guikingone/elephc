@@ -126,17 +126,18 @@ pub(super) fn lower_numeric_binary(
 ) -> LoweredValue {
     // php fetches a plain-variable left operand when the operator runs, after the right side:
     // in `$a + !($a = !$a)` the left `$a` is the freshly assigned value.
-    if let ExprKind::Variable(name) = &left.kind {
-        if crate::undefined_reads::expr_may_write_name(right, name) {
-            let rhs = lower_expr(ctx, right);
-            let lhs = lower_expr(ctx, left);
-            return lower_numeric_binary_values(ctx, lhs, op, rhs, left, right, expr);
-        }
-    }
-    let lhs = lower_expr(ctx, left);
-    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
-    let rhs = lower_expr(ctx, right);
-    unpin_in_flight_owners(ctx, left_pins, left.span);
+    let reads_left_last = matches!(&left.kind, ExprKind::Variable(name)
+        if crate::undefined_reads::expr_may_write_name(right, name));
+    let (lhs, rhs) = if reads_left_last {
+        let rhs = lower_expr(ctx, right);
+        (lower_expr(ctx, left), rhs)
+    } else {
+        let lhs = lower_expr(ctx, left);
+        let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
+        let rhs = lower_expr(ctx, right);
+        unpin_in_flight_owners(ctx, left_pins, left.span);
+        (lhs, rhs)
+    };
     if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
         return result;
     }
