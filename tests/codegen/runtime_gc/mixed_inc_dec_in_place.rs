@@ -40,6 +40,10 @@ $r = 10;
 $q = &$r;
 $r++;
 echo $r, '|', $q, '|';
+$seen = 0;
+$inc = function() use (&$seen): void { ++$seen; };
+$inc(); $inc(); $inc();
+echo $seen, '|';
 $bound = $argc + 99;
 $sum = 0;
 for ($x = 1; $x <= $bound; $x++) { $sum += $x; }
@@ -49,7 +53,7 @@ echo $sum, "\n";
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(
         out.stdout,
-        "6|5|7|6|8|8|double:9.2233720368548E+18|double:-9.2233720368548E+18|double:2.5|ba|11|11|5050\n"
+        "6|5|7|6|8|8|double:9.2233720368548E+18|double:-9.2233720368548E+18|double:2.5|ba|11|11|3|5050\n"
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
