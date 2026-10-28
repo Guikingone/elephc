@@ -23,16 +23,16 @@ class ScopedUnsetHolder { public $items = ["keep" => 1]; }
 function scoped_unset_key(): mixed { return 1.5; }
 function expose_scoped_unset_global(): void { global $peek; }
 $holder = new ScopedUnsetHolder();
-$peek = function () { return $this->code; };
 set_error_handler(function (): bool {
     global $peek;
     $peek = function () { return $this->label; };
     return true;
 });
+$peek = function () { return $this->code; };
 try { unset($holder->items[UNSET_KEY]); } catch (Error $error) {}
-restore_error_handler();
 $bound = Closure::bind($peek, new ScopedUnsetVault(), ScopedUnsetVault::class);
 echo $bound(), "\n";
+restore_error_handler();
 "#.replace("UNSET_KEY", key);
         let out = compile_and_run_with_heap_debug(&source);
         assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
