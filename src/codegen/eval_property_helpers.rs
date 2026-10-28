@@ -114,6 +114,8 @@ fn emit_publish_magic_scope_helper(module: &Module, emitter: &mut Emitter) {
         };
         abi::emit_store_to_address(emitter, chain, cell, 0);
         abi::emit_store_to_address(emitter, len, cell, 8);
+        // eval'd code is coercive unless it declares otherwise itself.
+        abi::emit_store_zero_to_address(emitter, cell, 16);
     }
     emitter.instruction("ret");                                                 // return to Magician with the cell published
 }

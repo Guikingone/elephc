@@ -38,20 +38,30 @@ use crate::zval::{copy_value, set_bool, set_double, set_long, type_of, zval_ptr_
 pub struct MagicScope {
     pub name: *const u8,
     pub len: usize,
+    /// Non-zero when the code making the access declared `strict_types=1`.
+    pub strict: usize,
 }
 
 /// c: hidden
 #[no_mangle]
-pub static mut elephc_php_ext_magic_scope: MagicScope = MagicScope { name: ptr::null(), len: 0 };
+pub static mut elephc_php_ext_magic_scope: MagicScope = MagicScope { name: ptr::null(), len: 0, strict: 0 };
+
+/// Marks a published scope whose code declared `strict_types=1`, ahead of the class chain.
+pub const STRICT_MARK: u8 = b'!';
 
 /// The class name compiled code published for the magic accessor running ("" for the global
-/// scope, or when nothing was published), clearing the cell so no later accessor reads it.
+/// scope, or when nothing was published), after `STRICT_MARK` when that code is strict, clearing
+/// the cell so no later accessor reads it.
 pub unsafe fn take_magic_scope() -> Vec<u8> {
     let cell = &mut *ptr::addr_of_mut!(elephc_php_ext_magic_scope);
-    let name = if cell.name.is_null() { Vec::new() } else { std::slice::from_raw_parts(cell.name, cell.len).to_vec() };
+    let mut scope = if cell.strict != 0 { vec![STRICT_MARK] } else { Vec::new() };
+    if !cell.name.is_null() {
+        scope.extend_from_slice(std::slice::from_raw_parts(cell.name, cell.len));
+    }
     cell.name = ptr::null();
     cell.len = 0;
-    name
+    cell.strict = 0;
+    scope
 }
 
 /// The scope one program access runs in.
@@ -72,21 +82,25 @@ struct ProgramAccess {
     class_name: String,
     /// `None` while probing.
     scope: Option<ProgramScope>,
+    /// Whether a probe of this access stopped for the caller's scope.
+    scope_needed: bool,
+    /// Whether the code making the access declared `strict_types=1`.
+    strict: bool,
 }
 
-static PROGRAM: Global<Option<ProgramAccess>> = Global::new(None);
-static SCOPE_NEEDED: Global<bool> = Global::new(false);
+/// The program accesses running, innermost last: an extension handler may call back into the
+/// program, which may access another hosted object before the outer access ends.
+static PROGRAM: Global<Vec<ProgramAccess>> = Global::new(Vec::new());
 
 /// Starts a program access to `object`, seen as class `class_name`, in `scope` (`None` probes).
-pub unsafe fn begin_program_access(object: *mut zend_object, class_name: String, scope: Option<ProgramScope>) {
-    *SCOPE_NEEDED.get() = false;
-    *PROGRAM.get() = Some(ProgramAccess { object, frame: eg().current_execute_data, class_name, scope });
+pub unsafe fn begin_program_access(object: *mut zend_object, class_name: String, scope: Option<ProgramScope>, strict: bool) {
+    PROGRAM.get().push(ProgramAccess { object, frame: eg().current_execute_data, class_name, scope, scope_needed: false, strict });
 }
 
-/// Ends the program access; true when a probe stopped because the caller's scope decides.
+/// Ends the innermost program access; true when its probe stopped because the caller's scope
+/// decides.
 pub unsafe fn end_program_access() -> bool {
-    *PROGRAM.get() = None;
-    std::mem::take(SCOPE_NEEDED.get())
+    PROGRAM.get().pop().is_some_and(|access| access.scope_needed)
 }
 
 /// Where an access comes from.
@@ -99,7 +113,7 @@ enum Scope {
 
 /// The program access running on `object`, unless the extension has since entered a call.
 unsafe fn program_access(object: *mut zend_object) -> Option<&'static ProgramAccess> {
-    PROGRAM.get().as_ref().filter(|access| access.object == object && access.frame == eg().current_execute_data)
+    PROGRAM.get().last().filter(|access| access.object == object && access.frame == eg().current_execute_data)
 }
 
 unsafe fn current_scope(object: *mut zend_object) -> Scope {
@@ -111,6 +125,12 @@ unsafe fn current_scope(object: *mut zend_object) -> Scope {
         Some(ProgramAccess { scope: Some(scope), .. }) => Scope::Program { ancestor: scope.ancestor, name: scope.name.clone() },
         None => Scope::Engine(crate::api::zend_get_executed_scope()),
     }
+}
+
+/// php-src's `property_uses_strict_types`: whether the code assigning to `object`'s property
+/// declared `strict_types=1`. An extension function's own writes never are.
+pub unsafe fn uses_strict_types(object: *mut zend_object) -> bool {
+    eg().fake_scope.is_null() && program_access(object).is_some_and(|access| access.strict)
 }
 
 /// The class name a message gives the object.
@@ -185,7 +205,9 @@ pub unsafe fn visibility(object: *mut zend_object, info: *mut zend_property_info
 
 /// Records that a probe stopped for the caller's scope.
 pub unsafe fn need_scope() {
-    *SCOPE_NEEDED.get() = true;
+    if let Some(access) = PROGRAM.get().last_mut() {
+        access.scope_needed = true;
+    }
 }
 
 /// Throws PHP's Error for a property the scope cannot see.
@@ -274,9 +296,9 @@ unsafe fn names_class_of(t: zend_type, object: *mut zend_object) -> bool {
 }
 
 /// Checks `value` (owned, dereferenced) against the declared type of `info`, converting it in
-/// place as PHP's weak mode does (`zend_verify_property_type`); throws PHP's TypeError and returns
-/// false when it does not fit.
-pub unsafe fn verify_type(info: *mut zend_property_info, value: *mut zval) -> bool {
+/// place as PHP's weak mode does (`zend_verify_property_type`), or, for `strict` code, only an int
+/// a float type takes; throws PHP's TypeError and returns false when it does not fit.
+pub unsafe fn verify_type(info: *mut zend_property_info, value: *mut zval, strict: bool) -> bool {
     let t = (*info).r#type;
     let mask = t.type_mask & _ZEND_TYPE_MAY_BE_MASK;
     let fits = match type_of(value) {
@@ -291,7 +313,10 @@ pub unsafe fn verify_type(info: *mut zend_property_info, value: *mut zval) -> bo
         IS_OBJECT => mask & MAY_BE_OBJECT != 0 || names_class_of(t, (*value).value.obj),
         _ => false,
     };
-    if fits || coerce_weak(mask, value) {
+    // php-src's `zend_verify_scalar_type_hint`: strict code converts nothing but an int a float
+    // type takes.
+    let convertible = !strict || (mask & MAY_BE_DOUBLE != 0 && type_of(value) == IS_LONG);
+    if fits || (convertible && coerce_weak(mask, value)) {
         return true;
     }
     if eg().exception.is_null() {

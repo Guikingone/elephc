@@ -155,7 +155,7 @@ const WRAPPERS: &str = "wrappers";
 const DEAD_WRAPPERS: &str = "dead_wrappers";
 const COMPACT_WRAPPERS_HELPER: &str = "__elephc_php_ext_compact_wrappers";
 /// The wrapper method returning (creating on first use) its engine object.
-const OBJECT_METHOD: &str = "__elephcObject";
+pub(crate) const OBJECT_METHOD: &str = "__elephcObject";
 /// The internal aliases of `zval_pack`, `zval_free` and `zval_unpack`: a prelude never calls a
 /// PHP-visible extension builtin, which `--strict-php` hides.
 const ZVAL_PACK: &str = "__elephc_zval_pack";
@@ -173,6 +173,15 @@ const WRAP_METHOD: &str = "__elephcWrap";
 /// call it through `_class_debuginfo_ptrs` in place of `__debugInfo()`, which a hosted class
 /// does not have in PHP: `$wrapper->__debugInfo()` stays an undefined method.
 pub(crate) const DEBUG_INFO_METHOD: &str = "__elephcDebugInfo";
+/// The wrapper method that gives a clone its own engine object. The wrapper's `__clone()` runs
+/// it; when a program subclass declares its own `__clone()`, `clone` runs it first, as php-src's
+/// `clone_obj` handler runs before the program's `__clone()`.
+pub(crate) const CLONE_METHOD: &str = "__elephcClone";
+/// The prelude function that tells whether the engine answers a property access itself
+/// (`crate::php_ext::overrides`).
+pub(crate) const DIRECT_FUNCTION: &str = "__elephc_php_ext_direct";
+/// The prelude function that runs a property access on the engine object.
+pub(crate) const PROPERTY_FUNCTION: &str = "__elephc_php_ext_property";
 /// The protected wrapper property repeating its table slot. `clone` copies it
 /// (the table is keyed by object id, which a clone does not share), so
 /// `__clone` knows which engine object to clone.
@@ -348,7 +357,12 @@ fn abi_externs() -> Vec<Stmt> {
             .returns(ptr())
             .build(),
         extern_fn_unbound("elephc_php_ext_property_invoke").param("call", ptr()).param("op", CType::Int).returns(CType::Int).build(),
-        extern_fn_unbound("elephc_php_ext_property_as").param("call", ptr()).param("class", CType::Str).build(),
+        extern_fn_unbound("elephc_php_ext_property_direct").param("call", ptr()).returns(CType::Int).build(),
+        extern_fn_unbound("elephc_php_ext_property_as")
+            .param("call", ptr())
+            .param("class", CType::Str)
+            .param("scope", CType::Str)
+            .build(),
         extern_fn_unbound("elephc_php_ext_take_scope").returns(CType::Str).build(),
         extern_fn_unbound("elephc_php_ext_property_scope").param("call", ptr()).param("scope", CType::Str).build(),
         extern_fn_unbound("elephc_php_ext_iter_new").param("object", CType::Int).returns(CType::Int).build(),
@@ -1166,7 +1180,7 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
                 ),
             ),
             s_if(call("__elephc_ptr_is_null", vec![call_var()]), vec![s_expr(call("exit", vec![e_int(255)]))], vec![], None),
-            s_expr(call("elephc_php_ext_property_as", vec![call_var(), e_var("__elephc_class")])),
+            s_expr(call("elephc_php_ext_property_as", vec![call_var(), e_var("__elephc_class"), e_var("__elephc_scope")])),
             s_if(
                 e_var("__elephc_writes"),
                 vec![s_expr(call("__elephc_php_ext_arg", vec![call_var(), e_int(0), e_var("__elephc_value"), e_int(0)]))],
@@ -1226,6 +1240,30 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
             s_return(e_var("__elephc_clone")),
         ])
         .build();
+    // function __elephc_php_ext_direct(int $object, string $name, string $class, string $scope): bool
+    // Whether the engine answers an access to `$name` itself in the caller's `$scope` (declared
+    // and visible there, or held by the object), so a program subclass's own magic accessor is
+    // not called for it, as PHP calls it only for a name it cannot reach or that does not exist.
+    let direct = function(DIRECT_FUNCTION)
+        .param("__elephc_object", TypeExpr::Int)
+        .param("__elephc_name", TypeExpr::Str)
+        .param("__elephc_class", TypeExpr::Str)
+        .param("__elephc_scope", TypeExpr::Str)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(strict_eq(e_var("__elephc_object"), e_int(0)), vec![s_return(e_bool(false))], vec![], None),
+            s_assign(
+                "__elephc_call",
+                call("elephc_php_ext_property_new", vec![e_var("__elephc_object"), e_var("__elephc_name"), e_int(0)]),
+            ),
+            s_if(call("__elephc_ptr_is_null", vec![call_var()]), vec![s_return(e_bool(false))], vec![], None),
+            s_expr(call("elephc_php_ext_property_as", vec![call_var(), e_var("__elephc_class"), e_var("__elephc_scope")])),
+            s_expr(call("elephc_php_ext_property_scope", vec![call_var(), e_var("__elephc_scope")])),
+            s_assign("__elephc_direct", call("elephc_php_ext_property_direct", vec![call_var()])),
+            s_expr(call("elephc_php_ext_call_free", vec![call_var()])),
+            s_return(strict_eq(e_var("__elephc_direct"), e_int(1))),
+        ])
+        .build();
     vec![
         marker,
         omitted_marker,
@@ -1233,6 +1271,7 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
         owner_class(),
         compact_wrappers_helper(),
         property,
+        direct,
         clone,
         adopt,
         iterator_class(),
@@ -1789,13 +1828,13 @@ fn compact_wrappers_helper() -> Stmt {
         .build()
 }
 
-/// `__clone()`: the copy starts with the source's handle in its property and
-/// no table slot; it takes a clone of the engine object made by the class's
+/// `__elephcClone()`: the copy starts with the source's handle in its property
+/// and no table slot; it takes a clone of the engine object made by the class's
 /// `clone_obj` handler, as PHP's `clone` does, or none while the source has
 /// not created its object yet.
 fn clone_method() -> crate::synthetic_class::MethodBuilder {
     let source = || e_var("__elephc_source");
-    method("__clone").body(vec![
+    method(CLONE_METHOD).body(vec![
         s_assign("__elephc_source", crate::synthetic_class::e_this_prop(HANDLE_PROPERTY)),
         set_handle(e_int(0)),
         crate::synthetic_class::s_prop_assign(e_this(), OWNER_PROPERTY, e_null()),
@@ -2060,6 +2099,7 @@ fn wrapper_class(
             .protected_prop(OWNER_PROPERTY, t_mixed(), Some(e_null()))
             .methods(property_methods())
             .method(clone_method())
+            .method(method("__clone").body(vec![s_expr(e_method_call(e_this(), CLONE_METHOD, vec![]))]))
             // What `var_dump()` and `print_r()` show is the engine object's
             // debug table, as in PHP, never the wrapper's own bookkeeping.
             .method(method(DEBUG_INFO_METHOD).protected().body(vec![s_return(e_cast(

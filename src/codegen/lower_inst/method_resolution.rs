@@ -171,11 +171,23 @@ pub(super) fn emit_resolved_method_call(
         emit_direct_resolved_method_call(ctx, target)?;
     }
     if publishes_scope {
-        emit_magic_scope_cell_store(ctx, None);
+        emit_magic_scope_cell_store(ctx, None, false);
     }
     Ok(())
 }
 
+
+/// Whether `method` is one of the magic property accessors a hosted object's wrapper answers.
+fn is_magic_accessor(method: &str) -> bool {
+    ["__get", "__set", "__isset", "__unset"].iter().any(|name| method.eq_ignore_ascii_case(name))
+}
+
+/// Whether `class` stands for a hosted extension object (it implements the wrapper interface).
+fn is_hosted_class(classes: &std::collections::HashMap<String, crate::types::ClassInfo>, class: &str) -> bool {
+    classes
+        .get(class)
+        .is_some_and(|info| info.interfaces.iter().any(|i| i == crate::php_ext::prelude::OBJECT_INTERFACE))
+}
 
 /// Publishes the caller's lexical class before a `__get`, `__set`, `__isset` or `__unset` call
 /// in a program hosting PHP extensions. A hosted object's properties obey the visibility of the
@@ -183,33 +195,15 @@ pub(super) fn emit_resolved_method_call(
 /// the engine cell on entry. Returns whether the cell was written, so the caller clears it once
 /// the accessor returned and no later call made without a publication finds a stale scope.
 fn emit_magic_scope_publish(ctx: &mut FunctionContext<'_>, target: &MethodCallTarget) -> bool {
-    let magic = ["__get", "__set", "__isset", "__unset"]
-        .iter()
-        .any(|name| target.method_key.eq_ignore_ascii_case(name));
-    if !magic || !ctx.module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
+    if !is_magic_accessor(&target.method_key) || !ctx.module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
         return false;
     }
-    // Only a call that lands in a wrapper's own accessor publishes: that accessor takes the scope
-    // as its first statement, so no program code runs in between to throw past the clear below
-    // and leave a scope a later, unpublished caller (eval, a callable) would inherit. A program
-    // subclass overriding the accessor turns publication off for dynamic dispatch through it.
+    // A call that can land in a wrapper's accessor publishes: that accessor takes the scope as
+    // its first statement, and so does a program subclass's override of it
+    // (`crate::php_ext::overrides`), so no program code runs while the cell holds a scope a
+    // later, unpublished caller (eval, a callable) would inherit.
     let classes = &ctx.module.class_infos;
-    let implements = |name: &str| {
-        classes
-            .get(name)
-            .is_some_and(|info| info.interfaces.iter().any(|i| i == crate::php_ext::prelude::OBJECT_INTERFACE))
-    };
-    let wrapper_accessor = |name: &str| {
-        implements(name) && classes.get(name).and_then(|info| info.parent.as_deref()).is_none_or(|parent| !implements(parent))
-    };
-    if !wrapper_accessor(&target.impl_class) {
-        return false;
-    }
-    if target.dynamic_slot.is_some()
-        && classes.iter().any(|(name, info)| {
-            implements(name) && info.method_impl_classes.get(&target.method_key).is_some_and(|owner| !wrapper_accessor(owner))
-        })
-    {
+    if !is_hosted_class(classes, &target.impl_class) {
         return false;
     }
     // The class and its ancestors, comma-separated (no class name holds a comma): the engine
@@ -224,13 +218,15 @@ fn emit_magic_scope_publish(ctx: &mut FunctionContext<'_>, target: &MethodCallTa
         }
         chain.join(",")
     });
-    emit_magic_scope_cell_store(ctx, scope.as_deref());
+    let strict = ctx.current_write_is_strict();
+    emit_magic_scope_cell_store(ctx, scope.as_deref(), strict);
     true
 }
 
-/// Writes `scope` (`None`: the global scope) into the engine's magic-scope cell. Uses only the
-/// symbol and secondary scratch registers, so the call's argument registers survive.
-fn emit_magic_scope_cell_store(ctx: &mut FunctionContext<'_>, scope: Option<&str>) {
+/// Writes `scope` (`None`: the global scope) and whether the accessing code is `strict` into the
+/// engine's magic-scope cell. Uses only the symbol and secondary scratch registers, so the call's
+/// argument registers survive.
+fn emit_magic_scope_cell_store(ctx: &mut FunctionContext<'_>, scope: Option<&str>, strict: bool) {
     let cell = abi::symbol_scratch_reg(ctx.emitter);
     let value = abi::secondary_scratch_reg(ctx.emitter);
     let symbol = ctx.emitter.target.extern_symbol(crate::php_ext::prelude::MAGIC_SCOPE_CELL);
@@ -247,6 +243,12 @@ fn emit_magic_scope_cell_store(ctx: &mut FunctionContext<'_>, scope: Option<&str
             abi::emit_store_zero_to_address(ctx.emitter, cell, 0);
             abi::emit_store_zero_to_address(ctx.emitter, cell, 8);
         }
+    }
+    if strict {
+        abi::emit_load_int_immediate(ctx.emitter, value, 1);
+        abi::emit_store_to_address(ctx.emitter, value, cell, 16);
+    } else {
+        abi::emit_store_zero_to_address(ctx.emitter, cell, 16);
     }
 }
 

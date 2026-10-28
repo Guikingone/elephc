@@ -113,6 +113,83 @@ fn eval_reaches_hosted_properties_in_its_scope() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A program subclass of a hosted class behaves as one of the internal class: it may write an
+/// ancestor's private name (a dynamic property of its own), declare `__get`, `__set`, `__isset`,
+/// `__unset` and `__clone` with any signature PHP accepts (a clone still gets its own engine object
+/// before the program's `__clone()` runs), and an accessor override elsewhere does not change the
+/// scope a dynamically dispatched access runs in. Line for line with real PHP.
+#[test]
+fn program_subclasses_extend_hosted_classes_as_php_does() {
+    let dir = project("subclasses");
+    let program = fs::read_to_string(fixture_dir().join("hosted_subclasses.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("hosted_subclasses.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Code declaring `strict_types=1` assigns a hosted typed property as strict code does: only an
+/// int converts (to a float property), anything else is a TypeError. Line for line with real PHP.
+#[test]
+fn strict_code_assigns_hosted_typed_properties_strictly() {
+    let dir = project("strict-properties");
+    let program = fs::read_to_string(fixture_dir().join("strict_property_contracts.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("strict_property_contracts.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// The host's internals are not PHP symbols: a program naming them at run time (a string
+/// callable, a method by name, `new` of a class name) gets what PHP gives for a missing one.
+#[test]
+fn host_internals_are_not_reachable_by_name() {
+    let dir = project("internals");
+    let run = compile_and_run(
+        &dir,
+        "<?php
+$c = new DemoCounter(3);
+$n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
+var_dump(is_callable($n));
+var_dump($c->value());
+",
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "bool(false)
+int(3)
+");
+    // Elephc ends the program on these misses where PHP throws a catchable Error; what matters
+    // here is that none of them reaches the internal symbol.
+    let main = dir.join("main.php");
+    for (source, refused) in [
+        ("<?php
+$n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
+$n(1);
+echo 'reached';
+", "undefined function"),
+        ("<?php
+$c = new DemoCounter(3);
+$m = $argc > 5 ? 'x' : '__elephcObject';
+var_dump($c->$m());
+", "callable array"),
+        ("<?php
+$k = $argc > 5 ? 'x' : '__ElephcPhpExtOwner';
+var_dump(new $k);
+", "Class \"__ElephcPhpExtOwner\" not found"),
+    ] {
+        fs::write(&main, source).unwrap();
+        let compile = Command::new(elephc()).current_dir(&dir).arg(&main).output().expect("run elephc");
+        assert_success(&compile, "compile");
+        let run = Command::new(dir.join("main")).current_dir(&dir).output().expect("run the compiled program");
+        let all = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+        assert!(!run.status.success() && !all.contains("reached") && !all.contains("int(") && !all.contains("object("), "{all}");
+        assert!(all.contains(refused), "{all}");
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// `add` reports the surface and names the function it cannot call yet;
 /// `list` shows the extension as built.
 #[test]
@@ -121,7 +198,7 @@ fn add_and_list_report_the_surface() {
     let list = Command::new(elephc()).current_dir(&dir).args(["extension", "list"]).output().unwrap();
     assert_success(&list, "extension list");
     let text = String::from_utf8_lossy(&list.stdout);
-    assert!(text.contains("elephc_demo 1.2.3 — 34 functions, 9 classes, 3 constants"), "{text}");
+    assert!(text.contains("elephc_demo 1.2.3 — 36 functions, 9 classes, 3 constants"), "{text}");
     assert!(text.contains("not callable yet: demo_inspect()"), "{text}");
     assert!(!text.contains("demo_apply()"), "callables are passed: {text}");
     let manifest = fs::read_to_string(dir.join("elephc.toml")).unwrap();
@@ -810,11 +887,20 @@ echo $child->tag(), " | ", $child->describe(), "\n";
 /// Compiles `source` in `dir`, runs it with `ELEPHC_DEMO_TRACE` set, and returns the lines the
 /// extension traced on stderr (`RINIT`, `RSHUTDOWN`, `MSHUTDOWN`) with the program's exit status.
 fn run_traced(dir: &Path, source: &str) -> (Vec<String>, Option<i32>, String) {
+    run_traced_with(dir, source, &[])
+}
+
+/// `run_traced` with extra environment variables for the run.
+fn run_traced_with(dir: &Path, source: &str, env: &[(&str, &str)]) -> (Vec<String>, Option<i32>, String) {
     let main = dir.join("main.php");
     fs::write(&main, source).unwrap();
     let compile = Command::new(elephc()).current_dir(dir).arg(&main).output().expect("run elephc");
     assert_success(&compile, "compile");
-    let run = Command::new(dir.join("main")).env("ELEPHC_DEMO_TRACE", "1").output().expect("run the program");
+    let run = Command::new(dir.join("main"))
+        .env("ELEPHC_DEMO_TRACE", "1")
+        .envs(env.iter().copied())
+        .output()
+        .expect("run the program");
     let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
     let traced = stderr.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).map(str::to_string).collect();
     (traced, run.status.code(), String::from_utf8_lossy(&run.stdout).into_owned())
@@ -830,24 +916,44 @@ fn the_extension_is_shut_down_when_the_program_ends() {
     let dir = project("lifecycle");
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho demo_add(1, 2), \"\\n\";\n");
     assert_eq!((status, stdout.as_str()), (Some(0), "3\n"));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho demo_add(1, 2), \"\\n\";\nexit(3);\n");
     assert_eq!((status, stdout.as_str()), (Some(3), "3\n"));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, _) = run_traced(&dir, "<?php\nfunction fail() { throw new RuntimeException('x'); }\necho demo_add(1, 2), \"\\n\";\nfail();\n");
     assert_eq!(status, Some(255));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, stdout) =
         run_traced(&dir, "<?php\nvar_dump(demo_set_greeting('Hi'));\necho demo_greet('a'), \"\\n\";\n");
     assert_eq!((status, stdout.as_str()), (Some(0), "bool(true)\nHi, a.\n"));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
+    // The request's change holds through its RSHUTDOWN and is undone before post-deactivation.
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hi", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho \"no extension call\\n\";\n");
     assert_eq!((status, stdout.as_str()), (Some(0), "no extension call\n"));
     assert!(traced.is_empty(), "{traced:?}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A request's resources close after RSHUTDOWN and before post-deactivation, newest first, while
+/// the request state their destructor reads is still there (#2104), and a fatal error in
+/// RSHUTDOWN cancels none of the deactivation: resources still close, the INI change is still
+/// undone, post-deactivation and MSHUTDOWN still run, and the process ends with status 255, as
+/// php-cli's `php_request_shutdown` runs each phase in its own `zend_try`.
+#[test]
+fn request_deactivation_closes_resources_and_survives_a_fatal_rshutdown() {
+    let dir = project("deactivation");
+    let source = "<?php\ndemo_open_handle('h1');\ndemo_open_handle('h2');\nvar_dump(demo_set_greeting('Hi'));\necho demo_banner(), \"\\n\";\n";
+    let expected = ["RINIT", "RSHUTDOWN Hi", "CLOSE h2 alive=1", "CLOSE h1 alive=1", "POST_DEACTIVATE Hello", "MSHUTDOWN"];
+    let (traced, status, stdout) = run_traced(&dir, source);
+    assert_eq!((status, stdout.as_str()), (Some(0), "bool(true)\npersistent banner\n"));
+    assert_eq!(traced, expected);
+    let (traced, status, stdout) = run_traced_with(&dir, source, &[("ELEPHC_DEMO_FAIL_RSHUTDOWN", "1")]);
+    assert_eq!((status, stdout.as_str()), (Some(255), "bool(true)\npersistent banner\n"));
+    assert_eq!(traced, expected);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -950,7 +1056,55 @@ fn a_runtime_ini_change_does_not_cross_web_requests() {
     assert_eq!(bodies, ["Hello, a. Hi, b.", "Hello, a. Hi, b.", "Hello, a. Hi, b."]);
     assert_eq!(
         &traced[..7],
-        ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "RINIT"],
+        ["RINIT", "RSHUTDOWN Hi", "POST_DEACTIVATE Hello", "RINIT", "RSHUTDOWN Hi", "POST_DEACTIVATE Hello", "RINIT"],
+        "{output}"
+    );
+}
+
+/// Between `--web` requests the worker deactivates each request as php-src does: the request's
+/// resources close before post-deactivation, a persistent allocation MINIT made survives every
+/// request heap sweep, and an engine object a leaked wrapper still holds is freed with the request
+/// (its free handler runs, as php-src's object store frees every live object) rather than left
+/// pointing into the swept heap.
+#[test]
+fn web_requests_free_their_resources_and_leaked_objects() {
+    use std::os::unix::process::CommandExt;
+    let dir = project("web-deactivation");
+    let main = dir.join("main.php");
+    fs::write(
+        &main,
+        "<?php\ndemo_open_handle('w');\necho demo_banner(), ' ', demo_counters_freed();\n$o = new stdClass;\n$o->self = $o;\n$o->counter = new DemoCounter(1);\n",
+    )
+    .unwrap();
+    let compile = Command::new(elephc()).current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
+    assert_success(&compile, "compile --web");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let address = format!("127.0.0.1:{port}");
+    let stderr = fs::File::create(dir.join("server.err")).unwrap();
+    let server = ServerGroup(
+        Command::new(dir.join("main"))
+            .args(["--listen", &address, "--workers", "1"])
+            .env("ELEPHC_DEMO_TRACE", "1")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .expect("spawn the web server"),
+    );
+    server.wait_until_listening(&address);
+    let bodies: Vec<String> = (0..3).map(|_| http_body(&address).trim().to_string()).collect();
+    drop(server);
+    let output = fs::read_to_string(dir.join("server.err")).unwrap();
+    let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(bodies, ["persistent banner 0", "persistent banner 1", "persistent banner 2"], "{output}");
+    assert_eq!(
+        &traced[..9],
+        [
+            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "POST_DEACTIVATE Hello",
+            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "POST_DEACTIVATE Hello", "RINIT",
+        ],
         "{output}"
     );
 }
@@ -1033,6 +1187,6 @@ fn a_failed_request_startup_ends_the_web_worker() {
     let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
     fs::remove_dir_all(dir).unwrap();
     assert_eq!(first, "1");
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "RINIT failed"], "{output}");
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "RINIT failed"], "{output}");
     assert!(output.contains("request_startup() for elephc_demo module failed"), "{output}");
 }

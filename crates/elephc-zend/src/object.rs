@@ -266,6 +266,7 @@ pub unsafe extern "C" fn zend_object_release(object: *mut zend_object) {
 /// it.
 #[no_mangle]
 pub unsafe extern "C" fn zend_object_std_dtor(object: *mut zend_object) {
+    release_shadowing(object);
     let table = (*object).properties;
     if !table.is_null() {
         (*object).properties = ptr::null_mut();
@@ -296,6 +297,13 @@ pub unsafe extern "C" fn zend_objects_clone_members(new_object: *mut zend_object
             hash::zend_array_release((*new_object).properties);
         }
         (*new_object).properties = copy;
+    }
+    let shadowed = shadowing(old_object, false);
+    if !shadowed.is_null() {
+        let copy = hash::zend_array_dup(shadowed);
+        if let Some(previous) = SHADOWING.get().get_or_insert_with(Default::default).insert(new_object as usize, copy) {
+            hash::zend_array_release(previous);
+        }
     }
     let clone = (*(*new_object).ce).clone;
     if !clone.is_null() {
@@ -332,6 +340,70 @@ pub unsafe extern "C" fn zend_std_clone_obj_with(
 }
 
 // ------------------------------------------------------------ properties
+
+/// Each object's dynamic properties named like a private property of an ancestor (`$this->secret`
+/// in a subclass of the class declaring `private $secret`). php-src keeps them in the properties
+/// table beside the private one, which it keys by its mangled name; this engine keys a declared
+/// property by its plain name, so these live in a table of their own, by object address.
+static SHADOWING: Global<Option<std::collections::HashMap<usize, *mut HashTable>>> = Global::new(None);
+
+/// `object`'s table of properties shadowing an ancestor's private ones, created when `create`;
+/// NULL when it has none.
+unsafe fn shadowing(object: *mut zend_object, create: bool) -> *mut HashTable {
+    let tables = SHADOWING.get().get_or_insert_with(Default::default);
+    match tables.get(&(object as usize)) {
+        Some(&table) => table,
+        None if create => *tables.entry(object as usize).or_insert_with(|| hash::_zend_new_array(0)),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Releases `object`'s shadowing properties, as it is freed.
+unsafe fn release_shadowing(object: *mut zend_object) {
+    if let Some(table) = SHADOWING.get().as_mut().and_then(|tables| tables.remove(&(object as usize))) {
+        hash::zend_array_release(table);
+    }
+}
+
+/// Whether the engine answers an access to property `name` of `object` itself, in the program
+/// access's scope: php-src's standard handlers call a class's `__get`, `__set`, `__isset` or
+/// `__unset` only for a name that scope cannot reach or the object does not hold. A class with
+/// its own read handler decides what it holds through its `has_property` handler.
+pub unsafe fn answers_directly(object: *mut zend_object, name: *mut zend_string) -> bool {
+    let handlers = (*object).handlers;
+    let standard = (*handlers).read_property.map(|read| read as *const () as usize) == Some(zend_std_read_property as *const () as usize);
+    if !standard {
+        return match (*handlers).has_property {
+            Some(has) => has(object, name, ZEND_PROPERTY_EXISTS as c_int, ptr::null_mut()) != 0,
+            None => false,
+        };
+    }
+    let info = property::info((*object).ce, name);
+    match property::visibility(object, info) {
+        Access::Allowed => !info.is_null() || !hash::zend_hash_find_ind(zend_elephc_object_properties(object), name).is_null(),
+        Access::Undeclared => {
+            let table = shadowing(object, false);
+            !table.is_null() && !hash::zend_hash_find_ind(table, name).is_null()
+        }
+        Access::Denied | Access::Probe => false,
+    }
+}
+
+/// Whether `object` may gain the dynamic property `name` (php-src's `zend_std_write_property`):
+/// a class that forbids dynamic properties throws PHP's Error, one that does not allow them
+/// deprecates their creation.
+unsafe fn may_create_dynamic(object: *mut zend_object, name: *mut zend_string) -> bool {
+    let flags = (*(*object).ce).ce_flags;
+    let named = || format!("{}::${}", property::display_class(object), string::text(name));
+    if flags & ZEND_ACC_NO_DYNAMIC_PROPERTIES != 0 {
+        crate::exception::throw_error(crate::exception::zend_ce_error, &format!("Cannot create dynamic property {}", named()));
+        return false;
+    }
+    if flags & ZEND_ACC_ALLOW_DYNAMIC_PROPERTIES == 0 {
+        crate::error::deprecated(&format!("Creation of dynamic property {} is deprecated", named()));
+    }
+    crate::startup::eg().exception.is_null()
+}
 
 /// Finds a property of an object by name in its property table, resolving indirect slots; NULL when
 /// absent.
@@ -370,7 +442,11 @@ pub unsafe extern "C" fn zend_std_read_property(
     let info = property::info((*object).ce, name);
     match property::visibility(object, info) {
         Access::Allowed => {}
-        Access::Undeclared => return undefined_property(object, name, r#type),
+        Access::Undeclared => {
+            let table = shadowing(object, false);
+            let found = if table.is_null() { ptr::null_mut() } else { hash::zend_hash_find_ind(table, name) };
+            return if found.is_null() { undefined_property(object, name, r#type) } else { found };
+        }
         Access::Denied => {
             if r#type != BP_VAR_IS {
                 property::denied(object, info);
@@ -410,9 +486,18 @@ pub unsafe extern "C" fn zend_std_write_property(
     let info = property::info((*object).ce, name);
     match property::visibility(object, info) {
         Access::Allowed => {}
-        // php-src makes a parent's private name a new dynamic property; this engine keeps one
-        // property per name, so it refuses rather than overwrite the parent's.
-        Access::Undeclared | Access::Denied => {
+        // A parent's private name is a dynamic property of its own to this scope.
+        Access::Undeclared => {
+            let mut stored = zval::UNDEF;
+            copy(&mut stored, value);
+            let table = shadowing(object, false);
+            if (table.is_null() || hash::zend_hash_find_ind(table, name).is_null()) && !may_create_dynamic(object, name) {
+                zval_ptr_dtor(&mut stored);
+                return refused;
+            }
+            return hash::zend_hash_update_ind(shadowing(object, true), name, &mut stored);
+        }
+        Access::Denied => {
             property::denied(object, info);
             return refused;
         }
@@ -439,11 +524,14 @@ pub unsafe extern "C" fn zend_std_write_property(
     let mut stored = zval::UNDEF;
     if property::is_typed(info) {
         copy(&mut stored, crate::zval::deref(value));
-        if !property::verify_type(info, &mut stored) {
+        if !property::verify_type(info, &mut stored, property::uses_strict_types(object)) {
             zval_ptr_dtor(&mut stored);
             return refused;
         }
     } else {
+        if info.is_null() && hash::zend_hash_find_ind(table, name).is_null() && !may_create_dynamic(object, name) {
+            return refused;
+        }
         copy(&mut stored, value);
     }
     hash::zend_hash_update_ind(table, name, &mut stored)
@@ -472,6 +560,9 @@ pub unsafe extern "C" fn zend_std_get_property_ptr_ptr(
     if !found.is_null() || r#type == BP_VAR_R || r#type == BP_VAR_IS {
         return found;
     }
+    if info.is_null() && !may_create_dynamic(object, name) {
+        return &mut crate::startup::eg().error_zval;
+    }
     let mut null = zval::UNDEF;
     null.u1.type_info = IS_NULL as u32;
     hash::zend_hash_add(table, name, &mut null)
@@ -486,15 +577,19 @@ pub unsafe extern "C" fn zend_std_has_property(
     has_set_exists: c_int,
     _cache_slot: *mut *mut c_void,
 ) -> c_int {
-    match property::visibility(object, property::info((*object).ce, name)) {
-        Access::Allowed => {}
+    let table = match property::visibility(object, property::info((*object).ce, name)) {
+        Access::Allowed => zend_elephc_object_properties(object),
         Access::Probe => {
             property::need_scope();
             return 0;
         }
-        Access::Undeclared | Access::Denied => return 0,
+        Access::Undeclared => shadowing(object, false),
+        Access::Denied => return 0,
+    };
+    if table.is_null() {
+        return 0;
     }
-    let found = hash::zend_hash_find_ind(zend_elephc_object_properties(object), name);
+    let found = hash::zend_hash_find_ind(table, name);
     if found.is_null() {
         return 0;
     }
@@ -513,7 +608,13 @@ pub unsafe extern "C" fn zend_std_unset_property(object: *mut zend_object, name:
     let info = property::info((*object).ce, name);
     match property::visibility(object, info) {
         Access::Allowed => {}
-        Access::Undeclared => return,
+        Access::Undeclared => {
+            let table = shadowing(object, false);
+            if !table.is_null() {
+                hash::zend_hash_del(table, name);
+            }
+            return;
+        }
         Access::Denied => return property::denied(object, info),
         Access::Probe => return property::need_scope(),
     }
