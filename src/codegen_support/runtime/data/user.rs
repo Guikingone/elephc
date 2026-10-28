@@ -1605,7 +1605,7 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
 
-        emit_class_callable_methods(&mut out, class_info);
+        emit_class_callable_methods(&mut out, class_info, classes);
         emit_user_wrapper_vtable(&mut out, class_info, classes)?;
         emit_user_filter_vtable(&mut out, class_info, classes)?;
     }
@@ -3234,7 +3234,7 @@ fn emit_user_wrapper_vtable(
 /// Emits the per-class callable-method name table and count for __invoke support.
 /// Only public instance methods are included. Each method name is emitted as an
 /// ASCII label; the table is indexed by class_id at runtime.
-fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
+fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo, classes: &HashMap<String, ClassInfo>) {
     let mut public_methods: Vec<&String> = class_info
         .methods
         .keys()
@@ -3243,6 +3243,7 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
                 .method_visibilities
                 .get(*method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+                && !crate::php_ext::prelude::is_wrapper_plumbing_method(classes, class_info, method_name)
         })
         .collect();
     public_methods.sort();

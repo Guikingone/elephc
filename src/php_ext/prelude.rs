@@ -177,6 +177,37 @@ pub(crate) const DEBUG_INFO_METHOD: &str = "__elephcDebugInfo";
 /// it; when a program subclass declares its own `__clone()`, `clone` runs it first, as php-src's
 /// `clone_obj` handler runs before the program's `__clone()`.
 pub(crate) const CLONE_METHOD: &str = "__elephcClone";
+/// Whether method `method` of a class is a hosted wrapper's plumbing, which PHP code never
+/// sees: a compiler-internal `__elephc…` method, or one of the magic methods a wrapper declares
+/// for the internal class that has none (`__get`, `__set`, `__isset`, `__unset`, `__clone`)
+/// while the wrapper's own declaration is what the class has. `get_class_methods()`,
+/// `method_exists()`, callables and Reflection leave them out.
+pub(crate) fn is_wrapper_plumbing_method(
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    info: &crate::types::ClassInfo,
+    method: &str,
+) -> bool {
+    let key = crate::names::php_symbol_key(method);
+    if key.starts_with("__elephc") {
+        return true;
+    }
+    if !matches!(key.as_str(), "__get" | "__set" | "__isset" | "__unset" | "__clone") {
+        return false;
+    }
+    let hosted = |name: &str| {
+        classes.get(name).is_some_and(|info| info.interfaces.iter().any(|i| i.trim_start_matches('\\') == OBJECT_INTERFACE))
+    };
+    info.method_impl_classes.get(&key).is_some_and(|owner| {
+        hosted(owner) && classes.get(owner).and_then(|owner| owner.parent.as_deref()).is_none_or(|parent| !hosted(parent))
+    })
+}
+
+/// Whether a property or class-like name is compiler-internal (`__elephc…`), which PHP code
+/// never sees through introspection.
+pub(crate) fn is_internal_name(name: &str) -> bool {
+    crate::names::php_symbol_key(name.trim_start_matches('\\')).starts_with("__elephc")
+}
+
 /// The prelude function that tells whether the engine answers a property access itself
 /// (`crate::php_ext::overrides`).
 pub(crate) const DIRECT_FUNCTION: &str = "__elephc_php_ext_direct";

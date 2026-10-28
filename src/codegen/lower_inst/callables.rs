@@ -1688,6 +1688,7 @@ fn runtime_array_instance_method_targets_for_descriptor(
                 .get(method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
                 || is_compiler_internal_callable_name(&format!("{class_name}::{method_name}"))
+                || crate::php_ext::prelude::is_wrapper_plumbing_method(&ctx.module.class_infos, class_info, method_name)
             {
                 continue;
             }
@@ -1848,6 +1849,7 @@ fn runtime_array_instance_method_targets(
                 .get(method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
                 || is_compiler_internal_callable_name(&format!("{class_name}::{method_name}"))
+                || crate::php_ext::prelude::is_wrapper_plumbing_method(&ctx.module.class_infos, class_info, method_name)
             {
                 continue;
             }

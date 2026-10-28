@@ -190,6 +190,49 @@ var_dump(new $k);
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// Introspection sees a hosted class as PHP's internal class: none of the wrapper's own members
+/// (`__elephc…` methods, its `__get`/`__set`/`__isset`/`__unset`/`__clone`, the marker
+/// interface) is listed or reported, and Reflection lists methods in declaration order.
+#[test]
+fn introspection_does_not_see_the_wrapper() {
+    let dir = project("introspection");
+    let run = compile_and_run(
+        &dir,
+        r#"<?php
+$c = new DemoCounter(3);
+echo implode(',', get_class_methods($c)), "
+";
+var_dump(method_exists($c, '__get'), method_exists('DemoCounter', '__elephcObject'), method_exists($c, 'add'));
+var_dump(is_callable([$c, '__get']), is_callable([$c, 'add']));
+var_dump(class_implements($c), interface_exists('__ElephcPhpExtObject'));
+$r = new ReflectionClass('DemoCounter');
+foreach ($r->getMethods() as $m) { echo $m->getName(), ','; }
+echo "
+";
+var_dump($r->hasMethod('__clone'), $r->getInterfaceNames());
+"#,
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "__construct,add,value,merge,fromString,split
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+array(0) {
+}
+bool(false)
+__construct,add,value,merge,fromString,split,
+bool(false)
+array(0) {
+}
+"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// `add` reports the surface and names the function it cannot call yet;
 /// `list` shows the extension as built.
 #[test]
