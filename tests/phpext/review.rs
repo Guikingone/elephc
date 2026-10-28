@@ -335,6 +335,57 @@ catch (Throwable $error) {
 "#);
 }
 
+/// A host callback exception in finally adopts the older native exception as previous.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn host_finally_exceptions_chain_pending_native_exceptions() {
+    compare(r#"<?php
+#[Export] function php_pending_native(array $value): void {
+    try { throw new RuntimeException('native', 123); }
+    finally { echo $value['missing']; }
+}
+"#, r#"
+set_error_handler(function () { throw new LogicException('host', 456); });
+try { php_pending_native([]); }
+catch (Throwable $error) {
+    $previous = $error->getPrevious();
+    echo get_class($error), ':', $error->getMessage(), ':', $error->getCode(), ':',
+        get_class($previous), ':', $previous->getMessage(), ':', $previous->getCode();
+}
+"#);
+}
+
+/// Host exit remains authoritative over a return from native finally cleanup.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn host_exit_overrides_native_finally_returns() {
+    compare(r#"<?php
+#[Export] function php_exit_finally_return(array $value): int {
+    try { echo $value['missing']; } finally { return 7; }
+}
+"#, r#"
+set_error_handler(function () { exit(23); });
+var_dump(php_exit_finally_return([]));
+echo 'after';
+"#);
+}
+
+/// Host exit remains authoritative over an exception from native finally cleanup.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn host_exit_overrides_native_finally_exceptions() {
+    compare(r#"<?php
+#[Export] function php_exit_finally_throw(array $value): void {
+    try { echo $value['missing']; }
+    finally { throw new RuntimeException('native'); }
+}
+"#, r#"
+set_error_handler(function () { exit(23); });
+try { php_exit_finally_throw([]); } catch (Throwable $error) { echo 'caught'; }
+echo 'after';
+"#);
+}
+
 /// Single-owner Zend reference wrappers left by foreach retain by-value array semantics.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

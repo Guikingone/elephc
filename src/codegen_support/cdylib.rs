@@ -39,7 +39,7 @@ pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
 /// Converts a guarded host callback failure into a contained native cleanup unwind.
 pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("cbz x0, {done}")),       // resume normal native execution only after a successful host callback
+        Arch::AArch64 => emitter.instruction(&format!("cbz w0, {done}")),       // inspect the C int result at its declared width
         Arch::X86_64 => {
             emitter.instruction("test eax, eax");                               // inspect the guarded host callback status
             emitter.instruction(&format!("jz {done}"));                         // resume normal native execution only after a successful host callback
@@ -284,6 +284,29 @@ mod tests {
     use crate::codegen_support::platform::{AppleVariant, Platform, Target};
     use crate::span::Span;
     use crate::types::{FunctionSig, PhpType};
+
+    /// AArch64 host callbacks inspect C int results through w0 on every native host target.
+    #[test]
+    fn phpext_c_int_status_checks_use_w0_on_aarch64_hosts() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ] {
+            let mut callback = Emitter::new_cdylib(target);
+            emit_host_callback_check(&mut callback, "L_callback_done");
+            let callback_asm = callback.output();
+            assert!(callback_asm.contains("cbz w0, L_callback_done"), "{target:?}: {callback_asm}");
+            assert!(!callback_asm.contains("cbz x0, L_callback_done"), "{target:?}: {callback_asm}");
+
+            let mut thunk = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_phpext_exports(&mut thunk, &mut data, target, &[&export], false, None);
+            let thunk_asm = thunk.output();
+            assert!(thunk_asm.contains("cbnz w0, L_roundtrip_rollback"), "{target:?}: {thunk_asm}");
+            assert!(!thunk_asm.contains("cbnz x0, L_roundtrip_rollback"), "{target:?}: {thunk_asm}");
+        }
+    }
 
     /// Nested entries read their linked runtime's actual arena bound on every library target.
     #[test]

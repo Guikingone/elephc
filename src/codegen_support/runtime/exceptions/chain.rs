@@ -31,6 +31,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x1]");                                        // internal force-close markers are never PHP-visible previous exceptions
     emitter.instruction("cmn x9, #3");                                          // recognize the reserved forced-unwind class identity
     emitter.instruction("b.eq __rt_exception_chain_release");                   // consume the marker instead of attaching it to a real Throwable
+    if emitter.phpext_output {
+        emitter.instruction("cbnz x0, __rt_exception_chain_scan");              // native exceptions can adopt the older native owner directly
+        emitter.instruction("ldr x0, [sp, #8]");                                // expose the native owner before the host escape consumes it
+        emitter.bl_c("elephc_php_previous_exception");                           // copy the previous Throwable into malloc-owned transport
+        emitter.instruction("b __rt_exception_chain_release");                  // release the native owner after the adapter has copied it
+    }
     emitter.label("__rt_exception_chain_scan");
     emitter.instruction("ldr x0, [sp, #8]");                                    // restart the old chain for this new-chain node
     emitter.label("__rt_exception_chain_ancestors");
@@ -90,6 +96,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_exception_chain_return");                      // skip traversal when no previous exception exists
     emitter.instruction("cmp QWORD PTR [rdi], -3");                             // internal forced-unwind markers cannot escape through getPrevious
     emitter.instruction("je __rt_exception_chain_release");                     // release the marker while preserving the real pending Throwable
+    if emitter.phpext_output {
+        emitter.instruction("test rax, rax");                                   // distinguish a native replacement from a host callback escape
+        emitter.instruction("jnz __rt_exception_chain_scan");                   // native replacements use the ordinary in-runtime chain
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                   // expose the native owner before the host escape consumes it
+        emitter.bl_c("elephc_php_previous_exception");                           // copy the previous Throwable into malloc-owned transport
+        emitter.instruction("jmp __rt_exception_chain_release");                // release the native owner after the adapter has copied it
+    }
     emitter.label("__rt_exception_chain_scan");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restart the old chain at its root
     emitter.label("__rt_exception_chain_ancestors");
@@ -153,6 +166,22 @@ mod tests {
             assert!(asm.contains("__rt_throwable_previous_slot"), "{name}");
             assert!(asm.find("__rt_mixed_from_value").unwrap() < asm.find("__rt_decref_any").unwrap(), "{name}");
             assert!(asm.contains("__rt_exception_chain_ancestors:") && asm.contains("__rt_exception_chain_raw:"), "{name}");
+            assert!(!asm.contains("elephc_php_previous_exception"), "{name}");
+        }
+    }
+
+    /// Hosted chains export an older native Throwable before a null host escape releases it.
+    #[test]
+    fn hosted_exception_chain_exports_native_previous_on_every_host_target() {
+        for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emitter.phpext_output = true;
+            emit_exception_chain(&mut emitter);
+            let callback = emitter.target.extern_symbol("elephc_php_previous_exception");
+            let asm = emitter.output();
+            assert!(asm.contains(&callback), "{name}: {asm}");
+            assert!(asm.find(&callback).unwrap() < asm.find("__rt_exception_chain_release:").unwrap(),
+                "{name}: {asm}");
         }
     }
 }

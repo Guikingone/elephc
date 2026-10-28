@@ -128,7 +128,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     abi::emit_load_symbol_to_reg(emitter, abi::int_arg_reg_name(emitter.target, 1), BOUNDARY_STATUS, 0);
     emitter.bl_c("elephc_php_exception");
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("cbnz x0, {rollback}")),  // let the adapter roll back a failed native conversion without recursive frees
+        Arch::AArch64 => emitter.instruction(&format!("cbnz w0, {rollback}")),  // inspect the C int result at its declared width
         Arch::X86_64 => {
             emitter.instruction("test eax, eax");                               // distinguish infrastructure rollback from ordinary PHP exceptions
             emitter.instruction(&format!("jnz {rollback}"));                    // let the adapter roll back a failed native conversion without recursive frees

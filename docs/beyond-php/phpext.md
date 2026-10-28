@@ -132,7 +132,10 @@ Exceptions thrown by host error or output handlers run compiled `finally`
 cleanup but bypass `catch` blocks inside the export. They propagate to the host
 caller after native cleanup completes. A return or replacement exception from
 the `finally` block overrides or chains the pending host exception with the same
-rules as Zend.
+rules as Zend. If a host callback inside `finally` throws while a native exception
+is already pending, the host exception remains primary and the native exception
+becomes its previous link. Host `exit` and `die` remain authoritative: neither a
+native return nor a native exception from cleanup can replace their termination.
 
 Synchronous reentry on the same host Fiber is supported. If an error handler
 suspends a Fiber while native frames remain active, another Fiber or the main

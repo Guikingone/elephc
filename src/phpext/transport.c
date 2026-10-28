@@ -21,6 +21,7 @@ typedef struct ep_call {
     char *exception_message;
     size_t exception_message_len;
     zend_long exception_code;
+    bool exception_is_previous;
     char *output;
     size_t output_len;
     size_t output_capacity;

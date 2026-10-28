@@ -110,11 +110,18 @@ static void ep_issue_warning(ep_call *call)
     zend_error_zstr(level, call->warning);
 }
 
+/* Zend exit objects remain authoritative over native cleanup returns and throws. */
+static bool ep_is_host_exit(void)
+{
+    return EG(exception) &&
+        (zend_is_unwind_exit(EG(exception)) || zend_is_graceful_exit(EG(exception)));
+}
+
 /* Park the native image around a guarded Zend callback, including nested module calls. */
 static int ep_deliver(const char *bytes, size_t length, bool warning)
 {
     ep_call *call = ep_current;
-    if (call->error || call->host_bailout || (EG(exception) && zend_is_unwind_exit(EG(exception)))) { return 1; }
+    if (call->error || call->host_bailout || ep_is_host_exit()) { return 1; }
     if (!length) { return 0; }
     if (!call->checkpoint) {
         /* Recovery storage is bounded independently and does not consume transport bytes. */
@@ -183,17 +190,8 @@ void elephc_php_unsupported_result(void)
 }
 
 /* Copy a compact native Throwable while its owned message remains live. */
-int elephc_php_exception(const uintptr_t *object, uintptr_t status)
+static int ep_copy_exception(ep_call *call, const uintptr_t *object)
 {
-    ep_call *call = ep_current;
-    if (!call) { return 1; }
-    if (call->host_bailout || (call->host_exception && !object)) { return 0; }
-    if (call->error) { return 1; }
-    if (!object) {
-        call->error = status == 1 ? "PHP extension result exceeds the maximum nesting depth (64)" :
-            (status == 3 ? "elephc heap allocation failed" : "elephc native runtime failed");
-        return 1;
-    }
     uintptr_t id = object[0];
     if (id < ep_class_name_count) {
         call->exception_name_len = ep_class_name_entries[id * 2 + 1];
@@ -211,21 +209,56 @@ int elephc_php_exception(const uintptr_t *object, uintptr_t status)
     return call->error != NULL;
 }
 
+/* Preserve an older native Throwable before a host callback escape consumes its owner. */
+void elephc_php_previous_exception(const uintptr_t *object)
+{
+    ep_call *call = ep_current;
+    if (!call || !object || call->error || call->exception_message) { return; }
+    call->exception_is_previous = true;
+    ep_copy_exception(call, object);
+}
+
+/* Copy the primary compact native Throwable at the invocation boundary. */
+int elephc_php_exception(const uintptr_t *object, uintptr_t status)
+{
+    ep_call *call = ep_current;
+    if (!call) { return 1; }
+    if (call->host_bailout || (call->host_exception && !object)) { return 0; }
+    if (call->error) { return 1; }
+    if (!object) {
+        call->error = status == 1 ? "PHP extension result exceeds the maximum nesting depth (64)" :
+            (status == 3 ? "elephc heap allocation failed" : "elephc native runtime failed");
+        return 1;
+    }
+    return ep_copy_exception(call, object);
+}
+
 /* Resolve existing host Throwable classes without invoking user autoloaders. */
-static zend_class_entry *ep_exception_class(ep_call *call)
+static zend_class_entry *ep_exception_class(char *name, size_t name_len)
 {
     zend_class_entry *ce = NULL;
-    if (call->exception_name) {
-        for (size_t i = 0; i < call->exception_name_len; i++) {
-            unsigned char c = (unsigned char)call->exception_name[i];
-            if (c >= 'A' && c <= 'Z') { call->exception_name[i] = (char)(c + ('a' - 'A')); }
+    if (name) {
+        for (size_t i = 0; i < name_len; i++) {
+            unsigned char c = (unsigned char)name[i];
+            if (c >= 'A' && c <= 'Z') { name[i] = (char)(c + ('a' - 'A')); }
         }
-        ce = zend_hash_str_find_ptr(CG(class_table), call->exception_name, call->exception_name_len);
+        ce = zend_hash_str_find_ptr(CG(class_table), name, name_len);
     }
     if (!ce || ce->type != ZEND_INTERNAL_CLASS || !instanceof_function(ce, zend_ce_throwable)) {
         ce = zend_ce_exception;
     }
     return ce;
+}
+
+/* Materialize one copied native Throwable without invoking a user autoloader. */
+static void ep_materialize_exception(ep_call *call, zval *value)
+{
+    zend_class_entry *ce = ep_exception_class(call->exception_name, call->exception_name_len);
+    object_init_ex(value, ce);
+    zend_object *exception = Z_OBJ_P(value);
+    zend_update_property_stringl(ce, exception, "message", sizeof("message") - 1,
+        call->exception_message, call->exception_message_len);
+    zend_update_property_long(ce, exception, "code", sizeof("code") - 1, call->exception_code);
 }
 
 /* No Zend frame, allocation or callback lies below the native invocation. */
@@ -285,26 +318,30 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     /* The call allocation is on the heap: setjmp cannot invalidate its cleanup fields. */
     zend_try {
         if (call->host_bailout) { zend_bailout(); }
-        bool restore_host_exception = call->exception_message && EG(exception);
+        bool host_exit = ep_is_host_exit();
+        bool restore_host_exception = !host_exit && !call->exception_is_previous &&
+            call->exception_message && EG(exception);
         if (restore_host_exception) {
             /* A native exception from finally replaces the host callback exception and keeps
              * that exception as its previous link, matching Zend's finally semantics. */
             zend_exception_save();
-        } else if (call->result && call->host_exception && EG(exception)) {
+        } else if (!host_exit && call->result && call->host_exception && EG(exception)) {
             /* A return from finally overrides the pending host callback exception. */
             zend_clear_exception();
             call->host_exception = false;
+        }
+        if (!host_exit && call->exception_is_previous && call->exception_message && EG(exception)) {
+            zval previous;
+            ep_materialize_exception(call, &previous);
+            /* zend_exception_set_previous consumes this owner and appends it at the chain tail. */
+            zend_exception_set_previous(EG(exception), Z_OBJ(previous));
+            ZVAL_UNDEF(&previous);
         }
         if (!EG(exception)) {
             if (call->error) {
                 zend_throw_error(NULL, "%s", call->error);
             } else if (call->exception_message) {
-                zend_class_entry *ce = ep_exception_class(call);
-                object_init_ex(&call->pending_exception, ce);
-                zend_object *exception = Z_OBJ(call->pending_exception);
-                zend_update_property_stringl(ce, exception, "message", sizeof("message") - 1,
-                    call->exception_message, call->exception_message_len);
-                zend_update_property_long(ce, exception, "code", sizeof("code") - 1, call->exception_code);
+                ep_materialize_exception(call, &call->pending_exception);
                 zval thrown = call->pending_exception;
                 ZVAL_UNDEF(&call->pending_exception);
                 zend_throw_exception_object(&thrown);
