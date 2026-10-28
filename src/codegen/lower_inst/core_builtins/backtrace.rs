@@ -146,7 +146,7 @@ fn is_leaf_runtime_call(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
         ctx.value_php_type(operand).is_ok_and(|ty| {
             matches!(
                 ty.codegen_repr(),
-                PhpType::Callable | PhpType::Object(_)
+                PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
             )
         })
     })

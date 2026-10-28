@@ -70,9 +70,10 @@ fn test_callback_runtime_call_keeps_diagnostic_publication() {
         r#"<?php
 function callback_loop(int $n): int {
     $a = range(1, 10);
+    $cb = $argc > 0 ? fn($v) => $v + 1 : fn($v) => $v - 1;
     $x = 0;
     for ($i = 0; $i < $n; $i++) {
-        $x += array_sum(array_map(fn($v) => $v + 1, $a));
+        $x += array_sum(array_map($cb, $a));
     }
     return $x;
 }
