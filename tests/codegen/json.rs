@@ -18,6 +18,8 @@ mod constants;
 mod encode_length_sink;
 #[path = "json/decode_ownership.rs"]
 mod decode_ownership;
+#[path = "json/encode_fast_paths.rs"]
+mod encode_fast_paths;
 #[path = "json/last_error.rs"]
 mod last_error;
 #[path = "json/last_error_msg.rs"]
