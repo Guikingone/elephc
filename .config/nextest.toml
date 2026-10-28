@@ -179,6 +179,17 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 filter = 'test(lowers_examples_corpus)'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
+# `method_receiver_roots_respect_later_eval_on_all_targets` lowers and eval-checks the
+# same program for every supported target. It reached 161s and timed out twice on a loaded
+# Linux x86_64 non-codegen shard, so give it the all-targets budget.
+[[profile.default.overrides]]
+filter = 'test(method_receiver_roots_respect_later_eval_on_all_targets)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(method_receiver_roots_respect_later_eval_on_all_targets)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
