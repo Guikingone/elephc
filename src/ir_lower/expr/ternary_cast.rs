@@ -108,10 +108,14 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     let source_type = ctx.builder.value_php_type(value.value);
     let source_repr = source_type.codegen_repr();
     // `(int)` over an integer is the identity: both are already I64 and the explicit cast
-    // cannot warn or fail. `(int)` over a boolean shares the storage word but NOT the PHP
-    // type: `echo (int)false` prints "0" while `echo false` prints nothing. Re-stamp the
-    // result as an int through a pure no-op cast so every later observation sees PHP's type.
-    if matches!(target, CastType::Int) && source_repr == PhpType::Int {
+    // cannot warn or fail. A resource also has an Int codegen representation, but its PHP
+    // cast is the display id, so it must keep the runtime conversion. `(int)` over a boolean
+    // shares the storage word but NOT the PHP type: `echo (int)false` prints "0" while
+    // `echo false` prints nothing. Re-stamp that result as an int through a pure no-op cast
+    // so every later observation sees PHP's type.
+    if matches!(target, CastType::Int)
+        && matches!(source_type, PhpType::Int | PhpType::Narrow(_))
+    {
         return value;
     }
     if matches!(target, CastType::Int) && source_repr == PhpType::Bool {

@@ -455,3 +455,18 @@ echo (int)$f, '|', (int)$t, '|', (int)is_string($x), '|', (int)is_int($x), "\n";
     );
     assert_eq!(out, "0|1|0|1\n");
 }
+
+/// `(int)` on a resource reports its display id, not the raw resource storage word.
+#[test]
+fn test_cast_int_from_resource_uses_display_id() {
+    let out = compile_and_run(
+        r#"<?php
+echo ((int)STDOUT === get_resource_id(STDOUT)) ? 'T' : 'F', '|';
+$f = fopen('php://stdout', 'w');
+echo ((int)$f === get_resource_id($f)) ? 'T' : 'F', '|';
+echo gettype((int)STDOUT), '|';
+echo ((float)STDOUT === (float)get_resource_id(STDOUT)) ? 'T' : 'F', "\n";
+"#,
+    );
+    assert_eq!(out, "T|T|integer|T\n");
+}
