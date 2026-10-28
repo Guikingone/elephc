@@ -203,10 +203,10 @@ fn emit_gc_mem_caches_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
     abi::emit_symbol_address(emitter, "x19", "_heap_small_bins");
     emitter.instruction("mov x20, #0");                                         // initialize reclaimed cache bytes
-    emitter.instruction("str xzr, [sp, #32]");                                  // start at the first of four bin slots
+    emitter.instruction("str xzr, [sp, #32]");                                  // start at the first of eight bin slots
     emitter.label("__rt_gc_mem_caches_bin");
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the current bin byte offset
-    emitter.instruction("cmp x9, #32");                                         // have all four bins been drained?
+    emitter.instruction("cmp x9, #64");                                         // have all eight bins been drained?
     emitter.instruction("b.eq __rt_gc_mem_caches_done");                        // yes, return the accumulated footprint
     emitter.instruction("add x10, x19, x9");                                    // address the current bin head slot
     emitter.instruction("ldr x9, [x10]");                                       // load the first cached block header
@@ -248,7 +248,7 @@ fn emit_gc_mem_caches_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // start at the first bin slot
     emitter.label("__rt_gc_mem_caches_bin");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the current bin byte offset
-    emitter.instruction("cmp rcx, 32");                                         // have all four bins been drained?
+    emitter.instruction("cmp rcx, 64");                                         // have all eight bins been drained?
     emitter.instruction("je __rt_gc_mem_caches_done");                          // yes, return the accumulated footprint
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the bin table base
     emitter.instruction("lea rdx, [r8 + rcx]");                                 // address the current bin head slot

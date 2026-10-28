@@ -910,6 +910,7 @@ dependencies = [
  "elephc-mbstring",
  "elephc-pcntl",
  "elephc-phar",
+ "elephc-process-context",
  "elephc-tokenizer-engine",
  "flate2",
  "inventory",
@@ -938,6 +939,7 @@ version = "0.1.0"
 name = "elephc-pcntl"
 version = "0.1.0"
 dependencies = [
+ "elephc-process-context",
  "libc",
 ]
 
@@ -989,6 +991,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-process-context"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "elephc-random"
 version = "0.1.0"
 
@@ -1034,6 +1043,7 @@ version = "0.1.0"
 name = "elephc-web"
 version = "0.1.0"
 dependencies = [
+ "elephc-process-context",
  "flate2",
  "http",
  "http-body-util",

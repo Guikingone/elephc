@@ -37,6 +37,8 @@ use super::runtime_metadata::refcounted_static_properties;
 use crate::superglobals;
 use crate::types::PhpType;
 
+mod application;
+
 /// Minimal frame: just the x29/x30 footer (AArch64) or `push rbp` (x86_64),
 /// which keeps the stack 16-byte aligned across the runtime helper calls.
 const RESET_FRAME_SIZE: usize = 16;
@@ -130,9 +132,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // The heap arena reset MUST be the final reset step: the static/global releases
     // above may run destructors or decref shared values, which require the arena to
     // still be valid. Wiping the allocator to pure-bump state last reclaims the whole
-    // per-request arena at once. This is coupled to `--web` full-reset semantics; a
-    // future persistent-statics worker-script mode (`--web-worker`, PR #456) must NOT
-    // route through this routine, or its surviving statics would be freed underneath it.
+    // per-request arena at once. Application workers use this only before their post-fork
+    // bootstrap. Their request and shutdown boundaries keep the heap and exception frames
+    // valid until user callbacks finish.
     if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
         abi::emit_call_label(emitter, "__rt_mbstring_release_catalog");
     }
@@ -148,10 +150,18 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_extension_request_state_reset(emitter);
     emit_cstr_buffer_reset(emitter);
     emit_heap_arena_reset(emitter);
+    if module.web_application {
+        abi::emit_store_imm_to_symbol(emitter, "_gc_candidates_enabled", 0, 1);
+        abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), "__rt_web_candidate_roots");
+        abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_gc_candidate_root_scan_fn", 0);
+    }
     abi::emit_call_label(emitter, "__rt_gc_request_start");
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
+    if module.web_application {
+        application::emit(emitter, module, data);
+    }
 }
 
 /// Discards output buffers abandoned by the previous request.
@@ -374,10 +384,9 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+    for offset in (0..64).step_by(8) {
+        abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", offset);
+    }
     // Bulk reclamation also retires every block that remained after typed cleanup.
     // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
     let value = abi::int_result_reg(emitter);

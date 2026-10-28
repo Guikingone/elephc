@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - The harness calls real runtime helpers and enables their free-list validator.
-//! - Boundary payloads exercise all four small bins and the ordered-list fallback.
+//! - Boundary payloads exercise all eight small bins and the ordered-list fallback.
 
 use crate::support::*;
 
@@ -49,7 +49,7 @@ fn expect_symbol(emitter: &mut String, symbol: &str, expected: usize) {
 fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
     let mut emitter = String::new();
     instruction(&mut emitter, "sub sp, sp, #64", "sub rsp, 64");
-    for remainder in [8, 16, 24, 32, 40, 64, 72] {
+    for remainder in [8, 16, 24, 32, 40, 48, 56, 64, 72] {
         for symbol in ["_gc_allocs", "_gc_frees", "_gc_peak"] {
             let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
             symbol_address(&mut emitter, reg, symbol);
@@ -74,8 +74,7 @@ fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
         expect_symbol(&mut emitter, "_gc_live", 120);
         expect_symbol(&mut emitter, "_gc_peak", payload + 40);
         expect_symbol(&mut emitter, "_heap_off", payload + 40);
-        let bin = if remainder <= 8 { 0 } else if remainder <= 16 { 8 }
-            else if remainder <= 32 { 16 } else { 24 };
+        let bin = remainder - 8;
         let symbol = if remainder <= 64 { "_heap_small_bins" } else { "_heap_free_list" };
         let offset = if remainder <= 64 { bin } else { 0 };
         let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
@@ -140,7 +139,7 @@ fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
 fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
     let mut emitter = String::new();
     instruction(&mut emitter, "sub sp, sp, #64", "sub rsp, 64");
-    for remainder in [8, 16, 24, 32, 40, 64, 72] {
+    for remainder in [8, 16, 24, 32, 40, 48, 56, 64, 72] {
         // -- create a split with a live allocation on each side --
         for symbol in ["_gc_allocs", "_gc_frees", "_gc_peak"] {
             let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
@@ -181,7 +180,7 @@ fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
         expect_symbol(&mut emitter, "_heap_off", payload + 40);
         let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
         symbol_address(&mut emitter, reg, "_heap_small_bins");
-        for offset in [0, 8, 16, 24] {
+        for offset in (0..64).step_by(8) {
             instruction(&mut emitter, &format!("ldr x10, [x9, #{offset}]"),
                 &format!("mov r9, QWORD PTR [r8 + {offset}]"));
             instruction(&mut emitter, "cmp x10, #0", "cmp r9, 0");

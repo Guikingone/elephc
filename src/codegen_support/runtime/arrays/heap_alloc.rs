@@ -77,16 +77,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- try small segregated bins before walking the general free list --
     emitter.instruction("cmp x0, #64");                                         // do we fit in the small-block cache classes?
     emitter.instruction("b.hi __rt_heap_alloc_fl_start");                       // larger requests still use the general free list
-    emitter.instruction("mov x13, #0");                                         // default to the <=8-byte bin
-    emitter.instruction("cmp x0, #8");                                          // does the request fit in the smallest payload class?
-    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — start searching at the <=8-byte bin
-    emitter.instruction("mov x13, #8");                                         // otherwise start at the <=16-byte bin
-    emitter.instruction("cmp x0, #16");                                         // does the request fit in the <=16-byte class?
-    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=16-byte bin upward
-    emitter.instruction("mov x13, #16");                                        // otherwise start at the <=32-byte bin
-    emitter.instruction("cmp x0, #32");                                         // does the request fit in the <=32-byte class?
-    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=32-byte bin upward
-    emitter.instruction("mov x13, #24");                                        // requests up to 64 bytes start at the largest small-bin class
+    emitter.instruction("sub x13, x0, #8");                                     // select the exact aligned payload class, without a fit scan
     emitter.label("__rt_heap_alloc_small_bins");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
     emitter.instruction("add x9, x9, x13");                                     // x9 = address of the first candidate bin head
@@ -121,7 +112,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x16, x10, #16");                                   // advance the previous next-pointer slot to current->next
     emitter.instruction("b __rt_heap_alloc_small_bin_scan");                    // keep searching this bin for a large-enough cached block
     emitter.label("__rt_heap_alloc_small_bin_next_class");
-    emitter.instruction("cmp x13, #24");                                        // have we already checked the <=64-byte bin?
+    emitter.instruction("cmp x13, #56");                                        // have we checked the exact 64-byte payload class?
     emitter.instruction("b.eq __rt_heap_alloc_fl_start");                       // yes — fall back to the general free list
     emitter.instruction("add x13, x13, #8");                                    // advance to the next larger small-bin class
     emitter.instruction("add x9, x9, #8");                                      // move to the next bin-head slot
@@ -209,16 +200,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_heap_alloc_split_large");                    // retain ordered-list placement for larger remainders
     emitter.instruction("str x14, [x9]");                                       // unlink the allocated block before publishing its remainder in one bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_small_bins");
-    emitter.instruction("mov x16, #0");                                         // default to the eight-byte payload class
-    emitter.instruction("cmp x12, #8");                                         // classify the actual aligned remainder payload
-    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
-    emitter.instruction("mov x16, #8");                                         // advance to the next existing bin head offset
-    emitter.instruction("cmp x12, #16");                                        // classify the actual aligned remainder payload
-    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
-    emitter.instruction("mov x16, #16");                                        // advance to the next existing bin head offset
-    emitter.instruction("cmp x12, #32");                                        // classify the actual aligned remainder payload
-    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
-    emitter.instruction("mov x16, #24");                                        // advance to the next existing bin head offset
+    emitter.instruction("sub x16, x12, #8");                                    // select the exact bin for this aligned split remainder
     emitter.label("__rt_heap_alloc_split_bin_ready");
     emitter.instruction("add x15, x15, x16");                                   // address the selected size-class head
     emitter.instruction("ldr x14, [x15]");                                      // preserve the old small-bin chain
@@ -373,16 +355,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     // -- try small segregated bins before walking the general free list --
     emitter.instruction("cmp rax, 64");                                         // does this request fit within the cached small-bin size classes?
     emitter.instruction("ja __rt_heap_alloc_fl_start");                         // larger payloads still use the general ordered free list
-    emitter.instruction("xor r8, r8");                                          // default to the <=8-byte bin offset
-    emitter.instruction("cmp rax, 8");                                          // does the request fit in the smallest cached payload class?
-    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — start searching at the <=8-byte bin
-    emitter.instruction("mov r8, 8");                                           // otherwise start at the <=16-byte bin offset
-    emitter.instruction("cmp rax, 16");                                         // does the request fit in the <=16-byte class?
-    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — search from the <=16-byte bin upward
-    emitter.instruction("mov r8, 16");                                          // otherwise start at the <=32-byte bin offset
-    emitter.instruction("cmp rax, 32");                                         // does the request fit in the <=32-byte class?
-    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — search from the <=32-byte bin upward
-    emitter.instruction("mov r8, 24");                                          // remaining cached requests start at the <=64-byte bin offset
+    emitter.instruction("lea r8, [rax - 8]");                                   // select the exact aligned payload class, without a fit scan
     emitter.label("__rt_heap_alloc_small_bins");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
     emitter.instruction("add r9, r8");                                          // r9 = address of the first candidate small-bin head slot
@@ -419,7 +392,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rcx, [r10 + 16]");                                 // advance the previous next-pointer slot to current->next
     emitter.instruction("jmp __rt_heap_alloc_small_bin_scan");                  // keep searching this bin for a large-enough cached block
     emitter.label("__rt_heap_alloc_small_bin_next_class");
-    emitter.instruction("cmp r8, 24");                                          // have we already checked the largest <=64-byte cache bin?
+    emitter.instruction("cmp r8, 56");                                          // have we already checked the largest <=64-byte cache bin?
     emitter.instruction("je __rt_heap_alloc_fl_start");                         // yes — fall back to the general free list
     emitter.instruction("add r8, 8");                                           // advance to the next larger small-bin class offset
     emitter.instruction("add r9, 8");                                           // move to the next small-bin head slot
@@ -504,16 +477,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_heap_alloc_split_large");                      // retain ordered-list placement for larger remainders
     emitter.instruction("mov QWORD PTR [r9], rdx");                             // unlink the allocated block before publishing its remainder in one bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_small_bins");
-    emitter.instruction("xor edx, edx");                                        // default to the eight-byte payload class
-    emitter.instruction("cmp rcx, 8");                                          // classify the actual aligned remainder payload
-    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
-    emitter.instruction("mov edx, 8");                                          // advance to the next existing bin head offset
-    emitter.instruction("cmp rcx, 16");                                         // classify the actual aligned remainder payload
-    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
-    emitter.instruction("mov edx, 16");                                         // advance to the next existing bin head offset
-    emitter.instruction("cmp rcx, 32");                                         // classify the actual aligned remainder payload
-    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
-    emitter.instruction("mov edx, 24");                                         // advance to the next existing bin head offset
+    emitter.instruction("lea rdx, [rcx - 8]");                                  // select the exact bin for this aligned split remainder
     emitter.label("__rt_heap_alloc_split_bin_ready");
     emitter.instruction("add r11, rdx");                                        // address the selected size-class head
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // preserve the old small-bin chain

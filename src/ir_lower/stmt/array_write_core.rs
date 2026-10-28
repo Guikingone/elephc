@@ -576,6 +576,9 @@ pub(super) fn lower_mixed_key_array_set(
         Op::ArraySetMixedKey.default_effects(),
         Some(span),
     );
+    // The runtime consumes one destination owner and transfers its replacement to the store.
+    // Final Mixed frame storage must adopt that owner rather than retain and abandon it.
+    ctx.builder.set_value_ownership(result.value, crate::ir::Ownership::Owned);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, operand_pins, span);
     ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
     release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), value, span);

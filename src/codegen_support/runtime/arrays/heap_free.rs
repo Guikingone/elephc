@@ -66,6 +66,8 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("cmp x12, x17");                                        // would the candidate payload overrun the live heap?
     emitter.instruction("b.hi __rt_heap_free_done");                            // yes — reject the invalid block before free-list insertion
 
+    super::heap_live_bases::emit_free_guard(emitter);
+
     // -- return this block's PHP object handle to the pool before the storage goes --
     // Probe the authoritative side table inline. Most blocks are strings, arrays,
     // hashes, or Mixed cells and have no handle, so they avoid a preserving helper call.
@@ -146,24 +148,12 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("cmp x11, #64");                                        // does this payload fit in the segregated small-bin cache?
     emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
-    emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov x12, #8");                                         // otherwise target the <=16-byte bin
-    emitter.instruction("cmp x11, #16");                                        // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov x12, #16");                                        // otherwise target the <=32-byte bin
-    emitter.instruction("cmp x11, #32");                                        // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
+    emitter.instruction("sub x12, x11, #8");                                    // select the exact aligned payload class for constant-time insertion
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
-    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_dupscan");        // heap-debug mode active, scan the bin for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
-    emitter.instruction("ldr x16, [x16]");                                      // load the web heap-guard enabled flag
-    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // neither guard active, skip duplicate detection
+    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // ordinary web frees use exact live-base checks instead of chain scans
     emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
     emitter.label("__rt_heap_free_cache_small_scan");
@@ -363,6 +353,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
 
     emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
     emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
+    super::heap_live_bases::emit_free_guard(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
     emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
@@ -469,26 +460,13 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("cmp r11, 64");                                         // does the freed payload fit in the segregated small-bin cache?
     emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
-    emitter.instruction("xor rcx, rcx");                                        // default to the <=8-byte bin offset
-    emitter.instruction("cmp r11, 8");                                          // does the freed payload fit in the smallest cached class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov rcx, 8");                                          // otherwise target the <=16-byte bin offset
-    emitter.instruction("cmp r11, 16");                                         // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov rcx, 16");                                         // otherwise target the <=32-byte bin offset
-    emitter.instruction("cmp r11, 32");                                         // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
+    emitter.instruction("lea rcx, [r11 - 8]");                                  // select the exact aligned payload class for constant-time insertion
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
     emitter.instruction("test r8, r8");                                         // is heap-debug duplicate detection enabled?
-    emitter.instruction("jnz __rt_heap_free_cache_small_dupscan");              // heap-debug mode active, scan the bin for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_web_heap_guard_enabled");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the web heap-guard enabled flag
-    emitter.instruction("test r8, r8");                                         // is the web heap-guard double-free detection enabled?
-    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // neither guard active, skip duplicate detection
+    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // ordinary web frees use exact live-base checks instead of chain scans
     emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // start scanning the cached small-bin chain for duplicate headers
     emitter.label("__rt_heap_free_cache_small_scan");
