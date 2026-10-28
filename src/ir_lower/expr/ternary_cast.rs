@@ -152,11 +152,13 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
 /// Normalizes a string that may carry the missing-entry sentinel.
 ///
 /// The cast starts borrowed: it aliases a real string or the canonical empty
-/// string. A local load is copied with `StrPersist` before its provisional
-/// release. Finalization drops that copy and the release together when the
-/// slot stays a concrete string, so a normal string is not duplicated. A slot
-/// that widened to mixed, and a `??` temporary, keep the copy because their
-/// source is actually freed. Element reads that nobody owns stay borrowed.
+/// string. A concrete `PhpLocal` or `StaticLocal` keeps that borrow and is not
+/// copied: the slot still owns the bytes, and copying one on every call both
+/// leaked and dominated the loop. A `??` temporary, and a load whose storage
+/// no longer matches the string, is copied with `StrPersist` before it is
+/// released. A local that widens only after this cast is borrowed on the first
+/// pass and copied on the string-storage replay, once its finished slot is
+/// known to free the load. Element reads that nobody owns stay borrowed.
 fn normalize_missing_string_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -172,23 +174,85 @@ fn normalize_missing_string_value(
     );
     ctx.builder
         .set_value_ownership(normalized.value, Ownership::Borrowed);
-    let local_load = matches!(
-        ctx.builder.value_defining_op(value.value),
-        Some(Op::LoadLocal | Op::LoadStaticLocal)
-    );
-    if !local_load && !ctx.value_is_owning_temporary(value) {
+    if !string_cast_source_is_released(ctx, value) {
+        if let Some(name) = php_string_local_load_name(ctx, value) {
+            ctx.provisional_borrowed_string_casts.insert(name);
+        }
         return normalized;
     }
+    // `Bool(true)` marks the copy of a normalized cast so a later release can
+    // find it without freeing unrelated persisted strings.
     let owned = ctx.emit_owned_value(
         Op::StrPersist,
         vec![normalized.value],
-        None,
+        Some(Immediate::Bool(true)),
         PhpType::Str,
         Op::StrPersist.default_effects(),
         Some(expr.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     owned
+}
+
+/// Returns whether freeing `value` after the cast would free bytes the cast aliases.
+///
+/// A concrete string local only lends its slot, so the cast stays borrowed and
+/// nothing is released. A hidden or owned temporary (`??`) and a load that
+/// already had to allocate a detached string are released, after the cast has
+/// been copied. A local named by the string-storage replay is copied even when
+/// this cast still sees the pre-widening slot type.
+fn string_cast_source_is_released(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    if ctx.value_is_owning_temporary(value) {
+        return true;
+    }
+    let Some(inst) = ctx.builder.value_defining_instruction(value.value) else {
+        return false;
+    };
+    if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+        return false;
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return false;
+    };
+    if !matches!(
+        ctx.builder.local_kind(slot),
+        crate::ir::LocalKind::PhpLocal | crate::ir::LocalKind::StaticLocal
+    ) {
+        return true;
+    }
+    if php_string_local_load_name(ctx, value)
+        .is_some_and(|name| ctx.owned_string_cast_locals.contains(&name))
+    {
+        return true;
+    }
+    let storage = ctx.builder.local_php_type(slot);
+    let result = ctx.builder.value_php_type(value.value);
+    crate::ir::local_load_coercion_owns_result(&storage, &result)
+}
+
+/// Returns the PHP name of a concrete string local load, when `value` is one.
+fn php_string_local_load_name(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> Option<String> {
+    let inst = ctx.builder.value_defining_instruction(value.value)?;
+    if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+        return None;
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return None;
+    };
+    if !matches!(
+        ctx.builder.local_kind(slot),
+        crate::ir::LocalKind::PhpLocal | crate::ir::LocalKind::StaticLocal
+    ) {
+        return None;
+    }
+    let name = ctx
+        .builder
+        .function()
+        .locals
+        .get(slot.as_raw() as usize)?
+        .name
+        .as_deref()?;
+    Some(name.strip_suffix("#cow").unwrap_or(name).to_string())
 }
 
 /// Lowers PHP's `(array)` cast by the source classification it shares with the checker.

@@ -208,6 +208,10 @@ pub(crate) struct LoweringSnapshot {
     /// Provisional offset receiver reads belonging to this speculative function state.
     string_offset_receivers: Vec<(Span, ValueId)>,
     borrowed_string_calls_enabled: bool,
+    /// Replay set of locals whose string cast must copy. See `owned_string_cast_locals`.
+    owned_string_cast_locals: HashSet<String>,
+    /// Casts that borrowed a concrete string local inside this speculative state.
+    provisional_borrowed_string_casts: HashSet<String>,
     append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
@@ -298,6 +302,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
+    /// PHP locals whose `(string)` cast must copy: the finished frame slot frees the load.
+    ///
+    /// Filled after the first body lower and applied on the string-storage replay.
+    /// A concrete string slot stays off this set, so the cast keeps borrowing it.
+    pub(crate) owned_string_cast_locals: HashSet<String>,
+    /// Locals a `(string)` cast borrowed because the slot was still a concrete string.
+    pub(crate) provisional_borrowed_string_casts: HashSet<String>,
     /// Whole-body proof that an instance method cannot widen its immutable this slot.
     /// Set before body lowering and preserved across speculative snapshots.
     pub(crate) this_storage_stays_concrete: bool,
@@ -641,6 +652,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             string_offset_receivers: Vec::new(),
             owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
+            owned_string_cast_locals: HashSet::new(),
+            provisional_borrowed_string_casts: HashSet::new(),
             this_storage_stays_concrete: false,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
@@ -707,6 +720,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
             borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
+            owned_string_cast_locals: self.owned_string_cast_locals.clone(),
+            provisional_borrowed_string_casts: self.provisional_borrowed_string_casts.clone(),
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
@@ -813,6 +828,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
         self.string_offset_receivers = snapshot.string_offset_receivers;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
+        self.owned_string_cast_locals = snapshot.owned_string_cast_locals;
+        self.provisional_borrowed_string_casts = snapshot.provisional_borrowed_string_casts;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;

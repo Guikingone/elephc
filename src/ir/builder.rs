@@ -267,14 +267,8 @@ impl<'f> Builder<'f> {
     /// coercions, including concrete-to-Mixed boxing and Mixed-to-concrete unboxing.
     /// Same-storage Callable and Mixed captures only borrow their local: releasing
     /// the view would cancel the descriptor's retain and leave a dangling capture.
-    ///
-    /// A string cast copies its local with `StrPersist` before that provisional
-    /// release. When the release is dropped, the copy is dropped too and its users
-    /// read the borrowed cast. A `??` temporary and a slot that widened to mixed
-    /// keep both the copy and the release.
     pub fn prune_borrowed_local_load_release_ops(&mut self) {
         let mut prune = Vec::new();
-        let mut dropped_copies = Vec::new();
         for (index, inst) in self.func.instructions.iter().enumerate() {
             if inst.op != Op::Release {
                 continue;
@@ -282,98 +276,45 @@ impl<'f> Builder<'f> {
             let Some(source) = inst.operands.first().copied() else {
                 continue;
             };
-            if !self.borrowed_concrete_string_load_release(source) {
+            let Some(value) = self.func.values.get(source.as_raw() as usize) else {
+                continue;
+            };
+            if value.ownership == Ownership::Owned {
+                continue;
+            }
+            let ValueDef::Instruction { inst: source_inst, .. } = value.def else {
+                continue;
+            };
+            let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
+                continue;
+            };
+            let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal) {
+                continue;
+            }
+            if !Ownership::php_type_needs_lifetime_tracking(&value.php_type) {
+                continue;
+            }
+            if local_load_coercion_owns_result(&local.php_type, &value.php_type) {
                 continue;
             }
             prune.push(index);
-            if let Some(copy) = self.string_cast_copy_of_load(index, source) {
-                dropped_copies.push(copy);
-            }
         }
-        let mut release_of_copy = Vec::new();
-        for (copy, _, _) in &dropped_copies {
-            for (index, inst) in self.func.instructions.iter().enumerate() {
-                if matches!(inst.op, Op::Release | Op::ReleaseUnlessAliases)
-                    && inst.operands.first() == Some(copy)
-                {
-                    release_of_copy.push(index);
-                }
-            }
+        for index in prune {
+            let inst = &mut self.func.instructions[index];
+            inst.op = Op::Nop;
+            inst.operands.clear();
+            inst.immediate = None;
+            inst.effects = Op::Nop.default_effects();
         }
-        for (copy, _, cast) in &dropped_copies {
-            retarget_value(self.func, *copy, *cast);
-        }
-        for index in prune
-            .into_iter()
-            .chain(release_of_copy)
-            .chain(dropped_copies.iter().map(|(_, index, _)| *index))
-        {
-            nop_instruction(&mut self.func.instructions[index]);
-        }
-    }
-
-    /// Returns whether releasing `load` would free a concrete string the slot still owns.
-    fn borrowed_concrete_string_load_release(&self, load: ValueId) -> bool {
-        let Some(value) = self.func.values.get(load.as_raw() as usize) else {
-            return false;
-        };
-        if value.ownership == Ownership::Owned {
-            return false;
-        }
-        let ValueDef::Instruction { inst: source_inst, .. } = value.def else {
-            return false;
-        };
-        let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
-            return false;
-        };
-        if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
-            return false;
-        }
-        let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
-            return false;
-        };
-        let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
-            return false;
-        };
-        if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal) {
-            return false;
-        }
-        if !Ownership::php_type_needs_lifetime_tracking(&value.php_type) {
-            return false;
-        }
-        !local_load_coercion_owns_result(&local.php_type, &value.php_type)
-    }
-
-    /// Returns the `StrPersist` of a string cast of `load` emitted before `release_index`.
-    ///
-    /// The cast, the copy, and the provisional release are emitted together. The
-    /// nearest preceding copy of this load is the one that release was paired with.
-    fn string_cast_copy_of_load(
-        &self,
-        release_index: usize,
-        load: ValueId,
-    ) -> Option<(ValueId, usize, ValueId)> {
-        for index in (0..release_index).rev() {
-            let inst = &self.func.instructions[index];
-            if inst.op != Op::StrPersist {
-                continue;
-            }
-            let Some(cast_value) = inst.operands.first().copied() else {
-                continue;
-            };
-            let Some(cast) = instruction_for_value(self.func, cast_value) else {
-                continue;
-            };
-            if cast.op != Op::Cast || cast.immediate != Some(Immediate::CastTarget(IrType::Str)) {
-                continue;
-            }
-            if cast.operands.first().copied() != Some(load) {
-                continue;
-            }
-            let copy = inst.result?;
-            return Some((copy, index, cast_value));
-        }
-        None
     }
 
     /// Neutralizes exception guards for provisional local owners that stayed borrowed.
@@ -780,94 +721,6 @@ impl<'f> Builder<'f> {
             block.terminator.is_none(),
             "attempted to emit an EIR instruction after a terminator"
         );
-    }
-}
-
-/// Clears an instruction without removing it, so later ids stay stable.
-fn nop_instruction(inst: &mut Instruction) {
-    inst.op = Op::Nop;
-    inst.operands.clear();
-    inst.immediate = None;
-    inst.effects = Op::Nop.default_effects();
-}
-
-/// Returns the instruction that produced `value`, when it has one.
-fn instruction_for_value<'a>(func: &'a Function, value: ValueId) -> Option<&'a Instruction> {
-    let def = func.values.get(value.as_raw() as usize)?.def;
-    let ValueDef::Instruction { inst, .. } = def else {
-        return None;
-    };
-    func.instructions.get(inst.as_raw() as usize)
-}
-
-/// Rewrites every use of `from` to `to`.
-fn retarget_value(func: &mut Function, from: ValueId, to: ValueId) {
-    for inst in &mut func.instructions {
-        for operand in &mut inst.operands {
-            if *operand == from {
-                *operand = to;
-            }
-        }
-    }
-    for block in &mut func.blocks {
-        if let Some(terminator) = &mut block.terminator {
-            retarget_terminator(terminator, from, to);
-        }
-    }
-}
-
-/// Rewrites value operands of one terminator.
-fn retarget_terminator(terminator: &mut Terminator, from: ValueId, to: ValueId) {
-    let replace = |value: &mut ValueId| {
-        if *value == from {
-            *value = to;
-        }
-    };
-    match terminator {
-        Terminator::Br { args, .. } => args.iter_mut().for_each(replace),
-        Terminator::CondBr {
-            cond,
-            then_args,
-            else_args,
-            ..
-        } => {
-            replace(cond);
-            then_args.iter_mut().for_each(replace);
-            else_args.iter_mut().for_each(replace);
-        }
-        Terminator::Switch {
-            scrutinee,
-            cases,
-            default_args,
-            ..
-        } => {
-            replace(scrutinee);
-            for case in cases {
-                case.args.iter_mut().for_each(replace);
-            }
-            default_args.iter_mut().for_each(replace);
-        }
-        Terminator::Return { value } => {
-            if let Some(value) = value {
-                replace(value);
-            }
-        }
-        Terminator::Throw { value } => replace(value),
-        Terminator::GeneratorSuspend {
-            key,
-            value,
-            resume_args,
-            ..
-        } => {
-            if let Some(key) = key {
-                replace(key);
-            }
-            if let Some(value) = value {
-                replace(value);
-            }
-            resume_args.iter_mut().for_each(replace);
-        }
-        Terminator::Fatal { .. } | Terminator::Unreachable => {}
     }
 }
 

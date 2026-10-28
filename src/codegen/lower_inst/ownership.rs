@@ -11,7 +11,9 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, Op, ValueDef, ValueId};
+use crate::ir::{
+    Immediate, Instruction, Op, RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
+};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -363,6 +365,8 @@ pub(super) fn lower_forward(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// The copy exists only so a mixed local or a `??` temporary can be released
 /// before the call. `trim` may return a view of that copy, so the copy stays
 /// alive until the call's result is released, which is after the caller reads it.
+/// Only calls that do not keep the argument are included. `ini_set` stores the
+/// pointer and must not have it freed here.
 fn release_normalized_string_cast_copies(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -374,7 +378,7 @@ fn release_normalized_string_cast_copies(
         }) else {
             return Ok(());
         };
-        if inst.op != Op::RuntimeCall {
+        if inst.op != Op::RuntimeCall || !runtime_call_discards_string_argument(inst) {
             return Ok(());
         }
         inst.operands
@@ -384,7 +388,9 @@ fn release_normalized_string_cast_copies(
                 ctx.function.value(*operand).and_then(|value| match value.def {
                     ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
                     _ => None,
-                }).is_some_and(|producer| producer.op == Op::StrPersist)
+                }).is_some_and(|producer| {
+                    producer.op == Op::StrPersist && producer.immediate == Some(Immediate::Bool(true))
+                })
             })
             .collect::<Vec<_>>()
     };
@@ -395,6 +401,30 @@ fn release_normalized_string_cast_copies(
         }
     }
     Ok(())
+}
+
+/// Returns whether this runtime call reads its string arguments without storing them.
+fn runtime_call_discards_string_argument(inst: &Instruction) -> bool {
+    let Some(Immediate::RuntimeCall(target)) = &inst.immediate else {
+        return false;
+    };
+    let id = match target {
+        RuntimeCallTarget::Function(id)
+        | RuntimeCallTarget::ProfiledFunction { target: id, .. } => *id,
+        _ => return false,
+    };
+    matches!(
+        id,
+        RuntimeFnId::Trim
+            | RuntimeFnId::Ltrim
+            | RuntimeFnId::Rtrim
+            | RuntimeFnId::Chop
+            | RuntimeFnId::Md5
+            | RuntimeFnId::Sha1
+            | RuntimeFnId::Sprintf
+            | RuntimeFnId::Vsprintf
+            | RuntimeFnId::Printf
+    )
 }
 
 /// Releases a loaded string result through the validating heap-free helper.
