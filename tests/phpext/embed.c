@@ -87,7 +87,7 @@ static void run_abandoned_requests(void)
         "  try { phpext_pause('abandoned'); } catch (RuntimeException $error) {}"
         "});"
         "if ($GLOBALS['fatal_fiber']->start() !== 'parked') { throw new Exception('Fiber did not park'); }"
-        "if ($held) { elephc_late_hold($GLOBALS['fatal_fiber']); }"
+        "elephc_late_hold($GLOBALS['fatal_fiber'], $resumed);"
         "set_error_handler(static function () { return false; });"
         "trigger_error('intentional fatal request', E_USER_ERROR);";
     php_request_shutdown(NULL);
@@ -99,7 +99,7 @@ static void run_abandoned_requests(void)
         char script[sizeof(code) + 160];
         snprintf(script, sizeof(script),
             "if (elephc_late_resume_count() !== %u) { throw new Exception('late resume missing'); } "
-            "$nested = %s; $held = %s; %s", expected_resumes,
+            "$nested = %s; $resumed = %s; %s", expected_resumes,
             request % 2 ? "true" : "false", request % 4 < 2 ? "true" : "false", code);
         volatile bool bailed = false;
         zend_first_try {

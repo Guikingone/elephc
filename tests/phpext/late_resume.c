@@ -9,14 +9,16 @@ ZEND_TSRMLS_CACHE_DEFINE()
 
 ZEND_BEGIN_MODULE_GLOBALS(elephc_late_resume)
     zval fiber;
+    bool resume;
 ZEND_END_MODULE_GLOBALS(elephc_late_resume)
 ZEND_DECLARE_MODULE_GLOBALS(elephc_late_resume)
 #define LATE_GLOBAL(member) ZEND_MODULE_GLOBALS_ACCESSOR(elephc_late_resume, member)
 
 static atomic_ulong late_resume_count;
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_elephc_late_hold, 0, 1, IS_VOID, 0)
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_elephc_late_hold, 0, 2, IS_VOID, 0)
     ZEND_ARG_TYPE_INFO(0, fiber, IS_OBJECT, 0)
+    ZEND_ARG_TYPE_INFO(0, resume, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_elephc_late_resume_count, 0, 0, IS_LONG, 0)
@@ -27,11 +29,14 @@ static PHP_FUNCTION(elephc_late_hold)
 {
     (void)return_value;
     zval *fiber;
-    ZEND_PARSE_PARAMETERS_START(1, 1)
+    bool resume;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
         Z_PARAM_OBJECT(fiber)
+        Z_PARAM_BOOL(resume)
     ZEND_PARSE_PARAMETERS_END();
     if (!Z_ISUNDEF(LATE_GLOBAL(fiber))) { zval_ptr_dtor(&LATE_GLOBAL(fiber)); }
     ZVAL_COPY(&LATE_GLOBAL(fiber), fiber);
+    LATE_GLOBAL(resume) = resume;
 }
 
 /* Expose process-wide proof to the next request without retaining Zend values. */
@@ -50,6 +55,7 @@ static const zend_function_entry late_resume_functions[] = {
 static PHP_GINIT_FUNCTION(elephc_late_resume)
 {
     ZVAL_UNDEF(&elephc_late_resume_globals->fiber);
+    elephc_late_resume_globals->resume = false;
 }
 
 static PHP_RINIT_FUNCTION(elephc_late_resume)
@@ -60,6 +66,7 @@ static PHP_RINIT_FUNCTION(elephc_late_resume)
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
     ZVAL_UNDEF(&LATE_GLOBAL(fiber));
+    LATE_GLOBAL(resume) = false;
     return SUCCESS;
 }
 
@@ -68,7 +75,7 @@ static PHP_RSHUTDOWN_FUNCTION(elephc_late_resume)
 {
     (void)type;
     (void)module_number;
-    if (!Z_ISUNDEF(LATE_GLOBAL(fiber))) {
+    if (!Z_ISUNDEF(LATE_GLOBAL(fiber)) && LATE_GLOBAL(resume)) {
         zval result;
         ZVAL_UNDEF(&result);
         zval *returned = zend_call_method_with_0_params(Z_OBJ(LATE_GLOBAL(fiber)),
@@ -78,6 +85,17 @@ static PHP_RSHUTDOWN_FUNCTION(elephc_late_resume)
         zval_ptr_dtor(&LATE_GLOBAL(fiber));
         ZVAL_UNDEF(&LATE_GLOBAL(fiber));
     }
+    return SUCCESS;
+}
+
+/* Reverse load order puts this after the produced module's post-deactivate hook. */
+static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(elephc_late_resume)
+{
+    if (!Z_ISUNDEF(LATE_GLOBAL(fiber))) {
+        zval_ptr_dtor(&LATE_GLOBAL(fiber));
+        ZVAL_UNDEF(&LATE_GLOBAL(fiber));
+    }
+    LATE_GLOBAL(resume) = false;
     return SUCCESS;
 }
 
@@ -94,7 +112,7 @@ static zend_module_entry elephc_late_resume_module_entry = {
     ZEND_MODULE_GLOBALS(elephc_late_resume),
     PHP_GINIT(elephc_late_resume),
     NULL,
-    NULL,
+    ZEND_MODULE_POST_ZEND_DEACTIVATE_N(elephc_late_resume),
     STANDARD_MODULE_PROPERTIES_EX
 };
 
