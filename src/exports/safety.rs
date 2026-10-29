@@ -164,6 +164,18 @@ fn validate_call_graph(
                                 "has no audited request-local PHP extension lifecycle");
                         }
                     }
+                    if let Some(callee) = phpext_variant_target(
+                        module,
+                        instruction,
+                        &dispatch_groups,
+                    ) {
+                        return reject_phpext_function_variant(
+                            export,
+                            instruction.span.unwrap_or(export.span),
+                            &path,
+                            &callee,
+                        );
+                    }
                 }
                 if instruction.op == Op::LanguageConstructCall {
                     let Some(name) = immediate_function_name(module, instruction.immediate.as_ref())
@@ -242,6 +254,7 @@ fn validate_call_graph(
                         &callable_reachability,
                         &mut queue,
                         &path,
+                        phpext,
                     )?,
                     _ => {}
                 }
@@ -249,6 +262,47 @@ fn validate_call_graph(
         }
     }
     Ok(())
+}
+
+/// Identifies a call whose target depends on include-time variant activation.
+fn phpext_variant_target(
+    module: &Module,
+    instruction: &crate::ir::Instruction,
+    dispatch_groups: &HashMap<String, Vec<String>>,
+) -> Option<String> {
+    if !matches!(instruction.op, Op::Call | Op::FunctionVariantCall) {
+        return None;
+    }
+    match instruction.immediate.as_ref()? {
+        Immediate::Data(_) | Immediate::ProfiledData { .. } => {
+            let callee = immediate_function_name(module, instruction.immediate.as_ref())?;
+            dispatch_groups
+                .contains_key(&php_symbol_key(callee))
+                .then(|| callee.to_string())
+        }
+        Immediate::FunctionVariantRef { group, variant } => {
+            resolve_variant_callee_name(module, *group, *variant)
+        }
+        _ => None,
+    }
+}
+
+/// Rejects variant dispatch that cannot be initialized without running top-level source code.
+fn reject_phpext_function_variant<T>(
+    export: &ExportedFunction,
+    span: crate::span::Span,
+    path: &[String],
+    callee: &str,
+) -> Result<T, CompileError> {
+    Err(CompileError::new(
+        span,
+        &format!(
+            "PHP export '{}' reaches include-selected function variant '{}' through {}; --emit phpext does not execute top-level include activation",
+            export.name,
+            callee,
+            path.join(" -> "),
+        ),
+    ))
 }
 
 /// Finds address-bearing native storage whose ordinary Mixed tag would hide its identity.
@@ -348,6 +402,7 @@ fn validate_runtime_call<'a>(
     callable_reachability: &CallableReachabilityAnalysis,
     queue: &mut VecDeque<(String, Vec<String>)>,
     path: &[String],
+    phpext: bool,
 ) -> Result<(), CompileError> {
     if let Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) =
         instruction.immediate.as_ref()
@@ -372,6 +427,19 @@ fn validate_runtime_call<'a>(
         let Some(candidates) = callable_reachability.candidates(callback) else {
             return reject_runtime_call(export, instruction, path, target, "uses an opaque runtime callback");
         };
+        if phpext {
+            if let Some(candidate) = candidates
+                .iter()
+                .find(|candidate| dispatch_groups.contains_key(&php_symbol_key(candidate)))
+            {
+                return reject_phpext_function_variant(
+                    export,
+                    instruction.span.unwrap_or(export.span),
+                    path,
+                    candidate,
+                );
+            }
+        }
         if candidates.is_empty()
             || candidates.iter().any(|candidate| {
                 !enqueue_named_target(functions, dispatch_groups, queue, path, candidate)
