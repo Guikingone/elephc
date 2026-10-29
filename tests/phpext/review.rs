@@ -782,6 +782,34 @@ catch (ArgumentCountError $error) { echo get_class($error), ':', $error->getMess
     assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
+/// Same-Fiber reentry cannot overwrite a pending integer concat view in the spill ring.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn nested_reentry_preserves_concat_spill_views() {
+    compare(
+        r#"<?php
+#[Export] function php_spill_outer(array $value, int $prefix): string {
+    $last = '';
+    for ($i = 0; $i < 120000; $i++) { $last = (string)$i; }
+    if ($last === 'never') { return $last; }
+    return $prefix . $value['missing'];
+}
+#[Export] function php_wrap_int_spills(): string {
+    $result = '';
+    for ($i = 0; $i < 8; $i++) { $result = (string)$i; }
+    return $result;
+}
+"#,
+        r#"
+set_error_handler(function () {
+    php_wrap_int_spills();
+    return true;
+});
+echo php_spill_outer([], 12345);
+"#,
+    );
+}
+
 /// Parameter errors report the caller's actual type and nullable spelling, including false/null.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

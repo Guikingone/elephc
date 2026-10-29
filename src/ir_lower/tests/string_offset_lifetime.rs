@@ -421,6 +421,50 @@ function warning_key(string $s, int $i): void { $items = ["seed" => 0]; $items[$
     }
 }
 
+/// A warning-capable array read persists an earlier numeric concat view before reentry.
+#[test]
+fn concat_transient_string_is_persisted_before_warning_rhs() {
+    use crate::ir::{Effects, Op};
+    let module = super::lower_source(
+        r#"<?php
+function concat_warning(array $items, int $prefix): string {
+    return $prefix . $items["missing"];
+}
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "concat_warning")
+        .expect("expected concat_warning EIR function");
+    let block = function
+        .blocks
+        .iter()
+        .find(|block| {
+            block.instructions.iter().any(|id| {
+                function
+                    .instruction(*id)
+                    .is_some_and(|inst| inst.effects.contains(Effects::MAY_WARN))
+            })
+        })
+        .expect("expected warning-capable array read");
+    let warning = block
+        .instructions
+        .iter()
+        .position(|id| {
+            function
+                .instruction(*id)
+                .is_some_and(|inst| inst.effects.contains(Effects::MAY_WARN))
+        })
+        .expect("expected warning-capable array read position");
+    assert!(
+        block.instructions[..warning]
+            .iter()
+            .any(|id| function.instruction(*id).is_some_and(|inst| inst.op == Op::StrPersist)),
+        "numeric concat scratch must be persisted before the warning-capable RHS"
+    );
+}
+
 /// A nested index call sees the persisted byte receiver published until the outer read completes.
 #[test]
 fn string_offset_nested_index_owner_on_all_targets() {
