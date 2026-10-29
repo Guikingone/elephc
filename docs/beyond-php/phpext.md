@@ -157,6 +157,10 @@ safe Zend boundary only when the discarded replacement chain has no other native
 owner. A retained replacement keeps the predecessor for a later rethrow. If a
 host predecessor already contains that same retained replacement, the adapter
 drops the predecessor instead of materializing a duplicate cycle, matching Zend.
+When a callback throws while an older host escape is already being handled by a
+native `finally`, the adapter parks the older escape separately. Catching or
+discarding the inner exception restores the outer one; letting the inner
+exception escape appends the outer exception to its `previous` chain.
 
 One active synchronous export stack can retain at most 64 simultaneously live
 native replacement pins while preserving displaced host exceptions. Each

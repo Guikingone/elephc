@@ -51,6 +51,11 @@ also let materialization drop a host predecessor whose chain already contains
 the same replacement, reproducing Zend's cycle rule without comparing copied
 Zend-object addresses.
 
+Host callback exceptions nested inside an already-active native `finally` use a
+separate adapter-owned stack instead of immediately chaining through
+`EG(exception)`. Settling the newest escape restores one outer entry. Only an
+escaping newest exception consumes the stack into its Zend `previous` chain.
+
 The actual Zend ABI comes from the selected PHP SDK. The producer reuses neutral
 `elephc-zend` value-layout facts and native zval transport helpers; the replacement
 engine is never linked. See [PHP extensions](../beyond-php/phpext.md) for the

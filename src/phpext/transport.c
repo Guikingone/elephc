@@ -29,6 +29,11 @@ typedef struct ep_retired_host_exception {
     zval exception;
 } ep_retired_host_exception;
 
+typedef struct ep_parked_host_exception {
+    struct ep_parked_host_exception *next;
+    zval exception;
+} ep_parked_host_exception;
+
 typedef struct ep_exception_copy {
     struct ep_exception_copy *next;
     struct ep_exception_copy *previous;
@@ -65,6 +70,7 @@ typedef struct ep_call {
     ep_host_predecessor *active_host_predecessor;
     const uintptr_t *exception_host_predecessor_key;
     ep_retired_host_exception *retired_host_exceptions;
+    ep_parked_host_exception *parked_host_exceptions;
     char *output;
     size_t output_len;
     size_t output_capacity;
@@ -133,11 +139,22 @@ static void ep_retired_host_exceptions_abandon(ep_retired_host_exception *retire
     }
 }
 
+/* Fatal teardown cannot invoke parked request-owned Zend destructors either. */
+static void ep_parked_host_exceptions_abandon(ep_parked_host_exception *parked)
+{
+    while (parked) {
+        ep_parked_host_exception *next = parked->next;
+        free(parked);
+        parked = next;
+    }
+}
+
 /* Retire every partial input/result copy after normal returns, exceptions and bailouts. */
 static void ep_call_destroy(ep_call *call)
 {
     zval pending = call->pending_exception;
     ep_retired_host_exception *retired = call->retired_host_exceptions;
+    ep_parked_host_exception *parked = call->parked_host_exceptions;
     zval host_predecessors[EP_HOST_PREDECESSOR_LIMIT];
     size_t host_predecessor_count = 0;
     for (size_t i = 0; i < call->host_predecessor_count; i++) {
@@ -157,6 +174,13 @@ static void ep_call_destroy(ep_call *call)
         zval_ptr_dtor(&exception);
         retired = next;
     }
+    while (parked) {
+        ep_parked_host_exception *next = parked->next;
+        zval exception = parked->exception;
+        free(parked);
+        zval_ptr_dtor(&exception);
+        parked = next;
+    }
 }
 
 /* Fatal request termination can skip Fiber destructors, leaving parked calls in this chain. */
@@ -165,6 +189,7 @@ static void ep_call_abandon_chain(ep_call *call)
     while (call) {
         ep_call *parent = call->parent;
         ep_retired_host_exceptions_abandon(call->retired_host_exceptions);
+        ep_parked_host_exceptions_abandon(call->parked_host_exceptions);
         ep_call_free_storage(call);
         call = parent;
     }

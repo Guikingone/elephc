@@ -22,6 +22,7 @@ static ep_call *ep_current;
 
 static void ep_insert_previous(ep_call *call, ep_exception_copy *copy,
     ep_host_predecessor *container);
+static zend_object *ep_host_previous(zend_object *exception);
 
 /* Initialized and zero-filled native storage need not be adjacent in the loaded module. */
 static void ep_state_save(unsigned char *image)
@@ -122,6 +123,78 @@ static void ep_issue_warning(ep_call *call)
 static bool ep_is_host_exit(void)
 {
     return EG(exception) && zend_is_unwind_exit(EG(exception));
+}
+
+/* Move Zend's saved outer escape into adapter storage without chaining it under the callback. */
+static bool ep_park_saved_host_exception(ep_call *call, zend_object *saved)
+{
+    ep_parked_host_exception *parked = calloc(1, sizeof(*parked));
+    if (!parked) { return false; }
+    if (EG(prev_exception) == saved) {
+        ZVAL_OBJ(&parked->exception, saved);
+        EG(prev_exception) = NULL;
+    } else {
+        zend_object *cursor = EG(exception);
+        while (cursor) {
+            zend_object *previous = ep_host_previous(cursor);
+            if (previous == saved) {
+                GC_ADDREF(saved);
+                ZVAL_OBJ(&parked->exception, saved);
+                zend_update_property_null(zend_get_exception_base(cursor), cursor,
+                    "previous", sizeof("previous") - 1);
+                break;
+            }
+            cursor = previous;
+        }
+        if (Z_ISUNDEF(parked->exception)) {
+            free(parked);
+            return false;
+        }
+    }
+    parked->next = call->parked_host_exceptions;
+    call->parked_host_exceptions = parked;
+    return true;
+}
+
+/* Restore only the immediate outer host escape after the newest callback escape settles. */
+static bool ep_restore_parked_host_exception(ep_call *call)
+{
+    ep_parked_host_exception *parked = call->parked_host_exceptions;
+    if (!parked || EG(exception)) { return false; }
+    call->parked_host_exceptions = parked->next;
+    EG(exception) = Z_OBJ(parked->exception);
+    ZVAL_UNDEF(&parked->exception);
+    free(parked);
+    call->host_exception = true;
+    return true;
+}
+
+/* Append every still-parked outer escape only when the newest exception leaves its finally. */
+static void ep_chain_parked_host_exceptions(ep_call *call)
+{
+    if (!EG(exception)) { ep_restore_parked_host_exception(call); }
+    while (EG(exception) && call->parked_host_exceptions) {
+        ep_parked_host_exception *parked = call->parked_host_exceptions;
+        call->parked_host_exceptions = parked->next;
+        zend_exception_set_previous(EG(exception), Z_OBJ(parked->exception));
+        ZVAL_UNDEF(&parked->exception);
+        free(parked);
+    }
+    call->host_exception = EG(exception) != NULL;
+}
+
+/* A return or infrastructure failure overrides every parked host escape in this invocation. */
+static void ep_clear_parked_host_exceptions(ep_call *call)
+{
+    ep_parked_host_exception *parked = call->parked_host_exceptions;
+    call->parked_host_exceptions = NULL;
+    while (parked) {
+        ep_parked_host_exception *next = parked->next;
+        zval exception = parked->exception;
+        free(parked);
+        zval_ptr_dtor(&exception);
+        parked = next;
+    }
 }
 
 /* Infrastructure statuses remain authoritative across native finally return and throw. */
@@ -288,12 +361,13 @@ static void ep_clear_discarded_host_exception(ep_call *call)
 {
     if (!call->discarded_host_exception || ep_is_host_exit()) { return; }
     if (EG(exception)) { zend_clear_exception(); }
-    call->host_exception = false;
     call->discarded_host_exception = false;
     call->active_host_predecessor = NULL;
     call->previous_exceptions = NULL;
     call->previous_exceptions_tail = NULL;
     call->previous_exception_anchor = NULL;
+    ep_restore_parked_host_exception(call);
+    call->host_exception = EG(exception) != NULL;
 }
 
 /* Destroy discarded replacement predecessors at the first safe Zend boundary. */
@@ -310,11 +384,12 @@ static void ep_clear_discarded_host_predecessors(ep_call *call)
         if (active) {
             call->active_host_predecessor = NULL;
             if (call->host_exception && EG(exception)) { zend_clear_exception(); }
-            call->host_exception = false;
             call->discarded_host_exception = false;
             call->previous_exceptions = NULL;
             call->previous_exceptions_tail = NULL;
             call->previous_exception_anchor = NULL;
+            ep_restore_parked_host_exception(call);
+            call->host_exception = EG(exception) != NULL;
         }
         if (!Z_ISUNDEF(stored)) { zval_ptr_dtor(&stored); }
     }
@@ -341,8 +416,9 @@ static void ep_detach_host_predecessor(ep_call *call, bool force)
     EG(exception) = NULL;
     predecessor->detach_pending = false;
     call->active_host_predecessor = NULL;
-    call->host_exception = false;
     call->discarded_host_exception = false;
+    ep_restore_parked_host_exception(call);
+    call->host_exception = EG(exception) != NULL;
 }
 
 /* Park the native image around a guarded Zend callback, including nested module calls. */
@@ -377,9 +453,8 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     } zend_catch {
         call->host_bailout = true;
     } zend_end_try();
-    /* Native finally blocks run while the first host callback exception is pending.
-     * Temporarily park it so later cleanup output and warnings can invoke PHP just as
-     * Zend does, then restore it behind any replacement exception. */
+    /* Native finally blocks run while an older host callback exception is pending.
+     * Keep that escape separate until the newer callback either settles or leaves. */
     zend_object *saved_exception_object = EG(exception);
     bool saved_exception = saved_exception_object != NULL;
     volatile bool saved_exception_can_anchor = saved_exception
@@ -401,7 +476,18 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     if (call->warning) { zend_string_release(call->warning); call->warning = NULL; }
     call->parked_warning_buffer = NULL;
     bool callback_exception = EG(exception) != NULL;
-    if (saved_exception_parked) { zend_exception_restore(); }
+    if (saved_exception_parked) {
+        if (callback_exception && !call->host_bailout) {
+            if (!ep_park_saved_host_exception(call, saved_exception_object)) {
+                zend_exception_restore();
+                if (!call->error) {
+                    call->error = "PHP extension parked exception allocation failed";
+                }
+            }
+        } else {
+            zend_exception_restore();
+        }
+    }
     if (callback_exception) {
         call->previous_exception_anchor = saved_exception_can_anchor ? saved_exception_object : NULL;
     }
@@ -817,19 +903,23 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
         ep_clear_discarded_host_exception(call);
         ep_detach_host_predecessor(call, false);
         bool host_exit = ep_is_host_exit();
-        if (!host_exit && call->error && EG(exception)) {
+        if (!host_exit && call->error) {
             /* A transport/runtime failure is authoritative over the incomplete host callback. */
-            zend_clear_exception();
+            if (EG(exception)) { zend_clear_exception(); }
+            ep_clear_parked_host_exceptions(call);
             call->host_exception = false;
-        } else if (!host_exit && call->result && call->host_exception && EG(exception)) {
+        } else if (!host_exit && call->result
+            && (call->host_exception || call->parked_host_exceptions)) {
             /* A return from finally overrides the pending host callback exception. */
-            zend_clear_exception();
+            if (EG(exception)) { zend_clear_exception(); }
+            ep_clear_parked_host_exceptions(call);
             call->host_exception = false;
         }
         if (!host_exit && call->exception_message && EG(exception)
             && call->active_host_predecessor) {
             ep_detach_host_predecessor(call, true);
         }
+        if (!host_exit) { ep_chain_parked_host_exceptions(call); }
         bool restore_host_exception = !host_exit && call->exception_message && EG(exception);
         if (!host_exit && EG(exception)) {
             for (ep_exception_copy *copy = call->previous_exceptions; copy; copy = copy->next) {

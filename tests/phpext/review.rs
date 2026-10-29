@@ -834,6 +834,93 @@ catch (Throwable $error) {
 "#);
 }
 
+/// Settling an inner host escape preserves the outer host exception handled by its finally.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn nested_host_exceptions_preserve_outer_finally_escape() {
+    compare(r#"<?php
+function php_nested_host_discard_helper(array $value): int {
+    try { echo $value['inner']; } finally { return 1; }
+}
+function php_nested_host_replacement_helper(array $value): int {
+    try {
+        try { echo $value['inner']; }
+        finally { throw new RuntimeException('transient'); }
+    } finally { return 1; }
+}
+function php_nested_host_stack_leaf(array $value): int {
+    try { echo $value['leaf']; } finally { return 1; }
+}
+function php_nested_host_stack_middle(array $value): int {
+    try { echo $value['middle']; }
+    finally {
+        php_nested_host_stack_leaf($value);
+        echo 'after-leaf|';
+        return 1;
+    }
+}
+#[Export] function php_nested_host_discard_outer(array $value): void {
+    try { echo $value['outer']; }
+    finally {
+        php_nested_host_discard_helper($value);
+        echo 'after-null|';
+    }
+}
+#[Export] function php_nested_host_replacement_outer(array $value): void {
+    try { echo $value['outer']; }
+    finally {
+        php_nested_host_replacement_helper($value);
+        echo 'after-replacement|';
+    }
+}
+#[Export] function php_nested_host_catch_outer(array $value): void {
+    try { echo $value['outer']; }
+    finally {
+        try {
+            try { echo $value['inner']; }
+            finally { throw new RuntimeException('caught'); }
+        } catch (RuntimeException $error) {}
+        echo 'after-catch|';
+    }
+}
+#[Export] function php_nested_host_stack_outer(array $value): void {
+    try { echo $value['outer']; }
+    finally {
+        php_nested_host_stack_middle($value);
+        echo 'after-stack|';
+    }
+}
+#[Export] function php_nested_host_escape_outer(array $value): void {
+    try { echo $value['outer']; }
+    finally { echo $value['inner']; }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+$host = 0;
+set_error_handler(function () use (&$host) { throw new LogicException('host' . ++$host); });
+try { php_nested_host_discard_outer([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_nested_host_replacement_outer([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_nested_host_catch_outer([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_nested_host_stack_outer([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_nested_host_escape_outer([]); }
+catch (Throwable $error) { $dump($error); }
+"#);
+}
+
 /// An outer native finally return discards both the host exception and its stored native tail.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
