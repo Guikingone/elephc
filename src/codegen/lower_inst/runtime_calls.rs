@@ -104,6 +104,9 @@ fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         let discarded = expect_operand(inst, 0)?;
         let result = abi::int_result_reg(ctx.emitter);
         ctx.load_value_to_result(discarded)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        ctx.emitter.bl_c("elephc_php_discard_exception_begin");
+        abi::emit_pop_reg(ctx.emitter, result);
         let visit = ctx.next_label("discard_host_replacement_visit");
         ctx.emitter.label(&visit);
         abi::emit_push_reg(ctx.emitter, result);

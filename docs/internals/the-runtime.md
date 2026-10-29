@@ -44,7 +44,12 @@ pins across the active synchronous export stack. Reusing one object for multiple
 replacement events consumes one pin per event until those events settle. Catch
 and discard notifications walk the full native `previous` chain so a wrapper
 around the replacement settles the same host predecessor. Discard notifications
-also retire the displaced host object at the next safe Zend boundary.
+retire the displaced host object at the next safe Zend boundary only when the
+discarded native chain has no remaining non-pin owner. Retained replacements
+detach and preserve their host predecessors. Stable per-call native identities
+also let materialization drop a host predecessor whose chain already contains
+the same replacement, reproducing Zend's cycle rule without comparing copied
+Zend-object addresses.
 
 The actual Zend ABI comes from the selected PHP SDK. The producer reuses neutral
 `elephc-zend` value-layout facts and native zval transport helpers; the replacement

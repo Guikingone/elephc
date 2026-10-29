@@ -474,6 +474,25 @@ fn replacement_records_follow_live_native_chains() {
         throw $error;
     }
 }
+function php_discard_retained_helper(array $value, RuntimeException $saved): int {
+    try { try { echo $value['discard']; } finally { throw $saved; } }
+    finally { return 1; }
+}
+#[Export] function php_discard_retained_replacement(array $value): void {
+    $saved = new RuntimeException('retained');
+    php_discard_retained_helper($value, $saved);
+    throw $saved;
+}
+#[Export] function php_replacement_host_cycle(array $value): void {
+    $saved = new RuntimeException('cycle');
+    try {
+        try {
+            try { echo $value['first']; } finally { throw $saved; }
+        } catch (RuntimeException $error) {
+            try { throw $error; } finally { echo $value['second']; }
+        }
+    } finally { throw $saved; }
+}
 "#, r#"
 $dump = function (Throwable $error): void {
     while ($error) {
@@ -499,6 +518,12 @@ try { php_rethrow_replacement_into_host_callback([]); }
 catch (Throwable $error) { $dump($error); }
 $host = 0;
 try { php_nested_sweep_outer([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_discard_retained_replacement([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_replacement_host_cycle([]); }
 catch (Throwable $error) { $dump($error); }
 "#);
 }

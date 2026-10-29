@@ -53,6 +53,9 @@ function discard_pending(array $value): int {
             .asm
         };
         let hosted = emit(Emit::Phpext);
+        let begin = hosted
+            .find("elephc_php_discard_exception_begin")
+            .expect("the hosted discard boundary is missing");
         let visit = hosted
             .find("discard_host_replacement_visit")
             .expect("the hosted discard traversal is missing");
@@ -63,7 +66,7 @@ function discard_pending(array $value): int {
             .find("__rt_throwable_previous")
             .expect("the hosted discard chain walk is missing");
         assert!(
-            callback < previous,
+            begin < visit && callback < previous,
             "{target}: discarded wrappers must traverse their complete native previous chain"
         );
         assert!(

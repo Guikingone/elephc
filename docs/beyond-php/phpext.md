@@ -152,8 +152,11 @@ running, however, its caught Throwable cannot expose the host object through
 `getPrevious()`: host objects are not imported into the native object heap. The
 chain is restored when it crosses back into Zend. A caught replacement keeps its
 host predecessor alive until the runtime can prove whether it is rethrown. An
-explicit `return` or other finally exit that discards the chain retires that host
-predecessor at the next safe Zend boundary before later output callbacks.
+explicit `return` or other finally exit retires the host predecessor at the next
+safe Zend boundary only when the discarded replacement chain has no other native
+owner. A retained replacement keeps the predecessor for a later rethrow. If a
+host predecessor already contains that same retained replacement, the adapter
+drops the predecessor instead of materializing a duplicate cycle, matching Zend.
 
 One active synchronous export stack can retain at most 64 simultaneously live
 native replacement pins while preserving displaced host exceptions. Each

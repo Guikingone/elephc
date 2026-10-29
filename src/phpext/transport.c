@@ -16,6 +16,9 @@ typedef struct ep_host_predecessor {
     const uintptr_t *root;
     const uintptr_t *tail;
     uint64_t sequence;
+    uint64_t root_identity;
+    uint64_t contained_root_identities[EP_HOST_PREDECESSOR_LIMIT];
+    size_t contained_root_identity_count;
     bool detach_pending;
     bool discard_pending;
     zval exception;
@@ -36,6 +39,7 @@ typedef struct ep_exception_copy {
     zend_long code;
     zend_object *anchor;
     const uintptr_t *host_predecessor_key;
+    uint64_t root_identity;
 } ep_exception_copy;
 
 typedef struct ep_call {
@@ -57,6 +61,7 @@ typedef struct ep_call {
     ep_host_predecessor host_predecessors[EP_HOST_PREDECESSOR_LIMIT];
     size_t host_predecessor_count;
     uint64_t host_predecessor_sequence;
+    uint64_t root_identity_sequence;
     ep_host_predecessor *active_host_predecessor;
     const uintptr_t *exception_host_predecessor_key;
     ep_retired_host_exception *retired_host_exceptions;
@@ -70,6 +75,7 @@ typedef struct ep_call {
     bool host_exception;
     bool host_bailout;
     bool discarded_host_exception;
+    bool discard_chain_transient;
     zend_string *warning;
     char *parked_warning_buffer;
     zval pending_exception;

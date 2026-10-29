@@ -9,6 +9,10 @@ extern const uintptr_t ep_class_name_entries[] __asm__("_class_name_entries");
 extern uintptr_t ep_native_stack_limit __asm__("_stack_limit");
 extern uintptr_t ep_native_stack_limit_main __asm__("_stack_limit_main");
 extern uintptr_t ep_boundary_status __asm__("_elephc_boundary_status");
+extern uintptr_t ep_replacement_owner_count
+    __asm__("_elephc_phpext_replacement_owner_count");
+extern const uintptr_t *ep_replacement_owners[]
+    __asm__("_elephc_phpext_replacement_owners");
 
 typedef void (*ep_native_function)(const zval *const *);
 static pthread_mutex_t ep_native_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -16,7 +20,8 @@ static unsigned char *ep_template;
 static size_t ep_data_size, ep_zero_size;
 static ep_call *ep_current;
 
-static void ep_insert_previous(ep_call *call, ep_exception_copy *copy);
+static void ep_insert_previous(ep_call *call, ep_exception_copy *copy,
+    ep_host_predecessor *container);
 
 /* Initialized and zero-filled native storage need not be adjacent in the loaded module. */
 static void ep_state_save(unsigned char *image)
@@ -131,6 +136,104 @@ static const char *ep_infrastructure_error(uintptr_t status)
     }
 }
 
+/* Read the compact runtime refcount without depending on its private allocation header type. */
+static uint32_t ep_native_refcount(const uintptr_t *object)
+{
+    uint32_t refcount;
+    memcpy(&refcount, (const unsigned char *)object - 12, sizeof(refcount));
+    return refcount & UINT32_C(0x7fffffff);
+}
+
+/* Count every adapter pin for one native identity across the synchronous export stack. */
+static size_t ep_replacement_pin_count(const uintptr_t *object)
+{
+    size_t count = ep_replacement_owner_count;
+    if (count > EP_HOST_PREDECESSOR_LIMIT) { count = EP_HOST_PREDECESSOR_LIMIT; }
+    size_t pins = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (ep_replacement_owners[i] == object) { pins++; }
+    }
+    return pins;
+}
+
+/* Repeated replacement events for one live native object share one non-reusable identity. */
+static uint64_t ep_root_identity(ep_call *call, const uintptr_t *object)
+{
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *predecessor = &call->host_predecessors[i];
+        if (predecessor->root == object) { return predecessor->root_identity; }
+    }
+    return 0;
+}
+
+/* An identity remains relevant while at least one replacement record still pins its root. */
+static bool ep_root_identity_is_live(ep_call *call, uint64_t identity)
+{
+    if (!identity) { return false; }
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *predecessor = &call->host_predecessors[i];
+        if (predecessor->root && predecessor->root_identity == identity) { return true; }
+    }
+    return false;
+}
+
+/* Track native identities already materialized inside one displaced host exception chain. */
+static void ep_record_contained_root(ep_call *call, ep_host_predecessor *predecessor,
+    uint64_t identity)
+{
+    if (!predecessor || !identity || call->error) { return; }
+    size_t write = 0;
+    bool present = false;
+    for (size_t read = 0; read < predecessor->contained_root_identity_count; read++) {
+        uint64_t candidate = predecessor->contained_root_identities[read];
+        if (!ep_root_identity_is_live(call, candidate)) { continue; }
+        predecessor->contained_root_identities[write++] = candidate;
+        if (candidate == identity) { present = true; }
+    }
+    predecessor->contained_root_identity_count = write;
+    if (present) { return; }
+    if (write >= EP_HOST_PREDECESSOR_LIMIT) {
+        call->error = "PHP extension exception identity tracking overflow";
+        return;
+    }
+    predecessor->contained_root_identities[write] = identity;
+    predecessor->contained_root_identity_count = write + 1;
+}
+
+/* Preserve the native identities already reachable through an attached host predecessor. */
+static void ep_merge_contained_roots(ep_call *call, ep_host_predecessor *destination,
+    const ep_host_predecessor *source)
+{
+    if (!destination || destination == source) { return; }
+    for (size_t i = 0; i < source->contained_root_identity_count; i++) {
+        ep_record_contained_root(call, destination, source->contained_root_identities[i]);
+    }
+}
+
+/* Detect the Zend cycle case using the stable identity of the original native object. */
+static bool ep_predecessor_contains_own_root(const ep_host_predecessor *predecessor)
+{
+    if (!predecessor->root_identity) { return false; }
+    for (size_t i = 0; i < predecessor->contained_root_identity_count; i++) {
+        if (predecessor->contained_root_identities[i] == predecessor->root_identity) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Clear all identity and lifecycle metadata after a replacement record is settled. */
+static void ep_reset_host_predecessor(ep_host_predecessor *predecessor)
+{
+    predecessor->root = NULL;
+    predecessor->tail = NULL;
+    predecessor->sequence = 0;
+    predecessor->root_identity = 0;
+    predecessor->contained_root_identity_count = 0;
+    predecessor->detach_pending = false;
+    predecessor->discard_pending = false;
+}
+
 /* Forget every replacement whose native root is now owned only by adapter pins. */
 const uintptr_t *elephc_php_stale_finally_replacement(
     const uintptr_t *const *owners, size_t base, size_t count)
@@ -144,9 +247,7 @@ const uintptr_t *elephc_php_stale_finally_replacement(
         for (size_t j = base; j < count; j++) {
             if (owners[j] == root) { pins++; }
         }
-        uint32_t refcount;
-        memcpy(&refcount, (const unsigned char *)root - 12, sizeof(refcount));
-        if ((refcount & UINT32_C(0x7fffffff)) != pins) { continue; }
+        if (ep_native_refcount(root) != pins) { continue; }
 
         ep_retired_host_exception *retired[EP_HOST_PREDECESSOR_LIMIT];
         size_t retired_count = 0;
@@ -175,11 +276,7 @@ const uintptr_t *elephc_php_stale_finally_replacement(
             if (call->active_host_predecessor == predecessor) {
                 call->active_host_predecessor = NULL;
             }
-            predecessor->root = NULL;
-            predecessor->tail = NULL;
-            predecessor->sequence = 0;
-            predecessor->detach_pending = false;
-            predecessor->discard_pending = false;
+            ep_reset_host_predecessor(predecessor);
         }
         return root;
     }
@@ -209,11 +306,7 @@ static void ep_clear_discarded_host_predecessors(ep_call *call)
         bool active = call->active_host_predecessor == predecessor;
         zval stored = predecessor->exception;
         ZVAL_UNDEF(&predecessor->exception);
-        predecessor->root = NULL;
-        predecessor->tail = NULL;
-        predecessor->sequence = 0;
-        predecessor->detach_pending = false;
-        predecessor->discard_pending = false;
+        ep_reset_host_predecessor(predecessor);
         if (active) {
             call->active_host_predecessor = NULL;
             if (call->host_exception && EG(exception)) { zend_clear_exception(); }
@@ -236,7 +329,7 @@ static void ep_detach_host_predecessor(ep_call *call, bool force)
         return;
     }
     for (ep_exception_copy *copy = call->previous_exceptions; copy; copy = copy->next) {
-        ep_insert_previous(call, copy);
+        ep_insert_previous(call, copy, predecessor);
     }
     call->previous_exceptions = NULL;
     call->previous_exceptions_tail = NULL;
@@ -337,7 +430,13 @@ void elephc_php_result(const zval *value)
     }
 }
 
-/* Native code flags either the null host marker or every discarded replacement chain node. */
+/* Begin one outer-to-inner discard walk while every removed native owner is still live. */
+void elephc_php_discard_exception_begin(void)
+{
+    if (ep_current) { ep_current->discard_chain_transient = true; }
+}
+
+/* Native code classifies each discarded chain node before releasing its incoming owner. */
 void elephc_php_discard_exception(const uintptr_t *object)
 {
     ep_call *call = ep_current;
@@ -346,9 +445,15 @@ void elephc_php_discard_exception(const uintptr_t *object)
         if (call->host_exception) { call->discarded_host_exception = true; }
         return;
     }
+    size_t pins = ep_replacement_pin_count(object);
+    bool transient = call->discard_chain_transient
+        && ep_native_refcount(object) == pins + 1;
+    call->discard_chain_transient = transient;
     for (size_t i = 0; i < call->host_predecessor_count; i++) {
         ep_host_predecessor *predecessor = &call->host_predecessors[i];
-        if (predecessor->root == object) { predecessor->discard_pending = true; }
+        if (predecessor->root != object) { continue; }
+        if (transient) { predecessor->discard_pending = true; }
+        else { predecessor->detach_pending = true; }
     }
 }
 
@@ -358,6 +463,11 @@ void elephc_php_finally_replacement(const uintptr_t *object, const uintptr_t *ta
     ep_call *call = ep_current;
     if (!object || !call || !call->host_exception || call->host_bailout || call->error) {
         return;
+    }
+    uint64_t root_identity = ep_root_identity(call, object);
+    if (!root_identity) {
+        root_identity = ++call->root_identity_sequence;
+        if (!root_identity) { root_identity = ++call->root_identity_sequence; }
     }
     ep_host_predecessor *predecessor = NULL;
     for (size_t i = 0; i < call->host_predecessor_count; i++) {
@@ -377,6 +487,8 @@ void elephc_php_finally_replacement(const uintptr_t *object, const uintptr_t *ta
     predecessor->root = object;
     predecessor->tail = tail ? tail : object;
     predecessor->sequence = ++call->host_predecessor_sequence;
+    predecessor->root_identity = root_identity;
+    predecessor->contained_root_identity_count = 0;
     predecessor->detach_pending = false;
     predecessor->discard_pending = false;
     ZVAL_UNDEF(&predecessor->exception);
@@ -434,6 +546,7 @@ int elephc_php_exception_previous(const uintptr_t *object)
         return 1;
     }
     copy->host_predecessor_key = object;
+    copy->root_identity = ep_root_identity(call, object);
     if (call->exception_chain_tail) {
         call->exception_chain_tail->previous = copy;
     } else {
@@ -454,6 +567,7 @@ void elephc_php_previous_exception(const uintptr_t *object)
         return;
     }
     copy->host_predecessor_key = object;
+    copy->root_identity = ep_root_identity(call, object);
     copy->anchor = call->previous_exception_anchor;
     if (call->previous_exceptions_tail) {
         call->previous_exceptions_tail->next = copy;
@@ -524,9 +638,27 @@ static zend_object *ep_host_previous(zend_object *exception)
     return Z_TYPE_P(previous) == IS_OBJECT ? Z_OBJ_P(previous) : NULL;
 }
 
+/* Discover every stable identity a copied native chain will import before moving owners. */
+static void ep_declare_attached_roots(ep_call *call, ep_host_predecessor *container,
+    const uintptr_t *key)
+{
+    if (!container || !key) { return; }
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *candidate = &call->host_predecessors[i];
+        if (candidate == container || candidate->tail != key
+            || Z_ISUNDEF(candidate->exception)
+            || ep_predecessor_contains_own_root(candidate)) {
+            continue;
+        }
+        zend_object *host = Z_OBJ(candidate->exception);
+        if (zend_is_unwind_exit(host) || zend_is_graceful_exit(host)) { continue; }
+        ep_merge_contained_roots(call, container, candidate);
+    }
+}
+
 /* Splice every displaced host exception for one native chain point in creation order. */
 static zend_object *ep_attach_host_predecessors(ep_call *call, zend_object *tail,
-    const uintptr_t *key)
+    const uintptr_t *key, ep_host_predecessor *container)
 {
     uint64_t sequence = 0;
     while (key) {
@@ -547,8 +679,16 @@ static zend_object *ep_attach_host_predecessors(ep_call *call, zend_object *tail
             ZVAL_UNDEF(&selected->exception);
             continue;
         }
+        if (ep_predecessor_contains_own_root(selected)) {
+            zval_ptr_dtor(&selected->exception);
+            ZVAL_UNDEF(&selected->exception);
+            continue;
+        }
+        ep_merge_contained_roots(call, container, selected);
+        bool preserve = container && ep_predecessor_contains_own_root(container);
+        if (preserve) { GC_ADDREF(host); }
         zend_exception_set_previous(tail, host);
-        ZVAL_UNDEF(&selected->exception);
+        if (!preserve) { ZVAL_UNDEF(&selected->exception); }
         zend_object *previous;
         while ((previous = ep_host_previous(tail))) { tail = previous; }
     }
@@ -557,10 +697,12 @@ static zend_object *ep_attach_host_predecessors(ep_call *call, zend_object *tail
 
 /* Materialize copied previous links and splice host predecessors at their recorded chain points. */
 static zend_object *ep_materialize_previous_chain(ep_call *call, zend_object *tail,
-    const uintptr_t *root_key, ep_exception_copy *copy)
+    const uintptr_t *root_key, ep_exception_copy *copy,
+    ep_host_predecessor *container)
 {
-    tail = ep_attach_host_predecessors(call, tail, root_key);
+    tail = ep_attach_host_predecessors(call, tail, root_key, container);
     while (copy) {
+        ep_record_contained_root(call, container, copy->root_identity);
         zval value;
         ep_materialize_exception(copy->name, copy->name_len, copy->message,
             copy->message_len, copy->code, &value);
@@ -568,7 +710,8 @@ static zend_object *ep_materialize_previous_chain(ep_call *call, zend_object *ta
         zend_exception_set_previous(tail, previous);
         ZVAL_UNDEF(&value);
         while ((previous = ep_host_previous(tail))) { tail = previous; }
-        tail = ep_attach_host_predecessors(call, tail, copy->host_predecessor_key);
+        tail = ep_attach_host_predecessors(call, tail,
+            copy->host_predecessor_key, container);
         copy = copy->previous;
     }
     return tail;
@@ -576,19 +719,24 @@ static zend_object *ep_materialize_previous_chain(ep_call *call, zend_object *ta
 
 /* Materialize one copied native Throwable and every native previous link it owns. */
 static zend_object *ep_materialize_exception_copy(ep_call *call,
-    ep_exception_copy *copy, zval *value)
+    ep_exception_copy *copy, zval *value, ep_host_predecessor *container)
 {
+    for (ep_exception_copy *node = copy; node; node = node->previous) {
+        ep_record_contained_root(call, container, node->root_identity);
+        ep_declare_attached_roots(call, container, node->host_predecessor_key);
+    }
     ep_materialize_exception(copy->name, copy->name_len, copy->message,
         copy->message_len, copy->code, value);
     return ep_materialize_previous_chain(call, Z_OBJ_P(value),
-        copy->host_predecessor_key, copy->previous);
+        copy->host_predecessor_key, copy->previous, container);
 }
 
 /* Insert a transported native Throwable at the host-chain point where it arose. */
-static void ep_insert_previous(ep_call *call, ep_exception_copy *copy)
+static void ep_insert_previous(ep_call *call, ep_exception_copy *copy,
+    ep_host_predecessor *container)
 {
     zval value;
-    zend_object *native_tail = ep_materialize_exception_copy(call, copy, &value);
+    zend_object *native_tail = ep_materialize_exception_copy(call, copy, &value, container);
     if (copy->anchor) {
         zend_object *cursor = EG(exception);
         while (cursor) {
@@ -685,7 +833,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
         bool restore_host_exception = !host_exit && call->exception_message && EG(exception);
         if (!host_exit && EG(exception)) {
             for (ep_exception_copy *copy = call->previous_exceptions; copy; copy = copy->next) {
-                ep_insert_previous(call, copy);
+                ep_insert_previous(call, copy, call->active_host_predecessor);
             }
         }
         if (restore_host_exception) {
@@ -702,7 +850,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
                     call->exception_code, &call->pending_exception);
                 zend_object *tail = ep_materialize_previous_chain(
                     call, Z_OBJ(call->pending_exception),
-                    call->exception_host_predecessor_key, call->exception_previous);
+                    call->exception_host_predecessor_key, call->exception_previous, NULL);
                 (void)tail;
                 zval thrown = call->pending_exception;
                 ZVAL_UNDEF(&call->pending_exception);
