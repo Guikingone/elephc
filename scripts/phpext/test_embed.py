@@ -28,7 +28,7 @@ def check_apple_leaks(command, env, work):
         plistlib.dump({"com.apple.security.get-task-allow": True}, output)
     checked(["codesign", "--force", "--sign", "-", "--entitlements", str(entitlements), command[0]],
             allow_stderr=True)
-    env.update(MallocStackLogging="1", USE_ZEND_ALLOC="0", ELEPHC_EMBED_ITERATIONS="3",
+    env.update(MallocStackLogging="1", ELEPHC_EMBED_ITERATIONS="3",
                ELEPHC_EMBED_LEAK_READY="1")
     with subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
@@ -95,17 +95,25 @@ def main():
                                 str(library), f"-Wl,-rpath,{library.parent}", "-o", str(executable)])
         command = [str(executable), str(ini)]
         if args.valgrind:
-            env["USE_ZEND_ALLOC"] = "0"
             env["ELEPHC_EMBED_ITERATIONS"] = "3"
             command = ["valgrind", "--quiet", "--leak-check=full", "--show-leak-kinds=definite,indirect",
                        "--errors-for-leak-kinds=definite,indirect", "--error-exitcode=99"] + command
-        if args.leaks:
-            check_apple_leaks(command, env, work)
-            return
-        output = checked(command, env=env, timeout=240)
-        if output != "request isolation ok\n":
-            raise RuntimeError(f"Unexpected embed output: {output}")
-        print(output, end="")
+        # Ordinary requests expose every Zend allocation to the memory checker.
+        # Fatal requests need Zend's arena reclamation for executor-owned objects
+        # intentionally left alive after bailout. Native adapter/checkpoint mallocs
+        # remain individually visible to ASan, Valgrind and leaks in both phases.
+        for phase, zend_alloc in [("ordinary", "0"), ("fatal", "1")]:
+            phase_env = dict(env, USE_ZEND_ALLOC=zend_alloc)
+            phase_env.pop("ELEPHC_EMBED_FATAL_PHASE", None)
+            if phase == "fatal":
+                phase_env["ELEPHC_EMBED_FATAL_PHASE"] = "1"
+            if args.leaks:
+                check_apple_leaks(command, phase_env, work)
+            else:
+                output = checked(command, env=phase_env, timeout=240)
+                if output != "request isolation ok\n":
+                    raise RuntimeError(f"Unexpected {phase} embed output: {output}")
+                print(f"{phase}: {output}", end="")
 
 
 if __name__ == "__main__":

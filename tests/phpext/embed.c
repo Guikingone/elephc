@@ -88,8 +88,7 @@ static void run_abandoned_requests(void)
         "});"
         "if ($GLOBALS['fatal_fiber']->start() !== 'parked') { throw new Exception('Fiber did not park'); }"
         "elephc_late_hold($GLOBALS['fatal_fiber'], $resumed);"
-        "set_error_handler(static function () { return false; });"
-        "trigger_error('intentional fatal request', E_USER_ERROR);";
+        "set_error_handler(static function () { return false; });";
     php_request_shutdown(NULL);
     run_late_userland_fiber_request();
     size_t baseline = live_malloc_bytes();
@@ -103,7 +102,12 @@ static void run_abandoned_requests(void)
             request % 2 ? "true" : "false", request % 4 < 2 ? "true" : "false", code);
         volatile bool bailed = false;
         zend_first_try {
-            (void)zend_eval_string(script, NULL, "phpext abandoned request");
+            if (zend_eval_string(script, NULL, "phpext abandoned request") == FAILURE || EG(exception)) {
+                atomic_fetch_add(&failures, 1);
+            } else {
+                /* Finish eval ownership before deliberately abandoning the executor. */
+                zend_error_noreturn(E_USER_ERROR, "intentional fatal request");
+            }
         } zend_catch {
             bailed = true;
         } zend_end_try();
@@ -185,25 +189,28 @@ int main(int argc, char **argv)
     php_embed_module.php_ini_path_override = argv[1];
     php_embed_module.php_ini_ignore_cwd = 1;
     if (php_embed_init(1, argv) == FAILURE) { return 3; }
+    if (getenv("ELEPHC_EMBED_FATAL_PHASE")) {
+        run_abandoned_requests();
+    } else {
 #ifdef ZTS
-    pthread_t threads[8];
-    pthread_attr_t attributes;
-    if (pthread_attr_init(&attributes) || pthread_attr_setstacksize(&attributes, 512 * 1024)) { return 5; }
-    unsigned started = 0;
-    for (; started < 8; started++) {
-        if (pthread_create(&threads[started], &attributes, run_requests, NULL)) {
-            atomic_fetch_add(&failures, 1);
-            break;
+        pthread_t threads[8];
+        pthread_attr_t attributes;
+        if (pthread_attr_init(&attributes) || pthread_attr_setstacksize(&attributes, 512 * 1024)) { return 5; }
+        unsigned started = 0;
+        for (; started < 8; started++) {
+            if (pthread_create(&threads[started], &attributes, run_requests, NULL)) {
+                atomic_fetch_add(&failures, 1);
+                break;
+            }
         }
-    }
-    for (unsigned i = 0; i < started; i++) { pthread_join(threads[i], NULL); }
-    pthread_attr_destroy(&attributes);
+        for (unsigned i = 0; i < started; i++) { pthread_join(threads[i], NULL); }
+        pthread_attr_destroy(&attributes);
 #else
-    php_request_shutdown(NULL);
-    run_requests(NULL);
-    if (php_request_startup() == FAILURE) { return 4; }
+        php_request_shutdown(NULL);
+        run_requests(NULL);
+        if (php_request_startup() == FAILURE) { return 4; }
 #endif
-    run_abandoned_requests();
+    }
     php_embed_shutdown();
     if (atomic_load(&failures)) {
         fprintf(stderr, "PHP extension request failures: %d\n", atomic_load(&failures));

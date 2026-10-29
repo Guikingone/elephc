@@ -215,6 +215,11 @@ RSHUTDOWN, and releases the other four only after the produced module's
 post-deactivate hook has retired their native chains. An output-buffer callback
 separately covers userland Fiber destruction after module shutdown.
 Native heap pressure and Zend allocation growth are tested separately.
+The ordinary lifecycle runs with Zend's allocator disabled so the memory checker
+sees individual host allocations. Fatal-request tests run in a separate process
+with Zend's request allocator enabled, which reclaims executor objects left by
+bailout. Native adapter allocations, snapshots and checkpoints use libc in both
+processes and remain subject to leak detection and the live-allocation bound.
 
 For a local embed check with a PHP SDK configured with `--enable-embed=shared`:
 
