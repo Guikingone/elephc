@@ -216,6 +216,33 @@ pub(super) fn lower(
                 crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
             )
         }),
+        RuntimeFnId::StriposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "stripos",
+                "__rt_stripos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
+            )
+        }),
+        RuntimeFnId::StrrposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "strrpos",
+                "__rt_strrpos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
+            )
+        }),
+        RuntimeFnId::StrriposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "strripos",
+                "__rt_strripos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
+            )
+        }),
         RuntimeFnId::Strripos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
                     ctx,
@@ -242,6 +269,9 @@ pub(super) fn lower(
                     "__rt_strrpos",
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
                 )
+        }),
+        RuntimeFnId::StrstrLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strstr_len(ctx, inst)
         }),
         RuntimeFnId::Strstr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strstr(ctx, inst)

@@ -354,7 +354,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
+| `__rt_strcopy` | Copy string into concat buffer with one vectorized `memcpy` | `x1`/`x2` | `x1`/`x2` |
 | `__rt_php_num_scan` | Clip a C string to PHP's leading numeric run (`_is_numeric_string_ex` grammar) in place and report whether the whole string was numeric. Runs between `__rt_cstr` and libc so `strtod`/`strtoll` never see hexadecimal, `INF`/`NAN` or underscore forms PHP does not accept | `x0` = C string | `x0` = run pointer, `x1` = fully-numeric flag |
 | `__rt_str_to_number` | Parse a PHP numeric string for loose comparison, `is_numeric()`, and numeric-string casts (via `__rt_php_num_scan`) | `x1`/`x2` | numeric payload + success flag |
 | `__rt_str_looks_like_int_for_coercion` | Validate PHP coercive int-parameter numeric strings while rejecting libc-only `strtod` forms such as `0x`, `INF`, and `NAN` | `x1`/`x2` | `x0` (0 or 1) |
@@ -377,10 +377,12 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_mbstring_box_result` | Boxes integer, boolean, string, or array results and releases intermediate heap ownership | Successful value/status/length/kind tuple | Fresh Mixed cell shared by AOT and eval |
 | `__rt_mbstring_stringable` | Protects native/eval string conversion with a PHP exception boundary | C ABI eval context, borrowed boxed object, `MbHostStringV1` output | Runtime status and native string owner; zero output on failure |
 | `__rt_mbstring_capture_hash_store` | Internal construction primitive: persist one capture, protect old-value release, track reentrant hash set/unset, and finish the selected write without COW | C ABI unused context, selected managed hash, validated borrowed key/value descriptors | Status `0` or pending throwable `2` |
-| `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
-| `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
-| `__rt_stripos` | Find substring, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
-| `__rt_strripos` | Find last occurrence, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` |
+| `__rt_strpos` | Find substring; first-byte candidates come from `memchr` and the full needle from `memcmp` | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
+| `__rt_strrpos` | Find last occurrence by scanning candidates right-to-left, comparing the first byte before `memcmp` | `x1`/`x2` + `x3`/`x4` | `x0` |
+| `__rt_stripos` | Find substring, ASCII case-insensitive; scans both first-byte case variants with `memchr` | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
+| `__rt_strripos` | Find last occurrence, ASCII case-insensitive, with branchless ASCII folding in the comparison loop | `x1`/`x2` + `x3`/`x4` | `x0` |
+| `__rt_strstr_len` | Allocation-free `strlen(strstr(...))`: runs the `strpos` search and returns the prefix/suffix length, or zero for `strlen(false)` | `x1`/`x2` + `x3`/`x4` + before flag | `x0` |
+| `__rt_chunk_split_len` | Allocation-free `strlen(chunk_split(...))`: computes the exact split length and reproduces the allocation-overflow fatal | subject + chunk length + separator | `x0` |
 | `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
@@ -417,7 +419,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_rawurlencode` | URL encode (RFC 3986) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_parse_url` | Parse URL bytes and select an array/string/int/null/false result | `x1`/`x2` + component in `x3` | `x0` (Mixed ptr) |
 | `__rt_stripslashes` | Remove escape backslashes | `x1`/`x2` | `x1`/`x2` |
-| `__rt_ucwords` | Uppercase first letter of each word | `x1`/`x2` | `x1`/`x2` |
+| `__rt_ucwords` | Uppercase first letter of each word; the default `" \t\r\n\f\v"` set takes an inline whitespace check | `x1`/`x2` | `x1`/`x2` |
 | `__rt_str_ireplace` | Case-insensitive replace | search + replace + subject | `x1`/`x2` |
 | `__rt_substr_replace` | Replace substring at offset | str + replacement + start + len | `x1`/`x2` |
 | `__rt_str_offset_set` | String offset write `$s[$i] = $v` (one byte, space padding, PHP warnings/`Error`) | str in `x1`/`x2` + offset in `x0` + value in `x3`/`x4` | `x1`/`x2` |

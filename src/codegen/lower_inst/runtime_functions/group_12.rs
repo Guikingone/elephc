@@ -34,6 +34,9 @@ pub(super) fn lower(
         RuntimeFnId::ChunkSplit => Some({
             crate::codegen::lower_inst::builtins::strings::lower_chunk_split(ctx, inst)
         }),
+        RuntimeFnId::ChunkSplitLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_chunk_split_len(ctx, inst)
+        }),
         RuntimeFnId::StrWordCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_str_word_count(ctx, inst)
         }),

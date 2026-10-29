@@ -10,9 +10,10 @@
 //!   coerce, or invoke user code after its operand has been evaluated.
 //! - The inner result may be observed only by one `str_len` and release scaffolding.
 //! - `md5()` always returns 32 hex characters; `base64_encode()` returns
-//!   `4 * ceil(len / 3)` characters; ASCII case conversion preserves byte length; a
-//!   constant `str_repeat()` multiplies a literal source length by its count. The
-//!   operand evaluation and its side effects remain.
+//!   `4 * ceil(len / 3)` characters; ASCII case conversion and the three-argument
+//!   `strtr()` translation preserve byte length; a constant `str_repeat()` multiplies a
+//!   literal source length by its count. The operand evaluation and its side effects
+//!   remain.
 
 use crate::ir::{
     DataPool, Function, Immediate, InstId, IrType, Op, Ownership, RuntimeCallTarget,
@@ -79,6 +80,15 @@ fn is_length_observable_call(inst: &crate::ir::Instruction) -> bool {
         Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
             RuntimeFnId::StrRepeat,
         ))) => inst.operands.len() == 2,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::Strtr,
+        ))) => inst.operands.len() == 3,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::Ucfirst | RuntimeFnId::Lcfirst | RuntimeFnId::Ucwords,
+        ))) => matches!(inst.operands.len(), 1 | 2),
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::ChunkSplit,
+        ))) => inst.operands.len() == 3,
         _ => false,
     }
 }
@@ -111,7 +121,25 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(
             UnaryStringRuntime::StrToLower | UnaryStringRuntime::StrToUpper
         )))
+    ) || matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::Ucfirst | RuntimeFnId::Lcfirst | RuntimeFnId::Ucwords
+        )))
     );
+    let is_pairwise_strtr = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::Strtr
+        )))
+    ) && call.operands.len() == 3;
+    let is_chunk_split = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::ChunkSplit
+        )))
+    ) && call.operands.len() == 3;
+    let chunk_split_operands = is_chunk_split.then(|| call.operands.clone());
     let is_repeat = matches!(
         call.immediate,
         Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
@@ -161,12 +189,34 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         length.result_php_type = PhpType::Int;
         length.result_ownership = Ownership::NonHeap;
         length.effects = Op::ConstI64.default_effects();
-    } else if is_case_conversion {
+    } else if is_chunk_split {
+        let Some(mut operands) = chunk_split_operands else {
+            return false;
+        };
+        for index in [0usize, 2] {
+            if let Some(source) = detach_operand_pin(function, operands[index], length, candidate) {
+                operands[index] = source;
+            }
+        }
+        let Some(length) = function.instruction_mut(length) else {
+            return false;
+        };
+        length.op = Op::RuntimeCall;
+        length.operands = operands;
+        length.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::ChunkSplitLen,
+        )));
+        length.result_type = IrType::I64;
+        length.result_php_type = PhpType::Int;
+        length.result_ownership = Ownership::NonHeap;
+        length.effects = RuntimeFnId::ChunkSplitLen.intrinsic_effects();
+    } else if is_case_conversion || is_pairwise_strtr {
+        let source = detach_operand_pin(function, operand, length, candidate).unwrap_or(operand);
         let Some(length) = function.instruction_mut(length) else {
             return false;
         };
         length.op = Op::StrLen;
-        length.operands = vec![operand];
+        length.operands = vec![source];
         length.immediate = None;
         length.result_type = IrType::I64;
         length.result_php_type = PhpType::Int;
@@ -195,6 +245,80 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         }
     }
     true
+}
+
+/// Retires a local lifetime pin whose value is consumed only by the folded length.
+///
+/// `strtr()` and the case transforms pin an owned subject while their result may alias it.
+/// Once the producer is replaced by a raw `StrLen`, the pin and its hidden slot are dead.
+fn detach_operand_pin(
+    function: &mut Function,
+    operand: ValueId,
+    keep: InstId,
+    producer: InstId,
+) -> Option<ValueId> {
+    let crate::ir::ValueDef::Instruction { inst: acquire_id, .. } = function.value(operand)?.def else {
+        return None;
+    };
+    let acquire = function.instruction(acquire_id)?;
+    if acquire.op != Op::Acquire
+        || acquire.immediate != Some(Immediate::Bool(true))
+        || acquire.operands.len() != 1
+    {
+        return None;
+    }
+    let source = acquire.operands[0];
+    let Some(slot) = store_slot(function, operand) else {
+        return None;
+    };
+    let mut removable = vec![acquire_id];
+    for (raw, inst) in function.instructions.iter().enumerate() {
+        if !inst.operands.contains(&operand) {
+            continue;
+        }
+        let id = InstId::from_raw(raw as u32);
+        if id == keep || id == producer {
+            continue;
+        }
+        match inst.op {
+            Op::Release | Op::StoreLocal | Op::Borrow => removable.push(id),
+            _ => return None,
+        }
+    }
+    for (raw, inst) in function.instructions.iter().enumerate() {
+        let Some(Immediate::LocalSlot(candidate)) = inst.immediate else {
+            continue;
+        };
+        if candidate != slot {
+            continue;
+        }
+        match inst.op {
+            Op::ReleaseLocalSlot
+            | Op::StoreLocal
+            | Op::PushCallOperandOwner
+            | Op::PopCallOperandOwner
+            | Op::UnsetLocal => removable.push(InstId::from_raw(raw as u32)),
+            _ => { eprintln!("string_len detach: bad slot op {:?}", inst.op); return None; }
+        }
+    }
+    for id in removable {
+        if let Some(inst) = function.instruction_mut(id) {
+            neutralize_to_nop(inst);
+        }
+    }
+    Some(source)
+}
+
+/// Returns the local slot written by the `StoreLocal` that stores `value`.
+fn store_slot(function: &Function, value: ValueId) -> Option<crate::ir::LocalSlotId> {
+    for inst in &function.instructions {
+        if inst.op == Op::StoreLocal && inst.operands.as_slice() == [value] {
+            if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                return Some(slot);
+            }
+        }
+    }
+    None
 }
 
 /// Returns the literal data behind a `ConstStr` value, when available.

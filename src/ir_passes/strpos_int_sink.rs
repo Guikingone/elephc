@@ -1,13 +1,14 @@
 //! Purpose:
-//! Specializes a boxed `strpos()` whose only observation is an `(int)` cast into the raw
-//! integer search result.
+//! Specializes a boxed `strpos()`-family search whose only observation is an `(int)` cast
+//! into the raw integer search result.
 //!
 //! Called from:
 //! - The EIR fixed-point pass driver after the length and math sinks.
 //!
 //! Key details:
-//! - The search still runs with its original arguments, coercions, offset validation and
-//!   warnings; only the result representation changes from `int|false` to `int`.
+//! - Applies to `strpos`, `stripos`, `strrpos` and `strripos`; the search still runs with
+//!   its original arguments, coercions, offset validation and warnings. Only the result
+//!   representation changes from `int|false` to `int`.
 //! - A not-found sentinel becomes zero, exactly like PHP's `(int)false`.
 //! - Any observer beyond one `Cast` to `I64` plus release scaffolding keeps the boxed call.
 
@@ -18,7 +19,7 @@ use super::array_sum_int_sink::analyze_uses;
 use super::driver::IrPass;
 use super::rewrite::{neutralize_to_nop, replace_all_uses};
 
-/// Rewrites provably int-observed `strpos()` calls to the raw integer search.
+/// Rewrites provably int-observed `strpos()`-family calls to the raw integer search.
 pub struct StrposIntSink;
 
 impl IrPass for StrposIntSink {
@@ -27,9 +28,9 @@ impl IrPass for StrposIntSink {
         "strpos_int_sink"
     }
 
-    /// Skips functions with no boxed `strpos()` runtime call.
+    /// Skips functions with no boxed `strpos()`-family runtime call.
     fn is_applicable(&self, function: &Function) -> bool {
-        function.instructions.iter().any(is_boxed_strpos)
+        function.instructions.iter().any(is_boxed_position)
     }
 
     /// Specializes every independently proven call.
@@ -38,7 +39,7 @@ impl IrPass for StrposIntSink {
             .instructions
             .iter()
             .enumerate()
-            .filter(|(_, inst)| is_boxed_strpos(inst))
+            .filter(|(_, inst)| is_boxed_position(inst))
             .map(|(raw, _)| InstId::from_raw(raw as u32))
             .collect();
         let mut changed = false;
@@ -51,18 +52,29 @@ impl IrPass for StrposIntSink {
     }
 }
 
-/// Returns whether `inst` is a two/three-operand `strpos()` call producing `int|false`.
-fn is_boxed_strpos(inst: &crate::ir::Instruction) -> bool {
+/// Returns whether `inst` is a two/three-operand boxed position search.
+fn is_boxed_position(inst: &crate::ir::Instruction) -> bool {
     inst.op == Op::RuntimeCall
         && matches!(
             inst.immediate,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                RuntimeFnId::Strpos
+                RuntimeFnId::Stripos | RuntimeFnId::Strpos | RuntimeFnId::Strripos | RuntimeFnId::Strrpos
             )))
         )
         && matches!(inst.operands.len(), 2 | 3)
         && inst.result.is_some()
         && inst.result_php_type.codegen_repr() == PhpType::Mixed
+}
+
+/// Returns the raw integer runtime function for a boxed position search.
+fn raw_variant(target: RuntimeFnId) -> Option<RuntimeFnId> {
+    match target {
+        RuntimeFnId::Stripos => Some(RuntimeFnId::StriposInt),
+        RuntimeFnId::Strpos => Some(RuntimeFnId::StrposInt),
+        RuntimeFnId::Strripos => Some(RuntimeFnId::StrriposInt),
+        RuntimeFnId::Strrpos => Some(RuntimeFnId::StrrposInt),
+        _ => None,
+    }
 }
 
 /// Specializes one candidate after proving its complete use graph.
@@ -80,13 +92,17 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
     let Some(call) = function.instruction_mut(candidate) else {
         return false;
     };
-    call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        RuntimeFnId::StrposInt,
-    )));
+    let Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(current))) = call.immediate else {
+        return false;
+    };
+    let Some(raw) = raw_variant(current) else {
+        return false;
+    };
+    call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(raw)));
     call.result_type = IrType::I64;
     call.result_php_type = PhpType::Int;
     call.result_ownership = Ownership::NonHeap;
-    call.effects = RuntimeFnId::StrposInt.intrinsic_effects();
+    call.effects = raw.intrinsic_effects();
     if let Some(value) = function.value_mut(result) {
         value.ir_type = IrType::I64;
         value.php_type = PhpType::Int;

@@ -718,6 +718,46 @@ pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
+/// Lowers `strlen(strstr(...))` through the allocation-free length helper.
+///
+/// The helper keeps the same argument coercion as `strstr()` and returns the prefix or
+/// suffix byte count, or zero when the needle is absent (`strlen(false)`).
+pub(crate) fn lower_strstr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "strstr expected 2 or 3 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    materialize_truthy_flag(ctx, inst, 2, "strstr")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strstr", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the haystack while materializing the needle
+            load_string_arg_to_regs(ctx, inst, 1, "strstr", "x1", "x2")?;
+            ctx.emitter.instruction("mov x3, x1");                              // pass the needle pointer as the secondary string argument
+            ctx.emitter.instruction("mov x4, x2");                              // pass the needle length as the secondary string argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the haystack into primary string argument registers
+            abi::emit_pop_reg(ctx.emitter, "x5");                               // restore the before-needle flag after argument materialization
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strstr", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_arg_to_regs(ctx, inst, 1, "strstr", "rax", "rdx")?;
+            ctx.emitter.instruction("mov r8, rax");                             // preserve the needle pointer while restoring the haystack
+            ctx.emitter.instruction("mov r9, rdx");                             // preserve the needle length while restoring the haystack
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_pop_reg(ctx.emitter, "r10");                              // restore the before-needle flag after argument materialization
+            ctx.emitter.instruction("mov rdx, r8");                             // pass the needle pointer as the third SysV string argument
+            ctx.emitter.instruction("mov rcx, r9");                             // pass the needle length as the fourth SysV string argument
+            ctx.emitter.instruction("mov r8, r10");                             // pass the before-needle flag as the fifth helper argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_strstr_len");
+    store_if_result(ctx, inst)
+}
+
 /// The four branch targets `lower_strstr` threads through its per-architecture emitters.
 ///
 /// `prefix` selects the `$before_needle` substring, `miss` boxes PHP's `false`, `box_match` is

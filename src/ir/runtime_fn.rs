@@ -508,6 +508,8 @@ pub enum RuntimeFnId {
     Chop,
     Chr,
     ChunkSplit,
+    /// Allocation-free `strlen(chunk_split(...))` length computation.
+    ChunkSplitLen,
     CountChars,
     Crc32,
     CtypeAlnum,
@@ -768,10 +770,18 @@ pub enum RuntimeFnId {
     Strpos,
     /// Raw `(int)strpos()` observed only through an integer cast; absent matches become zero.
     StrposInt,
+    /// Raw `(int)stripos()` observed only through an integer cast; absent matches become zero.
+    StriposInt,
+    /// Raw `(int)strrpos()` observed only through an integer cast; absent matches become zero.
+    StrrposInt,
+    /// Raw `(int)strripos()` observed only through an integer cast; absent matches become zero.
+    StrriposInt,
     Strripos,
     Strrpos,
     Strtr,
     Strstr,
+    /// Allocation-free `strlen(strstr(...))` observed only through the string length.
+    StrstrLen,
     Substr,
     SubstrCount,
     SubstrReplace,
@@ -908,6 +918,11 @@ impl RuntimeFnId {
             RuntimeFnId::AbsInt => Some((1, Some(1))),
             RuntimeFnId::Base64EncodedLen => Some((1, Some(1))),
             RuntimeFnId::StrposInt => Some((2, Some(3))),
+            RuntimeFnId::StriposInt => Some((2, Some(3))),
+            RuntimeFnId::StrrposInt => Some((2, Some(3))),
+            RuntimeFnId::StrriposInt => Some((2, Some(3))),
+            RuntimeFnId::StrstrLen => Some((2, Some(3))),
+            RuntimeFnId::ChunkSplitLen => Some((3, Some(3))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
@@ -1774,6 +1789,13 @@ impl RuntimeFnId {
             RuntimeFnId::Base64EncodedLen => E::PURE,
             // The raw position keeps the search's offset-validation and coercion effects.
             RuntimeFnId::StrposInt => RuntimeFnId::Strpos.effects(),
+            RuntimeFnId::StriposInt => RuntimeFnId::Stripos.effects(),
+            RuntimeFnId::StrrposInt => RuntimeFnId::Strrpos.effects(),
+            RuntimeFnId::StrriposInt => RuntimeFnId::Strripos.effects(),
+            // The length-only search keeps strstr()'s coercions and search effects.
+            RuntimeFnId::StrstrLen => RuntimeFnId::Strstr.effects(),
+            // The length-only split keeps chunk_split()'s validation and allocation fatal.
+            RuntimeFnId::ChunkSplitLen => RuntimeFnId::ChunkSplit.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
             RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The raw encoder keeps the JSON error state and encoder side effects.
@@ -2505,6 +2527,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMapSumAddSafe
                 | RuntimeFnId::AbsInt
                 | RuntimeFnId::Base64EncodedLen
+                | RuntimeFnId::StrposInt
+                | RuntimeFnId::StriposInt
+                | RuntimeFnId::StrrposInt
+                | RuntimeFnId::StrriposInt
+                | RuntimeFnId::StrstrLen
+                | RuntimeFnId::ChunkSplitLen
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
@@ -3538,10 +3566,15 @@ impl RuntimeFnId {
             RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::StrposInt => "strpos_int",
+            RuntimeFnId::StriposInt => "stripos_int",
+            RuntimeFnId::StrrposInt => "strrpos_int",
+            RuntimeFnId::StrriposInt => "strripos_int",
             RuntimeFnId::Strripos => "strripos",
             RuntimeFnId::Strrpos => "strrpos",
             RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",
+            RuntimeFnId::StrstrLen => "strstr_len",
+            RuntimeFnId::ChunkSplitLen => "chunk_split_len",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",

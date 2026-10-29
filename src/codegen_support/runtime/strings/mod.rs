@@ -38,6 +38,7 @@ mod ltrim;
 mod rtrim;
 mod strpos;
 mod strrpos;
+mod strstr_len;
 mod stripos;
 mod strripos;
 mod str_repeat;
@@ -70,6 +71,7 @@ mod stripslashes;
 mod nl2br;
 mod base_convert;
 mod chunk_split;
+mod chunk_split_len;
 mod count_chars;
 mod strtr;
 mod quotemeta;
@@ -171,6 +173,7 @@ pub use rtrim::emit_rtrim;
 pub use strpos::emit_strpos;
 /// Emit string position lookup (first occurrence).
 pub use strrpos::emit_strrpos;
+pub use strstr_len::emit_strstr_len;
 /// Emit string position lookup (last occurrence).
 pub use stripos::emit_stripos;
 /// Emit case-insensitive string position lookup (first occurrence).
@@ -233,6 +236,7 @@ pub use nl2br::emit_nl2br;
 pub use base_convert::emit_base_convert;
 /// Emit the chunk_split fixed-length splitter.
 pub use chunk_split::emit_chunk_split;
+pub use chunk_split_len::emit_chunk_split_len;
 /// Emit the count_chars byte-frequency tally.
 pub use count_chars::emit_count_chars;
 /// Emit the strtr pairwise and replacement-pair translators.

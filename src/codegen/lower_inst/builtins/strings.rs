@@ -82,7 +82,8 @@ pub(crate) use scalar::{
     lower_ord,
 };
 pub(crate) use search::{
-    lower_str_contains, lower_str_repeat, lower_string_position, lower_string_position_int, lower_strstr, lower_substr,
+    lower_str_contains, lower_str_repeat, lower_string_position, lower_string_position_int,
+    lower_strstr, lower_strstr_len, lower_substr,
     lower_substr_replace,
 };
 pub(crate) use simple::{
@@ -415,7 +416,7 @@ const UCWORDS_DEFAULT_SEPARATOR_COUNT: i64 = 6;
 pub(crate) use scalar::load_as_int;
 pub(crate) use replace_wrap::lower_base_convert;
 pub(crate) use split::lower_base_to_number;
-pub(crate) use replace_wrap::lower_chunk_split;
+pub(crate) use replace_wrap::{lower_chunk_split, lower_chunk_split_len};
 pub(crate) use replace_wrap::lower_count_chars;
 pub(crate) use split::lower_dec_to_base;
 pub(crate) use split::lower_length_limited_compare;

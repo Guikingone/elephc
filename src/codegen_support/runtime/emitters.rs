@@ -72,6 +72,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_rtrim(emitter);
     strings::emit_strpos(emitter);
     strings::emit_strrpos(emitter);
+    strings::emit_strstr_len(emitter);
     strings::emit_stripos(emitter);
     strings::emit_strripos(emitter);
     strings::emit_str_repeat(emitter);
@@ -102,6 +103,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);
+    strings::emit_chunk_split_len(emitter);
     strings::emit_quotemeta(emitter);
     strings::emit_quoted_printable_encode(emitter);
     strings::emit_str_word_count(emitter);

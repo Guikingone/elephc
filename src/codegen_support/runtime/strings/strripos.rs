@@ -50,23 +50,14 @@ pub fn emit_strripos(emitter: &mut Emitter) {
     emitter.instruction("add x7, x5, x6");                                      // compute haystack index = pos + needle_idx
     emitter.instruction("ldrb w8, [x1, x7]");                                   // load haystack byte at computed index
     emitter.instruction("ldrb w10, [x3, x6]");                                  // load needle byte at current index
-
-    // -- fold the haystack byte to lowercase, ASCII range only --
-    emitter.instruction("cmp w8, #65");                                         // is the haystack byte at or above 'A'?
-    emitter.instruction("b.lt __rt_strripos_fold_needle");                      // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp w8, #90");                                         // is the haystack byte at or below 'Z'?
-    emitter.instruction("b.gt __rt_strripos_fold_needle");                      // bytes above 'Z' are compared verbatim
-    emitter.instruction("add w8, w8, #32");                                     // fold the uppercase haystack byte to lowercase
-
-    // -- fold the needle byte to lowercase, ASCII range only --
-    emitter.label("__rt_strripos_fold_needle");
-    emitter.instruction("cmp w10, #65");                                        // is the needle byte at or above 'A'?
-    emitter.instruction("b.lt __rt_strripos_cmp");                              // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp w10, #90");                                        // is the needle byte at or below 'Z'?
-    emitter.instruction("b.gt __rt_strripos_cmp");                              // bytes above 'Z' are compared verbatim
-    emitter.instruction("add w10, w10, #32");                                   // fold the uppercase needle byte to lowercase
-
-    emitter.label("__rt_strripos_cmp");
+    emitter.instruction("add w9, w8, #32");                                     // candidate lowercase haystack byte
+    emitter.instruction("sub w11, w8, #65");                                    // distance of the haystack byte from 'A'
+    emitter.instruction("cmp w11, #26");                                        // is the haystack byte an ASCII uppercase letter?
+    emitter.instruction("csel w8, w9, w8, lo");                                 // fold only bytes inside 'A'-'Z'
+    emitter.instruction("add w9, w10, #32");                                    // candidate lowercase needle byte
+    emitter.instruction("sub w11, w10, #65");                                   // distance of the needle byte from 'A'
+    emitter.instruction("cmp w11, #26");                                        // is the needle byte an ASCII uppercase letter?
+    emitter.instruction("csel w10, w9, w10, lo");                               // fold only bytes inside 'A'-'Z'
     emitter.instruction("cmp w8, w10");                                         // compare the folded haystack and needle bytes
     emitter.instruction("b.ne __rt_strripos_prev");                             // mismatch, try previous position
     emitter.instruction("add x6, x6, #1");                                      // advance needle index
@@ -119,20 +110,18 @@ fn emit_strripos_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, r10");                                         // compute the absolute haystack byte offset for the current needle byte
     emitter.instruction("movzx eax, BYTE PTR [rdi + r8]");                      // load the current haystack byte for the right-to-left candidate comparison
     emitter.instruction("movzx r11d, BYTE PTR [rdx + r10]");                    // load the current needle byte for the right-to-left candidate comparison
-    emitter.instruction("cmp al, 65");                                          // is the haystack byte at or above 'A'?
-    emitter.instruction("jb __rt_strripos_fold_needle_linux_x86_64");           // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp al, 90");                                          // is the haystack byte at or below 'Z'?
-    emitter.instruction("ja __rt_strripos_fold_needle_linux_x86_64");           // bytes above 'Z' are compared verbatim
-    emitter.instruction("add al, 32");                                          // fold the uppercase haystack byte to lowercase
-
-    emitter.label("__rt_strripos_fold_needle_linux_x86_64");
-    emitter.instruction("cmp r11b, 65");                                        // is the needle byte at or above 'A'?
-    emitter.instruction("jb __rt_strripos_cmp_linux_x86_64");                   // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp r11b, 90");                                        // is the needle byte at or below 'Z'?
-    emitter.instruction("ja __rt_strripos_cmp_linux_x86_64");                   // bytes above 'Z' are compared verbatim
-    emitter.instruction("add r11b, 32");                                        // fold the uppercase needle byte to lowercase
-
-    emitter.label("__rt_strripos_cmp_linux_x86_64");
+    emitter.instruction("mov r8d, eax");                                        // copy the haystack byte before folding
+    emitter.instruction("add r8d, 32");                                         // candidate lowercase haystack byte
+    emitter.instruction("mov esi, eax");                                        // copy the haystack byte for the range test
+    emitter.instruction("sub esi, 65");                                         // distance of the haystack byte from 'A'
+    emitter.instruction("cmp esi, 26");                                         // is the haystack byte an ASCII uppercase letter?
+    emitter.instruction("cmovb eax, r8d");                                      // fold only bytes inside 'A'-'Z'
+    emitter.instruction("mov r8d, r11d");                                       // copy the needle byte before folding
+    emitter.instruction("add r8d, 32");                                         // candidate lowercase needle byte
+    emitter.instruction("mov esi, r11d");                                       // copy the needle byte for the range test
+    emitter.instruction("sub esi, 65");                                         // distance of the needle byte from 'A'
+    emitter.instruction("cmp esi, 26");                                         // is the needle byte an ASCII uppercase letter?
+    emitter.instruction("cmovb r11d, r8d");                                     // fold only bytes inside 'A'-'Z'
     emitter.instruction("cmp al, r11b");                                        // compare the folded haystack and needle bytes
     emitter.instruction("jne __rt_strripos_prev_linux_x86_64");                 // abandon this candidate start offset on the first mismatching byte
     emitter.instruction("add r10, 1");                                          // advance to the next byte within the current needle comparison

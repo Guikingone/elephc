@@ -738,12 +738,21 @@ top-level object by deduplicating plain non-numeric keys, raises PHP's exact
 `count()` TypeError for scalar/invalid roots, and falls back to the full decoder for
 numeric roots and escaped/numeric keys.
 
-`src/ir_passes/strpos_int_sink.rs` does the same for `strpos()`. The search keeps
-its original arguments, offsets, coercion and `ValueError` behavior; only the
-result representation changes from the boxed `int|false` cell to a raw `I64`
-`int`, where the not-found sentinel becomes `0` exactly like PHP's `(int)false`.
-A strict-false comparison, echo, store or any other observer keeps the boxed
-call.
+`src/ir_passes/strpos_int_sink.rs` does the same for `strpos()`, `stripos()`,
+`strrpos()` and `strripos()`. The search keeps its original arguments, offsets,
+coercion and `ValueError` behavior; only the result representation changes from
+the boxed `int|false` cell to a raw `I64` `int`, where the not-found sentinel
+becomes `0` exactly like PHP's `(int)false`. A strict-false comparison, echo,
+store or any other observer keeps the boxed call.
+
+`src/ir_passes/strstr_len_sink.rs` folds `strlen(strstr(...))` into the
+allocation-free `StrstrLen` helper. The boxed result may be observed only by one
+`Cast` to `Str`, that cast by one `str_len`, plus release scaffolding. The
+helper runs the same search, returns the prefix or suffix byte count, and maps a
+missing needle to `strlen(false) == 0`. The pass also retires the haystack
+lifetime pin and hidden temporary slot that the boxed call needed, so the loop
+does not copy or refcount the subject per iteration. A `=== false` check or any
+string use keeps the boxed call.
 
 `src/ir_passes/json_encode_len_sink.rs` removes the Mixed boxing and string-cast
 copies from `strlen((string) json_encode($value))`. The encoder still runs with its
@@ -760,9 +769,15 @@ bytes are never observed. When a one-argument `md5()`, `base64_encode()`,
 and its result feeds only one `str_len` (plus release scaffolding), the length
 observer becomes the constant `32` for md5, `4 * ceil(len / 3)` via
 `Base64EncodedLen` for base64, or the source `str_len` for ASCII case conversion
-(byte length is unchanged). The operand evaluation and its side effects remain;
-the binary `md5(..., true)` form, non-string operands and any other observer keep
-the real call.
+(byte length is unchanged). The same fold covers `ucfirst()`, `lcfirst()`,
+`ucwords()` and the three-argument `strtr()`: their byte length is invariant, so
+the subject's `str_len` replaces the transform and the transform's argument pin
+and hidden slot are retired. `chunk_split()` uses `ChunkSplitLen`, which computes
+`subject_len + max(1, ceil(subject_len / chunk_len)) * separator_len` and reports
+the same allocation-overflow fatal as the allocating helper. The operand
+evaluation and its side effects remain; the binary `md5(..., true)` form,
+non-string operands, the replacement-pair `strtr()` form and any other observer
+keep the real call.
 
 ## EIR buffer resolution hoisting
 
