@@ -1069,6 +1069,7 @@ pub(super) fn dynamic_property_get_result_type(
     // remaining declared slots printed the backend's own miss sentinel as an ordinary value.
     if class_info.dynamic_property_hash_is_name_addressable()
         || class_runtime_name_read_can_miss(ctx, normalized)
+        || class_subtree_answers_through_magic(ctx, normalized)
     {
         return if nullable {
             nullable_result_type(PhpType::Mixed)
@@ -1108,6 +1109,18 @@ pub(super) fn property_name_is_dynamic_in_scope(
         property,
         ctx.current_class.as_deref(),
     ) == crate::types::PropertyNameResolution::Dynamic
+}
+
+/// Returns whether `class_name` or one of its subclasses answers an undeclared name through
+/// `__get` or `__isset`: a runtime-name read then yields whatever the accessor returns, never
+/// only a declared slot's type.
+fn class_subtree_answers_through_magic(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let magic = |info: &crate::types::ClassInfo| {
+        ["__get", "__isset"].iter().any(|method| info.methods.contains_key(&crate::names::php_symbol_key(method)))
+    };
+    ctx.classes.iter().any(|(candidate, info)| {
+        (candidate == class_name || crate::types::class_inherits_from(ctx.classes, candidate, class_name)) && magic(info)
+    })
 }
 
 /// Returns whether a RUNTIME name on `class_name` can miss every slot the backend will dispatch.

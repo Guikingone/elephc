@@ -396,6 +396,10 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
+    // A name no slot or hash answers goes to the runtime class's `__get` / `__isset`, as php does.
+    let hashed = hash_arms.iter().map(|arm| arm.class_id).collect::<Vec<_>>();
+    let magic_arms = super::mixed_property_reads::runtime_name_magic_arms(ctx, None, mode, &hashed)?;
+    super::mixed_property_reads::emit_runtime_name_magic_dispatch(ctx, inst, &magic_arms, &done_label)?;
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     emit_dynamic_property_miss_result(ctx, inst);
     abi::emit_jump(ctx.emitter, &done_label);

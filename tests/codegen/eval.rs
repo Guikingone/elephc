@@ -17515,6 +17515,23 @@ echo $box->events;');
     );
 }
 
+/// Eval `??` reads its property operand as php's silent probe: a magic class is asked `__isset`
+/// first and read through `__get` only when it says yes; it called `__get` straight away.
+#[test]
+fn test_eval_coalesce_asks_isset_before_get() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class M { public function __get($n) { echo "get $n\n"; return "v"; } public function __isset($n) { echo "isset $n\n"; return $n === "a"; } }');
+eval('$m = new M; $k = "b"; var_dump($m->a ?? "d"); var_dump($m->b ?? "d"); var_dump($m->$k ?? "d");');
+"#,
+    );
+    assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "isset a\nget a\nstring(1) \"v\"\nisset b\nstring(1) \"d\"\nisset b\nstring(1) \"d\"\n"
+    );
+}
+
 /// Verifies eval-declared interface property hook contracts validate class properties.
 #[test]
 fn test_eval_declared_interface_property_hook_contracts() {

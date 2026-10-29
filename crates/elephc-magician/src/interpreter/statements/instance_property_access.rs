@@ -9,6 +9,42 @@
 
 use super::*;
 
+thread_local! {
+    /// Set by `??` for the one property read its left operand makes (`with_property_probe`), and
+    /// taken by that read on entry, so the reads nested in its receiver or in the accessors it
+    /// calls stay ordinary.
+    static PROPERTY_PROBE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `read`, whose next property read is php's silent probe (`??`'s left operand): a name
+/// the class answers through magic asks `__isset` first, and reads through `__get` only when it
+/// says yes, as php's `BP_VAR_IS` fetch does.
+pub(in crate::interpreter) fn with_property_probe<T>(read: impl FnOnce() -> T) -> T {
+    PROPERTY_PROBE.with(|probe| probe.set(true));
+    let result = read();
+    PROPERTY_PROBE.with(|probe| probe.set(false));
+    result
+}
+
+/// `__get` for a name the class answers through magic; a probe asks `__isset` first and answers
+/// null when it says no (a class without `__isset` is read through `__get` directly).
+fn eval_magic_property_read(
+    object: RuntimeCellHandle,
+    object_class_name: &str,
+    property_name: &str,
+    probe: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if probe
+        && context.class_method(object_class_name, "__get").is_some()
+        && eval_magic_property_isset(object, object_class_name, property_name, context, values)? == Some(false)
+    {
+        return values.null().map(Some);
+    }
+    eval_magic_property_get(object, object_class_name, property_name, context, values)
+}
+
 /// Reads one object property while enforcing eval-declared member visibility.
 pub(in crate::interpreter) fn eval_property_get_result(
     object: RuntimeCellHandle,
@@ -27,6 +63,7 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
     values: &mut impl RuntimeValueOps,
     owned: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let probe = PROPERTY_PROBE.with(|probe| probe.replace(false));
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
@@ -67,7 +104,7 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
         declared_property_found = true;
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
             if let Some(result) =
-                eval_magic_property_get(object, &object_class_name, property_name, context, values)?
+                eval_magic_property_read(object, &object_class_name, property_name, probe, context, values)?
             {
                 return Ok(result);
             }
@@ -126,10 +163,11 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
         {
             if !is_static {
                 if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
-                    if let Some(result) = eval_magic_property_get(
+                    if let Some(result) = eval_magic_property_read(
                         object,
                         &object_class_name,
                         property_name,
+                        probe,
                         context,
                         values,
                     )? {
@@ -156,7 +194,7 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
     }
     if !declared_property_found {
         if let Some(result) =
-            eval_magic_property_get(object, &object_class_name, property_name, context, values)?
+            eval_magic_property_read(object, &object_class_name, property_name, probe, context, values)?
         {
             return Ok(result);
         }
