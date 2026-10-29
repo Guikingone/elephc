@@ -49,9 +49,10 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
 
     // Frame: [sp, #0..256) NUL-terminated address copy, #256 packed destination,
     // #264 packed length, #272 address family, #288 saved frame/link.
-    emitter.instruction("sub sp, sp, #304");                                    // allocate the address copy and the saved bookkeeping
-    emitter.instruction("stp x29, x30, [sp, #288]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #288");                                   // establish the helper frame pointer
+    emitter.instruction("sub sp, sp, #320");                                    // allocate the address copy, mode slot and saved bookkeeping
+    emitter.instruction("stp x29, x30, [sp, #304]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #304");                                   // establish the helper frame pointer
+    emitter.instruction("str x2, [sp, #296]");                                  // preserve the requested result mode
 
     emitter.instruction("cbz x1, __rt_inet_pton_false");                        // an empty string is no address
     emitter.instruction(&format!("cmp x1, #{}", MAX_ADDRESS_BYTES));            // longer than any address can be?
@@ -98,6 +99,8 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("b __rt_inet_pton_fast_octet");                         // parse the next octet
     emitter.label("__rt_inet_pton_fast_end");
     emitter.instruction("cbnz x10, __rt_inet_pton_generic");                    // trailing bytes are not an IPv4 address
+    emitter.instruction("ldr x9, [sp, #296]");                                  // reload the requested result mode
+    emitter.instruction("cbnz x9, __rt_inet_pton_fast_length");                 // length-only calls skip the reservation
     emitter.instruction("mov x0, #4");                                          // the packed IPv4 result is four bytes
     abi::emit_call_label(emitter, "__rt_concat_reserve");                       // reserve the four-byte result
     emitter.instruction("ldr w13, [sp, #280]");                                 // reload the packed octets
@@ -105,9 +108,10 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // return the packed result pointer
     emitter.instruction("mov x2, #4");                                          // return the IPv4 result length
     abi::emit_call_label(emitter, "__rt_concat_publish");                       // charge the scratch and preserve the result pair
-    emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore the frame and return address
-    emitter.instruction("add sp, sp, #304");                                    // release the inet_pton frame
-    emitter.instruction("ret");                                                 // return the packed IPv4 address
+    emitter.instruction("b __rt_inet_pton_return");                             // share the frame restore
+    emitter.label("__rt_inet_pton_fast_length");
+    emitter.instruction("mov x0, #4");                                          // an IPv4 address is four packed bytes
+    emitter.instruction("b __rt_inet_pton_return");                             // return the packed length
 
     // -- generic path: copy into a NUL-terminated buffer `inet_pton(3)` can read --
     emitter.label("__rt_inet_pton_generic");
@@ -153,10 +157,13 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x1, [sp, #256]");                                  // the packed pointer
     emitter.instruction("ldr x2, [sp, #264]");                                  // the packed length
+    emitter.instruction("ldr x9, [sp, #296]");                                  // reload the requested result mode
+    emitter.instruction("cbnz x9, __rt_inet_pton_generic_length");              // length-only calls skip publication
     abi::emit_call_label(emitter, "__rt_concat_publish");                       // charge the scratch and preserve x1/x2
-    emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #304");                                    // release the frame
-    emitter.instruction("ret");                                                 // return the packed address
+    emitter.instruction("b __rt_inet_pton_return");                             // share the frame restore
+    emitter.label("__rt_inet_pton_generic_length");
+    emitter.instruction("mov x0, x2");                                          // return the packed length as an integer
+    emitter.instruction("b __rt_inet_pton_return");                             // share the frame restore
 
     // A reservation that was never published still has to be released: `__rt_concat_reserve`
     // answers with an OWNED heap block once the scratch buffer can no longer fit the request,
@@ -168,11 +175,17 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("b __rt_inet_pton_false");                              // report the invalid address
 
     emitter.label("__rt_inet_pton_false");
+    emitter.instruction("ldr x9, [sp, #296]");                                  // reload the requested result mode
+    emitter.instruction("cbnz x9, __rt_inet_pton_false_length");                // length-only calls return zero
     emitter.instruction("mov x1, #0");                                          // a null pointer signals an invalid address
     emitter.instruction("mov x2, #0");                                          // zero length for the invalid case
-    emitter.instruction("ldp x29, x30, [sp, #288]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #304");                                    // release the frame
-    emitter.instruction("ret");                                                 // return the invalid-address result
+    emitter.instruction("b __rt_inet_pton_return");                             // share the frame restore
+    emitter.label("__rt_inet_pton_false_length");
+    emitter.instruction("mov x0, #0");                                          // strlen(false) is zero
+    emitter.label("__rt_inet_pton_return");
+    emitter.instruction("ldp x29, x30, [sp, #304]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #320");                                    // release the frame
+    emitter.instruction("ret");                                                 // return the requested result
 }
 
 /// Emits the Linux x86_64 string runtime helper for inet pton.
@@ -188,6 +201,7 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 304");                                        // allocate the address copy and the saved bookkeeping
+    emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // preserve the requested result mode
 
     emitter.instruction("test rsi, rsi");                                       // an empty string is no address
     emitter.instruction("jz __rt_inet_pton_false_x86");                         // refuse it before the copy
@@ -237,15 +251,18 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_inet_pton_fast_end_x86");
     emitter.instruction("test r9, r9");                                         // trailing bytes are not an IPv4 address
     emitter.instruction("jnz __rt_inet_pton_generic_x86");                      // fall back to libc for validation
+    emitter.instruction("cmp QWORD PTR [rbp - 8], 0");                          // was a length-only result requested?
+    emitter.instruction("jne __rt_inet_pton_fast_length_x86");                  // length-only calls skip the reservation
     emitter.instruction("mov eax, 4");                                          // the packed IPv4 result is four bytes
     abi::emit_call_label(emitter, "__rt_concat_reserve");                      // reserve the four-byte result
     emitter.instruction("mov r11d, DWORD PTR [rbp - 16]");                      // reload the packed octets
     emitter.instruction("mov DWORD PTR [rax], r11d");                           // publish the four packed bytes
     emitter.instruction("mov rdx, 4");                                          // return the IPv4 result length
     abi::emit_call_label(emitter, "__rt_concat_publish");                      // charge the scratch and preserve the result pair
-    emitter.instruction("mov rsp, rbp");                                        // release the inet_pton frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the packed IPv4 address
+    emitter.instruction("jmp __rt_inet_pton_return_x86");                       // share the frame restore
+    emitter.label("__rt_inet_pton_fast_length_x86");
+    emitter.instruction("mov eax, 4");                                          // an IPv4 address is four packed bytes
+    emitter.instruction("jmp __rt_inet_pton_return_x86");                       // return the packed length
 
     // -- generic path: copy into a NUL-terminated buffer `inet_pton(3)` can read --
     emitter.label("__rt_inet_pton_generic_x86");
@@ -294,12 +311,15 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp eax, 1");                                          // 1 means the address parsed; 0 and -1 do not
     emitter.instruction("jne __rt_inet_pton_unparsed_x86");                     // release the reservation before reporting false
 
+    emitter.instruction("cmp QWORD PTR [rbp - 8], 0");                          // was a length-only result requested?
+    emitter.instruction("jne __rt_inet_pton_generic_length_x86");               // length-only calls skip publication
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the packed pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the packed length
     abi::emit_call_label(emitter, "__rt_concat_publish");                       // charge the scratch and preserve rax/rdx
-    emitter.instruction("mov rsp, rbp");                                        // release the frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the packed address
+    emitter.instruction("jmp __rt_inet_pton_return_x86");                       // share the frame restore
+    emitter.label("__rt_inet_pton_generic_length_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the packed length as an integer
+    emitter.instruction("jmp __rt_inet_pton_return_x86");                       // share the frame restore
 
     // See the AArch64 twin: an unpublished reservation may be an owned heap block.
     emitter.label("__rt_inet_pton_unparsed_x86");
@@ -308,11 +328,17 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_inet_pton_false_x86");                        // report the invalid address
 
     emitter.label("__rt_inet_pton_false_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 8], 0");                          // was a length-only result requested?
+    emitter.instruction("jne __rt_inet_pton_false_length_x86");                 // length-only calls return zero
     emitter.instruction("xor eax, eax");                                        // a null pointer signals an invalid address
     emitter.instruction("xor edx, edx");                                        // zero length for the invalid case
+    emitter.instruction("jmp __rt_inet_pton_return_x86");                       // share the frame restore
+    emitter.label("__rt_inet_pton_false_length_x86");
+    emitter.instruction("xor eax, eax");                                        // strlen(false) is zero
+    emitter.label("__rt_inet_pton_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the invalid-address result
+    emitter.instruction("ret");                                                 // return the requested result
 }
 
 #[cfg(test)]
@@ -325,6 +351,22 @@ mod tests {
         let mut emitter = Emitter::new(target);
         emit_inet_pton(&mut emitter);
         emitter.output()
+    }
+
+    /// The length-only mode skips destination reservation and publication on both targets.
+    #[test]
+    fn inet_pton_length_mode_returns_the_packed_width() {
+        let arm = assembly_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm.contains("str x2, [sp, #296]"), "{arm}");
+        assert!(arm.contains("cbnz x9, __rt_inet_pton_fast_length"), "{arm}");
+        assert!(arm.contains("__rt_inet_pton_generic_length:"), "{arm}");
+        assert!(arm.contains("__rt_inet_pton_false_length:"), "{arm}");
+
+        let x64 = assembly_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("mov QWORD PTR [rbp - 8], r8"), "{x64}");
+        assert!(x64.contains("jne __rt_inet_pton_fast_length_x86"), "{x64}");
+        assert!(x64.contains("__rt_inet_pton_generic_length_x86:"), "{x64}");
+        assert!(x64.contains("__rt_inet_pton_false_length_x86:"), "{x64}");
     }
 
     /// The `AF_INET6` value is the target's, not the host's.

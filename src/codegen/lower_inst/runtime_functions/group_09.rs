@@ -147,6 +147,9 @@ pub(super) fn lower(
                     "__rt_inet_pton",
                 )
         }),
+        RuntimeFnId::InetPtonLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_inet_pton_len(ctx, inst)
+        }),
         RuntimeFnId::Ip2long => Some({
             crate::codegen::lower_inst::builtins::strings::lower_ip2long(ctx, inst)
         }),

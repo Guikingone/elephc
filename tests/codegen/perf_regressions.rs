@@ -177,3 +177,19 @@ echo $n, "\n";
         Duration::from_millis(100),
     );
 }
+
+/// `strlen(inet_pton())` keeps the allocation-free packed-width mode.
+#[test]
+#[ignore = "wall-clock performance guard; run explicitly"]
+fn perf_inet_pton_len_loop() {
+    assert_under(
+        "inet_pton_len",
+        r#"<?php
+$s = '127.0.0.1';
+$n = 0;
+for ($i = 0; $i < 100000; $i++) { $n ^= (strlen(inet_pton($s)) + $i); }
+echo $n, "\n";
+"#,
+        Duration::from_millis(100),
+    );
+}

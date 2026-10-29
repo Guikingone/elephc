@@ -763,6 +763,11 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
+`src/ir_passes/inet_pton_len_sink.rs` folds `strlen(inet_pton(...))` into the
+length-only mode of `__rt_inet_pton`: the address is still validated and IPv4/IPv6
+return 4/16, while an invalid address returns zero for `strlen(false)`. A value
+observation, including an `=== false` check, keeps the boxed helper.
+
 `src/ir_passes/strip_tags_len_sink.rs` folds `strlen(strip_tags(...))` into the
 count mode of `__rt_strip_tags`. The scanner still evaluates the subject and the
 allow-list exactly once, including array/Mixed coercion and strict `TypeError`s,

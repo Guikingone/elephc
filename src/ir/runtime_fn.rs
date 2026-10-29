@@ -654,6 +654,8 @@ pub enum RuntimeFnId {
     Implode,
     InetNtop,
     InetPton,
+    /// Allocation-free `strlen(inet_pton(...))` packed-address length.
+    InetPtonLen,
     Ip2long,
     Lcfirst,
     Long2ip,
@@ -940,6 +942,7 @@ impl RuntimeFnId {
             RuntimeFnId::Base64DecodedLen => Some((1, Some(2))),
             RuntimeFnId::ParseUrlCount => Some((1, Some(1))),
             RuntimeFnId::CountCharsDistinct => Some((1, Some(1))),
+            RuntimeFnId::InetPtonLen => Some((1, Some(1))),
             RuntimeFnId::StripTagsLen => Some((1, Some(2))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
@@ -1824,6 +1827,8 @@ impl RuntimeFnId {
             RuntimeFnId::ParseUrlCount => RuntimeFnId::ParseUrl.effects(),
             // The distinct-byte scan keeps count_chars()'s mode validation effects.
             RuntimeFnId::CountCharsDistinct => RuntimeFnId::CountChars.effects(),
+            // The length-only scan keeps inet_pton()'s address validation and warnings.
+            RuntimeFnId::InetPtonLen => RuntimeFnId::InetPton.effects(),
             // The length-only scan keeps strip_tags()'s allow-list coercion and diagnostics.
             RuntimeFnId::StripTagsLen => RuntimeFnId::StripTags.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
@@ -2568,6 +2573,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::Base64DecodedLen
                 | RuntimeFnId::ParseUrlCount
                 | RuntimeFnId::CountCharsDistinct
+                | RuntimeFnId::InetPtonLen
                 | RuntimeFnId::StripTagsLen
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
@@ -3622,6 +3628,7 @@ impl RuntimeFnId {
             RuntimeFnId::Base64DecodedLen => "base64_decoded_len",
             RuntimeFnId::ParseUrlCount => "parse_url_count",
             RuntimeFnId::CountCharsDistinct => "count_chars_distinct",
+            RuntimeFnId::InetPtonLen => "inet_pton_len",
             RuntimeFnId::StripTagsLen => "strip_tags_len",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",

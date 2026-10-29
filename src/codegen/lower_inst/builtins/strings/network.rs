@@ -37,11 +37,47 @@ pub(crate) fn lower_inet(
     name: &str,
     runtime_label: &str,
 ) -> Result<()> {
+    lower_inet_raw(ctx, inst, name, runtime_label, 0, true)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the allocation-free `strlen(inet_pton(...))` helper.
+///
+/// The packed address is still parsed and validated, but the result is returned as
+/// a bare 4/16-byte count (or zero for an invalid address) instead of a boxed
+/// `string|false` cell.
+pub(crate) fn lower_inet_pton_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_inet_raw(ctx, inst, "inet_pton", "__rt_inet_pton", 1, false)?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the shared address materialization, mode selection and helper call.
+fn lower_inet_raw(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    mode: i64,
+    box_result: bool,
+) -> Result<()> {
     load_single_string_arg(ctx, inst, name)?;
     move_string_result_to_c_abi_pair(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x2, #{mode}"));               // 0 = boxed string, 1 = packed length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r8d, {mode}"));               // 0 = boxed string, 1 = packed length
+        }
+    }
     abi::emit_call_label(ctx.emitter, runtime_label);
-    box_string_or_false_result(ctx, name);
-    store_if_result(ctx, inst)
+    if box_result {
+        box_string_or_false_result(ctx, name);
+    }
+    Ok(())
 }
 /// Moves the standard string result pair into the C-style pointer/length argument pair.
 pub(super) fn move_string_result_to_c_abi_pair(ctx: &mut FunctionContext<'_>) {

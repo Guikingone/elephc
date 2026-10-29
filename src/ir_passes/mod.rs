@@ -27,6 +27,7 @@ mod json_decode_count_sink;
 mod json_encode_len_sink;
 mod sqrt_add_int_sink;
 mod parse_url_count_sink;
+mod inet_pton_len_sink;
 mod strip_tags_len_sink;
 mod strpos_int_sink;
 mod count_chars_count_sink;
