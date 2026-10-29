@@ -305,6 +305,7 @@ unsafe fn dynamic_object_property_set_inner(
     scope_ptr: *const u8,
     scope_len: u64,
 ) -> Result<u64, EvalStatus> {
+    let site = take_native_site();
     if value_block.is_null() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -331,6 +332,7 @@ unsafe fn dynamic_object_property_set_inner(
     let previous_throw = context.take_pending_throw();
     // An empty name reads back as "no class scope", which is the free-function answer.
     context.push_class_scope(scope);
+    let caller = enter_native_site(site, context);
     let written = crate::interpreter::eval_property_set_for_ffi(
         object_cell,
         &name,
@@ -338,6 +340,7 @@ unsafe fn dynamic_object_property_set_inner(
         context,
         &mut values,
     );
+    leave_native_site(caller, context);
     context.pop_class_scope();
     let escaped = take_escaping_throwable(&written, context, &mut values);
     let escaped =
@@ -347,6 +350,57 @@ unsafe fn dynamic_object_property_set_inner(
         return Ok(2);
     }
     written.map(|()| 1)
+}
+
+thread_local! {
+    /// The compiled caller's source file and line, published by `__elephc_eval_native_site` just
+    /// before a property bridge call and taken by that call.
+    static NATIVE_SITE: std::cell::RefCell<Option<(String, i64)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Publishes the compiled caller's source location for the property bridge call that follows, so
+/// a diagnostic eval raises there (a dynamic-property deprecation, an `Undefined property`
+/// warning) names the compiled line, as php-src reports the executing opline's, not the last
+/// eval statement's.
+///
+/// # Safety
+/// `file_ptr` must be readable for `file_len` bytes.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_native_site(file_ptr: *const u8, file_len: u64, line: i64) {
+    let file = crate::ffi::util::abi_name_to_string(file_ptr, file_len).unwrap_or_default();
+    NATIVE_SITE.with(|site| *site.borrow_mut() = Some((file, line)));
+}
+
+/// Takes the location `__elephc_eval_native_site` published for this bridge call, if any.
+#[cfg(not(test))]
+fn take_native_site() -> Option<(String, i64)> {
+    NATIVE_SITE.with(|site| site.borrow_mut().take())
+}
+
+/// Makes `site` the context's call site for the bridged operation; returns the previous one.
+#[cfg(not(test))]
+fn enter_native_site(
+    site: Option<(String, i64)>,
+    context: &mut ElephcEvalContext,
+) -> Option<(String, String, i64, Option<String>)> {
+    let (file, line) = site?;
+    let previous = context.call_site();
+    let dir = std::path::Path::new(&file)
+        .parent()
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    context.set_call_site(file, dir, line);
+    Some(previous)
+}
+
+/// Restores the call site `enter_native_site` replaced.
+#[cfg(not(test))]
+fn leave_native_site(previous: Option<(String, String, i64, Option<String>)>, context: &mut ElephcEvalContext) {
+    if let Some((file, dir, line, magic)) = previous {
+        context.set_call_site(file, dir, line);
+        context.set_file_magic_override(magic);
+    }
 }
 
 /// Reads a property of an eval-owned object for compiled code, which answers it from the object's
@@ -399,6 +453,7 @@ unsafe fn dynamic_object_property_get_inner(
     scope_ptr: *const u8,
     scope_len: u64,
 ) -> Result<u64, EvalStatus> {
+    let site = take_native_site();
     if block.is_null() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -426,8 +481,10 @@ unsafe fn dynamic_object_property_get_inner(
     let object_cell = ElephcRuntimeOps::object_from_raw(object)?;
     let previous_throw = context.take_pending_throw();
     context.push_class_scope(scope);
+    let caller = enter_native_site(site, context);
     let read = crate::interpreter::eval_property_fetch_for_ffi(object_cell, &name, mode, context, &mut values)
         .and_then(|value| values.retain(value));
+    leave_native_site(caller, context);
     context.pop_class_scope();
     let escaped = take_escaping_throwable(&read, context, &mut values);
     let escaped =

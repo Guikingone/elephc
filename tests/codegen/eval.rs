@@ -17541,7 +17541,13 @@ var_dump($m->z);
          isset a\nisset b\nbool(true)\nbool(false)\nbool(true)\n\
          isset a\nget a\nisset b\nstring(2) \"va\"\nstring(1) \"d\"\nint(3)\n"
     );
-    assert!(out.stderr.contains("Creation of dynamic property M::$z is deprecated"), "{}", out.stderr);
+    // The deprecation names the compiled line of the write (8), not the last eval statement's.
+    let deprecation = out
+        .stderr
+        .lines()
+        .find(|line| line.contains("Creation of dynamic property M::$z is deprecated"))
+        .unwrap_or_else(|| panic!("{}", out.stderr));
+    assert!(deprecation.ends_with(" on line 8"), "{deprecation}");
 }
 
 /// Eval `??` reads its property operand as php's silent probe: a magic class is asked `__isset`

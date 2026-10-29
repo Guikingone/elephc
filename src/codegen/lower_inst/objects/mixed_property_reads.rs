@@ -848,6 +848,21 @@ pub(super) fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>,
     }
 }
 
+/// Publishes the current instruction's source file and line to Magician for the property bridge
+/// call that follows (`__elephc_eval_native_site`), so a diagnostic eval raises there names this
+/// compiled line. Clobbers the caller-saved registers.
+pub(super) fn emit_publish_eval_native_site(ctx: &mut FunctionContext<'_>) {
+    let Some((file, line)) = ctx.current_source_location() else {
+        return;
+    };
+    let target = ctx.emitter.target;
+    let (label, length) = ctx.data.add_string(file.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 0), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 1), length as i64);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), line as i64);
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("__elephc_eval_native_site"));
+}
+
 /// Where an eval-owned read finds its receiver: the integer result register, or a temporary stack
 /// slot `offset` bytes above the stack pointer.
 pub(super) enum ObjectSource {
@@ -884,6 +899,8 @@ pub(super) fn emit_eval_owned_property_read(
         }
         ObjectSource::Stacked(_) => 0,
     };
+    // The receiver is on the stack now, so the call may clobber the result register.
+    emit_publish_eval_native_site(ctx);
     let (arg0, arg1, arg2, arg3, arg4, arg5) = (
         abi::int_arg_reg_name(target, 0),
         abi::int_arg_reg_name(target, 1),
