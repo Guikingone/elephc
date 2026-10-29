@@ -50,19 +50,59 @@ fn emit_strrpos_aarch64(e: &mut Emitter) {
     e.instruction("sub x23, x20, x22");                                         // start at the rightmost valid candidate
     e.instruction("ldrb w9, [x21]");                                            // cache the needle's first byte
 
-    e.label("__rt_strrpos_scan");
-    e.instruction("ldrb w10, [x19, x23]");                                      // load the candidate's first haystack byte
-    e.instruction("cmp w10, w9");                                               // does it match the needle's first byte?
-    e.instruction("b.ne __rt_strrpos_prev");                                    // only a first-byte hit needs the full comparison
+    e.label("__rt_strrpos_vector");
+    e.instruction("cmp x23, #15");                                              // does a full sixteen-byte block fit before the candidate?
+    e.instruction("b.lo __rt_strrpos_tail");                                    // short tails use the scalar first-byte scan
+    e.instruction("sub x12, x23, #15");                                         // start of the block ending at the candidate
+    e.instruction("add x0, x19, x12");                                          // address the block inside the haystack
+    e.instruction("ldr q0, [x0]");                                              // load sixteen candidate bytes
+    e.instruction("dup v1.16b, w9");                                            // broadcast the first needle byte
+    e.instruction("cmeq v0.16b, v0.16b, v1.16b");                               // compare every lane against the needle byte
+    e.instruction("umaxv b2, v0.16b");                                          // collapse the comparison lanes
+    e.instruction("umov w10, v2.b[0]");                                         // read the collapsed match flag
+    e.instruction("cbz w10, __rt_strrpos_block_miss");                          // no lane matched in this block
+    e.instruction("mov x13, x23");                                              // scan this block from its right edge
+    e.label("__rt_strrpos_block_scan");
+    e.instruction("ldrb w11, [x19, x13]");                                      // load the scalar first byte inside the block
+    e.instruction("cmp w11, w9");                                               // does it match the needle's first byte?
+    e.instruction("b.eq __rt_strrpos_candidate");                              // compare the full needle at this candidate
+    e.instruction("cmp x13, x12");                                              // has the whole block been scanned?
+    e.instruction("b.eq __rt_strrpos_block_miss");                             // move to the block before this one
+    e.instruction("sub x13, x13, #1");                                          // move one byte left inside the block
+    e.instruction("b __rt_strrpos_block_scan");                                // keep scanning the block
+
+    e.label("__rt_strrpos_candidate");
+    e.instruction("mov x23, x13");                                              // publish the candidate before the libc call
     e.instruction("add x0, x19, x23");                                          // compare the full needle at this candidate
     e.instruction("mov x1, x21");                                               // pass the needle pointer
     e.instruction("mov x2, x22");                                               // pass the needle length
     e.bl_c("memcmp");                                                           // compare the remaining needle bytes
     e.instruction("cbz w0, __rt_strrpos_found");                                // a zero result is a full match
-    e.label("__rt_strrpos_prev");
     e.instruction("cbz x23, __rt_strrpos_notfound");                            // position zero was the final candidate
     e.instruction("sub x23, x23, #1");                                          // move one candidate to the left
-    e.instruction("b __rt_strrpos_scan");                                       // retry from the previous candidate
+    e.instruction("ldrb w9, [x21]");                                            // restore the first byte after the libc call
+    e.instruction("b __rt_strrpos_vector");                                    // scan the next block
+
+    e.label("__rt_strrpos_block_miss");
+    e.instruction("cbz x12, __rt_strrpos_notfound");                            // no earlier block remains
+    e.instruction("sub x23, x12, #1");                                          // continue just before this block
+    e.instruction("ldrb w9, [x21]");                                            // restore the first byte after vector reduction
+    e.instruction("b __rt_strrpos_vector");                                    // scan the previous block
+
+    e.label("__rt_strrpos_tail");
+    e.instruction("ldrb w10, [x19, x23]");                                      // load the candidate's first haystack byte
+    e.instruction("cmp w10, w9");                                               // does it match the needle's first byte?
+    e.instruction("b.ne __rt_strrpos_tail_prev");                              // only a first-byte hit needs the full comparison
+    e.instruction("add x0, x19, x23");                                          // compare the full needle at this candidate
+    e.instruction("mov x1, x21");                                               // pass the needle pointer
+    e.instruction("mov x2, x22");                                               // pass the needle length
+    e.bl_c("memcmp");                                                           // compare the remaining needle bytes
+    e.instruction("cbz w0, __rt_strrpos_found");                                // a zero result is a full match
+    e.label("__rt_strrpos_tail_prev");
+    e.instruction("cbz x23, __rt_strrpos_notfound");                            // position zero was the final candidate
+    e.instruction("sub x23, x23, #1");                                          // move one candidate to the left
+    e.instruction("ldrb w9, [x21]");                                            // restore the first byte after the libc call
+    e.instruction("b __rt_strrpos_tail");                                      // continue the scalar first-byte scan
 
     e.label("__rt_strrpos_found");
     e.instruction("mov x0, x23");                                               // return the last matching candidate
