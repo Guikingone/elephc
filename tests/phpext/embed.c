@@ -18,6 +18,7 @@
 #elif defined(__GLIBC__)
 #include <malloc.h>
 #elif defined(__APPLE__)
+#include <mach/mach.h>
 #include <malloc/malloc.h>
 #else
 #error "The PHP lifecycle test requires live malloc statistics on this platform"
@@ -51,6 +52,67 @@ static size_t live_malloc_bytes(void)
     return stats.size_in_use;
 #endif
 }
+
+#if defined(__APPLE__) && !defined(EP_SANITIZED_ALLOCATOR)
+typedef struct {
+    vm_address_t zone;
+    vm_address_t addresses[64], zones[64];
+    vm_size_t sizes[64];
+    unsigned count;
+} large_malloc_ranges;
+
+/* Introspection reads this same process while the fatal phase has no worker threads. */
+static kern_return_t read_local_memory(task_t task, vm_address_t address, vm_size_t size, void **memory)
+{
+    (void)task;
+    (void)size;
+    *memory = (void *)address;
+    return KERN_SUCCESS;
+}
+
+/* Record into stack storage so diagnostics cannot allocate while walking a malloc zone. */
+static void record_large_malloc_ranges(task_t task, void *context, unsigned type,
+    vm_range_t *ranges, unsigned count)
+{
+    (void)task;
+    if (!(type & MALLOC_PTR_IN_USE_RANGE_TYPE)) { return; }
+    large_malloc_ranges *record = context;
+    for (unsigned i = 0; i < count && record->count < 64; i++) {
+        if (ranges[i].size < 1024 * 1024) { continue; }
+        unsigned slot = record->count++;
+        record->addresses[slot] = ranges[i].address;
+        record->sizes[slot] = ranges[i].size;
+        record->zones[slot] = record->zone;
+    }
+}
+
+/* Large native images are distinguishable from aggregate allocator accounting after a failure. */
+static void report_large_malloc_ranges(void)
+{
+    vm_address_t *zones;
+    unsigned count;
+    kern_return_t status = malloc_get_all_zones(mach_task_self(), read_local_memory, &zones, &count);
+    if (status != KERN_SUCCESS) {
+        fprintf(stderr, "malloc zone enumeration failed: %d\n", status);
+        return;
+    }
+    large_malloc_ranges record = {0};
+    for (unsigned i = 0; i < count && record.count < 64; i++) {
+        malloc_zone_t *zone = (malloc_zone_t *)zones[i];
+        if (!zone->introspect || !zone->introspect->enumerator) { continue; }
+        record.zone = zones[i];
+        status = zone->introspect->enumerator(mach_task_self(), &record, MALLOC_PTR_IN_USE_RANGE_TYPE,
+            zones[i], read_local_memory, record_large_malloc_ranges);
+        if (status != KERN_SUCCESS) {
+            fprintf(stderr, "malloc range enumeration failed: %d\n", status);
+        }
+    }
+    for (unsigned i = 0; i < record.count; i++) {
+        fprintf(stderr, "live malloc range %p: %zu bytes, zone %p\n",
+            (void *)record.addresses[i], (size_t)record.sizes[i], (void *)record.zones[i]);
+    }
+}
+#endif
 
 /* A shutdown-flushed output callback can park a Fiber after the destructor pass. */
 static void run_late_userland_fiber_request(void)
@@ -91,6 +153,7 @@ static void run_abandoned_requests(void)
         "set_error_handler(static function () { return false; });";
     php_request_shutdown(NULL);
     size_t baseline = live_malloc_bytes();
+    size_t samples[9] = {baseline};
     for (unsigned request = 0; request < 8; request++) {
         if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); break; }
         unsigned expected_resumes = (request / 4) * 2 + (request % 4 < 2 ? request % 4 : 2);
@@ -113,10 +176,17 @@ static void run_abandoned_requests(void)
         if (!bailed) { atomic_fetch_add(&failures, 1); }
         php_request_shutdown(NULL);
         size_t current = live_malloc_bytes();
+        samples[request + 1] = current;
         /* The fixture uses a 512 KiB native heap; abandoned images grow well past 4 MiB. */
         if (current > baseline && current - baseline > 4 * 1024 * 1024) {
             fprintf(stderr, "abandoned native calls retained %zu malloc bytes after %u requests\n",
                 current - baseline, request + 1);
+            for (unsigned i = 0; i <= request + 1; i++) {
+                fprintf(stderr, "malloc bytes after %u requests: %zu\n", i, samples[i]);
+            }
+#if defined(__APPLE__) && !defined(EP_SANITIZED_ALLOCATOR)
+            report_large_malloc_ranges();
+#endif
             atomic_fetch_add(&failures, 1);
             break;
         }
@@ -213,13 +283,13 @@ int main(int argc, char **argv)
         if (php_request_startup() == FAILURE) { return 4; }
     }
     php_embed_shutdown();
-    if (atomic_load(&failures)) {
+    int result = atomic_load(&failures) ? 1 : 0;
+    if (result) {
         fprintf(stderr, "PHP extension request failures: %d\n", atomic_load(&failures));
-        return 1;
     }
-    puts("request isolation ok");
+    puts(result ? "request isolation failed" : "request isolation ok");
     fflush(stdout);
     /* Let Apple's leaks inspect the process after all module/thread/request teardown. */
     if (getenv("ELEPHC_EMBED_LEAK_READY")) { (void)getchar(); }
-    return 0;
+    return result;
 }

@@ -84,6 +84,7 @@ jobs:
 
       - name: Check SDK parsing, host build and warning cleanup
         run: |
+          python3 -m unittest discover -s scripts/phpext -p test_embed_runner.py
           cargo test -p elephc --lib phpext::
           cargo test -p elephc --lib warning_dispatch_emits_every_supported_target
           cargo test -p elephc --lib nested_boundary_reads_linked_concat_capacity_on_all_targets

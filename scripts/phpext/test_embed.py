@@ -36,14 +36,20 @@ def check_apple_leaks(command, env, work):
             if not select.select([process.stdout], [], [], 120)[0]:
                 raise RuntimeError("PHP lifecycle did not reach the Apple leak inspection checkpoint")
             ready = process.stdout.readline()
-            if ready != "request isolation ok\n":
-                raise RuntimeError(f"PHP lifecycle failed before leak inspection: {ready}")
+            if ready not in ("request isolation ok\n", "request isolation failed\n"):
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                stdout, stderr = process.communicate()
+                raise RuntimeError(f"PHP lifecycle failed before leak inspection ({process.returncode}):\n"
+                                   f"{ready}{stdout}\n{stderr}")
             result = subprocess.run(["leaks", str(process.pid)], capture_output=True, text=True, timeout=120)
-            if result.returncode or "0 leaks" not in result.stdout:
-                raise RuntimeError(f"Apple leak check failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
             stdout, stderr = process.communicate("\n", timeout=30)
-            if process.returncode or stdout:
-                raise RuntimeError(f"PHP lifecycle failed after leak inspection:\n{stdout}\n{stderr}")
+            if result.returncode or "0 leaks" not in result.stdout:
+                raise RuntimeError(f"Apple leak check failed ({result.returncode}):\n{result.stdout}\n"
+                                   f"{result.stderr}\n{ready}{stdout}\n{stderr}")
+            if process.returncode or stdout or ready != "request isolation ok\n":
+                raise RuntimeError(f"PHP lifecycle failed after leak inspection ({process.returncode}):\n"
+                                   f"{ready}{stdout}\n{stderr}\n{result.stdout}")
             print(ready + result.stdout, end="")
         finally:
             if process.poll() is None:
