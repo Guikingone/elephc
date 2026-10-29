@@ -5,7 +5,8 @@
 //! - The CLI pipeline and AST effect/exception analysis.
 //!
 //! Key details:
-//! - Ordinary executables keep their closed-world output analysis.
+//! - Standalone builds retain the prior output approximation; chunked native
+//!   ob_start callbacks still need callback-aware analysis.
 //! - Nested compilations and unwinding restore the caller's profile.
 
 use std::cell::Cell;
@@ -14,7 +15,7 @@ thread_local! {
     static HOSTED_OUTPUT: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Installs whether output can call a PHP handler for one compilation.
+/// Installs whether output can call an external PHP host handler for one compilation.
 pub fn with_hosted_output<R>(enabled: bool, body: impl FnOnce() -> R) -> R {
     HOSTED_OUTPUT.with(|slot| {
         let previous = slot.replace(enabled);

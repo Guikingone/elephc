@@ -359,8 +359,10 @@ fn test_normalize_control_flow_keeps_output_inside_try() {
             Span::dummy(),
         )];
 
+        // This fixture declares no native output callback. Preserve the existing profile
+        // approximation without claiming that chunked ob_start callbacks cannot throw.
         let native = normalize_control_flow(program.clone());
-        assert_eq!(native.len(), 2, "ordinary output can still leave a non-throwing prefix");
+        assert_eq!(native.len(), 2, "standalone profile retains its existing prefix approximation");
         assert_eq!(native[0], output);
         let pruned = with_hosted_output(true, || normalize_control_flow(program));
 

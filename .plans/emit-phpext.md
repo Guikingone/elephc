@@ -428,8 +428,9 @@ conversion and host-callback paths instead of bypassing it to accept arrays.
 Apply validation under normal compile, `--check`, and `--emit-ir`.
 
 AST output effects and exception routing use a scoped host-output profile during
-PHP extension compilation. Standalone executables retain their closed-world
-output analysis. The scope restores its previous setting across nested calls
+PHP extension compilation. Standalone executables retain their prior output
+approximation; native chunked `ob_start` callbacks need a separate callback-aware
+analysis follow-up. The scope restores its previous setting across nested calls
 and unwinding. Scratch persistence retires a cast's detached string after making
 the stable copy, while numeric formatter views remain protected across reentry.
 

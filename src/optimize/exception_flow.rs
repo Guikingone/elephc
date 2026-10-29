@@ -1366,7 +1366,8 @@ fn exact_receiver_class(
     }
 }
 
-/// Host output callbacks have an open throwable domain; native output adds no throw source.
+/// Adds external host callback throws to the existing native approximation.
+/// Chunked native ob_start callbacks still need callback-aware exception analysis.
 fn host_output_throws() -> ThrownTypes {
     if output::output_may_throw() { ThrownTypes::unknown() } else { ThrownTypes::default() }
 }
