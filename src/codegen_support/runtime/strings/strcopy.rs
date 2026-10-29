@@ -102,3 +102,22 @@ fn emit_strcopy_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the copied string in the standard x86_64 string result registers
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets copy with one libc `memcpy` rather than a byte loop.
+    #[test]
+    fn strcopy_emits_one_memcpy_on_all_targets() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_strcopy(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("memcpy"), "{name}: {assembly}");
+            assert!(!assembly.contains("strcopy_loop"), "{name}: {assembly}");
+        }
+    }
+}

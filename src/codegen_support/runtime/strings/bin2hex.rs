@@ -119,3 +119,21 @@ fn emit_bin2hex_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_bin2hex_size_overflow_linux_x86_64");
     emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets map nibbles through the shared hexadecimal table.
+    #[test]
+    fn bin2hex_emits_the_digit_table_path_on_all_targets() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_bin2hex(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("_hex_digits"), "{name}: {assembly}");
+        }
+    }
+}
