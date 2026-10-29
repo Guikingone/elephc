@@ -104,6 +104,7 @@ mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;
+mod hosted_exception_discard;
 mod xml_parser_arguments;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
