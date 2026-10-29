@@ -65,14 +65,13 @@ jobs:
           phpts: ${{ matrix.phpts }}
           fail-fast: 'true'
 
-      - name: Cache Cargo state
-        uses: actions/cache@v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: phpext-sdk-${{ matrix.platform.target }}-${{ matrix.phpts }}-${{ hashFiles('Cargo.lock') }}
+          prefix-key: rust-deps-phpext-sdk-${{ matrix.platform.target }}-${{ matrix.phpts }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
 
       - name: Verify runner and selected interpreter
         shell: bash
@@ -114,14 +113,16 @@ jobs:
       - name: Cache real PHP debug embed SDK
         uses: actions/cache@v6
         with:
-          path: target/phpext-test-host
-          key: phpext-embed-8.5.11-debug-${{ matrix.platform.target }}-${{ matrix.phpts }}-v2-fibers
+          # Keep the non-relocatable SDK outside Rust's target cache. Both the
+          # builder identity and its workflow configure flags invalidate this cache.
+          path: ${{ runner.temp }}/phpext-test-host
+          key: phpext-embed-${{ matrix.platform.target }}-${{ matrix.phpts }}-${{ hashFiles('scripts/phpext/build_host.py', '.github/workflows/phpext-host-sdk.yml') }}-v3
 
       - name: Build real PHP debug CLI and embed SDK
         shell: bash
         run: |
           set -euo pipefail
-          flags=(--prefix target/phpext-test-host --debug)
+          flags=(--prefix "$RUNNER_TEMP/phpext-test-host" --debug)
           if [ '${{ matrix.phpts }}' = ts ]; then
             flags+=(--zts)
           fi
@@ -131,15 +132,15 @@ jobs:
           python3 scripts/phpext/build_host.py "${flags[@]}"
 
       - name: Verify repeated requests and concurrent ZTS requests in real PHP
-        run: python3 scripts/phpext/test_embed.py --php-config target/phpext-test-host/bin/php-config
+        run: python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config"
 
       - name: Check native and adapter leaks with Valgrind
         if: runner.os == 'Linux'
-        run: python3 scripts/phpext/test_embed.py --php-config target/phpext-test-host/bin/php-config --valgrind
+        run: python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config" --valgrind
 
       - name: Check native and adapter leaks with Apple leaks
         if: runner.os == 'macOS'
-        run: python3 scripts/phpext/test_embed.py --php-config target/phpext-test-host/bin/php-config --leaks
+        run: python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config" --leaks
 
       - name: Check standalone null declaration parsing
         run: cargo test -p elephc --test parser_tests standalone_null
