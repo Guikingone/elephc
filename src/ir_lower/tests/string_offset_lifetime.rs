@@ -454,6 +454,11 @@ function concat_warning(array $items): string {
             })
         })
         .expect("expected the mixed string cast to be persisted");
+    let cast = function.instruction(block.instructions[persist]).unwrap().operands[0];
+    assert!(block.instructions[persist + 1..].iter().any(|id| {
+        let inst = function.instruction(*id).unwrap();
+        inst.op == Op::Release && inst.operands.first() == Some(&cast)
+    }), "the original mixed cast must retire after its stable copy is made");
     assert!(
         block.instructions[persist + 1..].iter().any(|id| {
             function
