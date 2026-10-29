@@ -881,7 +881,11 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     receiver_offset: usize,
     name_offset: usize,
     frame_bytes: usize,
+    class_name: &str,
 ) -> Result<()> {
+    // A class with magic accessors answers a name its hash lacks from them, as php does: the
+    // block then stays until the accessors have read the runtime name from it.
+    let magic = super::mixed_property_reads::magic_property_arm(ctx, class_name, property_fetch_mode(inst))?;
     let target = ctx.emitter.target;
     let miss_label = ctx.next_label("runtime_dynamic_prop_hash_miss");
     let done_label = ctx.next_label("runtime_dynamic_prop_hash_done");
@@ -900,9 +904,14 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
         name_offset + 8,
     );
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    // Released before the found test so the branch reads freshly computed flags on every target.
-    abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+    if magic.is_none() {
+        // Released before the found test so the branch reads freshly computed flags on every target.
+        abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+    }
     abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
+    if magic.is_some() {
+        abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+    }
     match target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
@@ -914,7 +923,21 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&miss_label);
-    emit_boxed_null(ctx);
+    match magic {
+        Some(arm) => {
+            let arm_done = ctx.next_label("runtime_dynamic_prop_hash_magic_done");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), receiver_offset);
+            super::mixed_property_reads::emit_magic_property_arm(
+                ctx,
+                &arm,
+                &super::mixed_property_reads::MagicName::Stacked(name_offset),
+                &arm_done,
+            )?;
+            ctx.emitter.label(&arm_done);
+            abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
+        }
+        None => emit_boxed_null(ctx),
+    }
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
 }

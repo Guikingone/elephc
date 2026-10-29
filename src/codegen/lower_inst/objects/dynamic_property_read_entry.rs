@@ -331,7 +331,7 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         ctx.emitter.label(label);
         // The arm matched this runtime class, so the offset is its own. The helper takes the
         // runtime key from the stacked block and releases that block itself.
-        lower_runtime_allow_dynamic_prop_get(ctx, inst, arm.hash_offset, 16, 0, 32)?;
+        lower_runtime_allow_dynamic_prop_get(ctx, inst, arm.hash_offset, 16, 0, 32, &arm.class_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 

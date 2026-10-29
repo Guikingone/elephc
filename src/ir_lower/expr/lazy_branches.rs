@@ -166,7 +166,8 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // this scope may not reach answers the DEFAULT rather than raising, and a name that was
         // never created answers it without an `Undefined property` warning. A receiver whose
         // class is only known at run time needs the runtime-name form to carry that mode.
-        let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
+        let needs_probe = property_probe_needs_runtime_name_form(ctx, object)
+            || super::lazy_isset::object_answers_hash_then_magic(ctx, object, property);
         let object = lower_member_receiver(ctx, object, value);
         if property_can_be_uninitialized(ctx, object.value, property)
             || union_hook_probe_class(ctx, object.value, property).is_some() {

@@ -679,3 +679,36 @@ viaMixed(new G, $a);
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// On a class that allows dynamic properties, a stored dynamic property answers before the magic
+/// accessors (a stored null included, which is "not set" without asking `__isset`): reads, `isset()`
+/// and `??`, literal and runtime names alike. Only a name the object does not hold reaches
+/// `__get` / `__isset`. Reads called `__get` for a stored name and `isset()` called `__get` too.
+#[test]
+fn test_stored_dynamic_properties_answer_before_magic_accessors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[AllowDynamicProperties]
+class P {
+    public function __get($n) { echo "get $n\n"; return "magic"; }
+    public function __isset($n) { echo "isset $n\n"; return $n === "m"; }
+}
+$p = new P;
+$p->dyn = 3;
+$p->nul = null;
+var_dump($p->dyn, $p->m);
+var_dump(isset($p->dyn), isset($p->nul), isset($p->m), isset($p->zz));
+$k = $argc > 9 ? "x" : "dyn"; $n = $argc > 9 ? "x" : "nul"; $m = $argc > 9 ? "x" : "m";
+var_dump($p->$k, isset($p->$k), isset($p->$n), isset($p->$m));
+var_dump($p->dyn ?? "d", $p->nul ?? "d", $p->m ?? "d", $p->zz ?? "d");
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "get m\nint(3)\nstring(5) \"magic\"\nisset m\nisset zz\nbool(true)\nbool(false)\nbool(true)\nbool(false)\n\
+         isset m\nint(3)\nbool(true)\nbool(false)\nbool(true)\n\
+         isset m\nget m\nisset zz\nint(3)\nstring(1) \"d\"\nstring(5) \"magic\"\nstring(1) \"d\"\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

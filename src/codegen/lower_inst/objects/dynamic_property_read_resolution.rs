@@ -112,7 +112,7 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
             },
             |ctx, arm| match &arm.action {
                 PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
-                    lower_runtime_allow_dynamic_prop_get(ctx, inst, *hash_offset, 16, 0, 32)
+                    lower_runtime_allow_dynamic_prop_get(ctx, inst, *hash_offset, 16, 0, 32, &arm.class_name)
                 }
                 _ => {
                     abi::emit_release_temporary_stack(ctx.emitter, 32);

@@ -201,6 +201,11 @@ pub(super) fn lower_lazy_property_isset_operand(
             let object = lower_member_receiver(ctx, object, arg);
             Some(lower_initialized_property_isset(ctx, object, property, arg))
         }
+        IssetPropertyAction::HashThenMagic => {
+            let object = lower_member_receiver(ctx, object, arg);
+            let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
+            Some(probe_value_is_set(ctx, probed, arg))
+        }
     }
 }
 
@@ -212,6 +217,9 @@ pub(super) enum IssetPropertyAction {
     /// A declared (typed) property slot, which can be uninitialized: probe the slot
     /// before reading it so `isset()` never raises the uninitialized-read error.
     Initialized,
+    /// A class that answers a stored dynamic property before `__isset`: probe through the
+    /// `mixed` ladder, which reads the hash first (`class_answers_hash_then_magic`).
+    HashThenMagic,
 }
 
 /// Selects the PHP-visible `isset()` behavior for a statically known object property operand.
@@ -226,6 +234,9 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_answers_hash_then_magic(ctx, &class_name, property) {
+        return Some(IssetPropertyAction::HashThenMagic);
+    }
     if class_info.allow_dynamic_properties {
         return Some(IssetPropertyAction::Fallback);
     }

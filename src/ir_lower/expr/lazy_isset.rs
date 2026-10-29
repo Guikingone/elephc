@@ -139,7 +139,7 @@ pub(super) fn lower_lazy_isset_operand(
 }
 
 /// Reduces a probed property value to php's `isset()` answer: set means "not null".
-fn probe_value_is_set(
+pub(super) fn probe_value_is_set(
     ctx: &mut LoweringContext<'_, '_>,
     probed: LoweredValue,
     arg: &Expr,
@@ -234,7 +234,9 @@ pub(super) fn lower_lazy_empty(
         }
         // Same reason as `isset()`: php's `empty()` is a silent probe, so an inaccessible or
         // never-created name answers `true` instead of raising.
-        if property_probe_needs_runtime_name_form(ctx, object) {
+        if property_probe_needs_runtime_name_form(ctx, object)
+            || object_answers_hash_then_magic(ctx, object, property)
+        {
             let object = lower_expr(ctx, object);
             let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
@@ -531,6 +533,11 @@ pub(super) fn lazy_empty_magic_property_calls(
     arg: &Expr,
 ) -> Option<(Expr, Expr)> {
     match &arg.kind {
+        ExprKind::PropertyAccess { object, property } | ExprKind::NullsafePropertyAccess { object, property }
+            if object_answers_hash_then_magic(ctx, object, property) =>
+        {
+            None
+        }
         ExprKind::PropertyAccess { object, property } => {
             property_existence_magic_class(ctx, object, property, "__isset")?;
             let key = Expr::new(ExprKind::StringLiteral(property.clone()), arg.span);
@@ -575,6 +582,18 @@ pub(super) fn lazy_empty_magic_property_calls(
         }
         _ => None,
     }
+}
+
+/// Whether `$object->property` answers from a stored dynamic property before the magic
+/// accessors (`class_answers_hash_then_magic` on the operand's static class): its probes go
+/// through the `mixed` ladder instead of a synthetic `__isset()` / `__get()` pair.
+pub(super) fn object_answers_hash_then_magic(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    instance_callable_object_class(ctx, object)
+        .is_some_and(|class_name| class_answers_hash_then_magic(ctx, &class_name, property))
 }
 
 /// Returns the class whose `magic` method (`__isset`/`__unset`) should handle

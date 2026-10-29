@@ -361,6 +361,14 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    let object = if op == Op::PropGet {
+        match hash_then_magic_receiver(ctx, object, property, expr) {
+            Ok(boxed) => return lower_property_get_from_value(ctx, boxed, property, op, expr),
+            Err(object) => object,
+        }
+    } else {
+        object
+    };
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
@@ -609,6 +617,50 @@ pub(super) fn value_may_carry_container_miss(
             .is_some_and(|source| value_may_carry_container_miss(ctx, source)),
         _ => false,
     }
+}
+
+/// Whether an access to `property` on an instance of `class_name` answers from the object's
+/// dynamic-property hash before its magic accessors: the class keeps a name-addressable hash
+/// (`#[AllowDynamicProperties]`, or eval) and has `__get` or `__isset`, and `property` is not a
+/// declared property this scope reaches. php reads a stored dynamic property directly (a stored
+/// null included) and calls the accessors only for a name the object does not hold.
+pub(super) fn class_answers_hash_then_magic(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return false;
+    };
+    if !class_info.dynamic_property_hash_is_name_addressable() {
+        return false;
+    }
+    let magic = ["__get", "__isset"]
+        .iter()
+        .any(|method| class_method_signature(ctx, normalized, &php_symbol_key(method)).is_some());
+    magic
+        && !(class_info.visible_property(property).is_some()
+            && property_is_accessible_for_ir(ctx, normalized, class_info, property))
+}
+
+/// The receiver boxed as `mixed` when the access must answer from the hash before the magic
+/// accessors (`class_answers_hash_then_magic`): the `mixed` property ladders do exactly that, in
+/// every fetch mode. `None` keeps the typed lowering.
+pub(super) fn hash_then_magic_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> Result<LoweredValue, LoweredValue> {
+    let ty = ctx.builder.value_php_type(object.value);
+    let Some((class_name, _)) = singular_object_class(&ty) else {
+        return Err(object);
+    };
+    if !class_answers_hash_then_magic(ctx, class_name, property) {
+        return Err(object);
+    }
+    Ok(ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span)))
 }
 
 /// Returns the normalized return type for a class `__get` magic property hook.
@@ -951,6 +1003,9 @@ pub(super) fn lower_property_probe_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let object = refine_member_receiver(ctx, object, expr);
+    // A class answering a stored dynamic property before its accessors probes through the
+    // `mixed` ladder, which reads the hash first (`class_answers_hash_then_magic`).
+    let object = hash_then_magic_receiver(ctx, object, property, expr).unwrap_or_else(|object| object);
     // Runtime-name probes must suppress typed uninitialized reads just like coalesce.
     // In particular, isset() on the C|false receiver after a rejected readonly fallback
     // must answer false rather than take DynamicPropGet's ordinary typed-slot guard.
@@ -970,6 +1025,9 @@ pub(super) fn lower_property_empty_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    // A class answering a stored dynamic property before its accessors probes through the
+    // `mixed` ladder, which reads the hash first (`class_answers_hash_then_magic`).
+    let object = hash_then_magic_receiver(ctx, object, property, expr).unwrap_or_else(|object| object);
     if property_can_be_uninitialized(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {
         return lower_initialized_property_value(ctx, object, property, expr);
@@ -986,6 +1044,9 @@ pub(super) fn lower_property_isset_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    // A class answering a stored dynamic property before its accessors probes through the
+    // `mixed` ladder, which reads the hash first (`class_answers_hash_then_magic`).
+    let object = hash_then_magic_receiver(ctx, object, property, expr).unwrap_or_else(|object| object);
     // As for `??`: a typed slot that may still be uninitialized is probed, never read.
     if property_can_be_uninitialized(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {
