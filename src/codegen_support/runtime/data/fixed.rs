@@ -209,6 +209,15 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
     ));
+    out.push_str(".p2align 4\n.globl _ascii_lower\n_ascii_lower:\n");
+    for byte in 0u16..256 {
+        let folded = if (b'A' as u16..=b'Z' as u16).contains(&byte) {
+            byte + 32
+        } else {
+            byte
+        };
+        out.push_str(&format!("    .byte {folded}\n"));
+    }
     out.push_str(".globl _hex_digits\n_hex_digits:\n    .ascii \"0123456789abcdef\"\n");
     out.push_str(".p2align 8\n.globl _crc32_table\n_crc32_table:\n");
     for entry in crate::codegen_support::runtime::strings::CRC32_TABLE {

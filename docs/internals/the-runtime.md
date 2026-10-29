@@ -379,8 +379,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_mbstring_capture_hash_store` | Internal construction primitive: persist one capture, protect old-value release, track reentrant hash set/unset, and finish the selected write without COW | C ABI unused context, selected managed hash, validated borrowed key/value descriptors | Status `0` or pending throwable `2` |
 | `__rt_strpos` | Find substring; first-byte candidates come from `memchr` and the full needle from `memcmp` | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence by scanning candidates right-to-left, comparing the first byte before `memcmp` | `x1`/`x2` + `x3`/`x4` | `x0` |
-| `__rt_stripos` | Find substring, ASCII case-insensitive; scans both first-byte case variants with `memchr` | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
-| `__rt_strripos` | Find last occurrence, ASCII case-insensitive, with branchless ASCII folding in the comparison loop | `x1`/`x2` + `x3`/`x4` | `x0` |
+| `__rt_stripos` | Find substring, ASCII case-insensitive; scans both first-byte case variants with `memchr` and folds through a 256-byte table | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
+| `__rt_strripos` | Find last occurrence, ASCII case-insensitive, with table-based ASCII folding in the comparison loop | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_strstr_len` | Allocation-free `strlen(strstr(...))`: runs the `strpos` search and returns the prefix/suffix length, or zero for `strlen(false)` | `x1`/`x2` + `x3`/`x4` + before flag | `x0` |
 | `__rt_chunk_split_len` | Allocation-free `strlen(chunk_split(...))`: computes the exact split length and reproduces the allocation-overflow fatal | subject + chunk length + separator | `x0` |
 | `__rt_bin2hex_len` | Allocation-free `strlen(bin2hex(...))`: returns `2 * source length` with the allocation-overflow fatal | source string | `x0` |

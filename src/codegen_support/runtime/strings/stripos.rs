@@ -17,7 +17,7 @@
 //!   so a 100-byte haystack costs one vectorized scan instead of one branchy comparison
 //!   per byte. Only real first-byte candidates enter the folded comparison loop.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_stripos` runtime helper for the active target.
@@ -124,24 +124,15 @@ fn emit_stripos_aarch64(e: &mut Emitter) {
     e.instruction("cmp x27, x23");                                              // does the full needle still fit here?
     e.instruction("b.gt __rt_stripos_notfound");                                // a candidate past the window cannot match
     e.instruction("mov x28, xzr");                                              // start the needle comparison at index zero
+    abi::emit_symbol_address(e, "x15", "_ascii_lower");                        // ASCII lowercase lookup table
     e.label("__rt_stripos_compare_loop");
     e.instruction("cmp x28, x22");                                              // has the whole needle matched?
     e.instruction("b.hs __rt_stripos_found");                                   // all needle bytes matched
     e.instruction("add x9, x27, x28");                                          // compute the haystack index of this needle byte
     e.instruction("ldrb w10, [x19, x9]");                                       // load the haystack byte
+    e.instruction("ldrb w10, [x15, x10]");                                      // fold it through the lowercase table
     e.instruction("ldrb w11, [x21, x28]");                                      // load the needle byte
-    e.instruction("cmp w10, #65");                                              // is the haystack byte at or above 'A'?
-    e.instruction("b.lt __rt_stripos_fold_hay_done");                           // bytes below 'A' are compared verbatim
-    e.instruction("cmp w10, #90");                                              // is the haystack byte at or below 'Z'?
-    e.instruction("b.gt __rt_stripos_fold_hay_done");                           // bytes above 'Z' are compared verbatim
-    e.instruction("add w10, w10, #32");                                         // fold the uppercase haystack byte to lowercase
-    e.label("__rt_stripos_fold_hay_done");
-    e.instruction("cmp w11, #65");                                              // is the needle byte at or above 'A'?
-    e.instruction("b.lt __rt_stripos_fold_needle_done");                        // bytes below 'A' are compared verbatim
-    e.instruction("cmp w11, #90");                                              // is the needle byte at or below 'Z'?
-    e.instruction("b.gt __rt_stripos_fold_needle_done");                        // bytes above 'Z' are compared verbatim
-    e.instruction("add w11, w11, #32");                                         // fold the uppercase needle byte to lowercase
-    e.label("__rt_stripos_fold_needle_done");
+    e.instruction("ldrb w11, [x15, x11]");                                      // fold it through the lowercase table
     e.instruction("cmp w10, w11");                                              // compare the folded haystack and needle bytes
     e.instruction("b.ne __rt_stripos_next");                                    // abandon this candidate on the first mismatch
     e.instruction("add x28, x28, #1");                                          // advance to the next needle byte
@@ -289,6 +280,7 @@ fn emit_stripos_linux_x86_64(e: &mut Emitter) {
     e.instruction("cmp r11, QWORD PTR [rbp - 40]");                             // does the full needle still fit here?
     e.instruction("jg __rt_stripos_notfound_linux_x86_64");                     // a candidate past the window cannot match
     e.instruction("mov QWORD PTR [rbp - 80], 0");                               // start the needle comparison at index zero
+    abi::emit_symbol_address(e, "rsi", "_ascii_lower");                        // ASCII lowercase lookup table
     e.label("__rt_stripos_compare_loop_linux_x86_64");
     e.instruction("mov r10, QWORD PTR [rbp - 80]");                             // reload the comparison index
     e.instruction("cmp r10, QWORD PTR [rbp - 32]");                             // has the whole needle matched?
@@ -297,21 +289,11 @@ fn emit_stripos_linux_x86_64(e: &mut Emitter) {
     e.instruction("add r8, r11");                                               // advance to the accepted candidate
     e.instruction("add r8, r10");                                               // index the current haystack byte
     e.instruction("movzx eax, BYTE PTR [r8]");                                  // load the haystack byte
+    e.instruction("movzx eax, BYTE PTR [rsi + rax]");                           // fold it through the lowercase table
     e.instruction("mov r9, QWORD PTR [rbp - 24]");                              // reload the needle pointer
     e.instruction("add r9, r10");                                               // index the current needle byte
     e.instruction("movzx edx, BYTE PTR [r9]");                                  // load the needle byte
-    e.instruction("cmp al, 65");                                                // is the haystack byte at or above 'A'?
-    e.instruction("jb __rt_stripos_fold_hay_done_linux_x86_64");                // bytes below 'A' are compared verbatim
-    e.instruction("cmp al, 90");                                                // is the haystack byte at or below 'Z'?
-    e.instruction("ja __rt_stripos_fold_hay_done_linux_x86_64");                // bytes above 'Z' are compared verbatim
-    e.instruction("add al, 32");                                                // fold the uppercase haystack byte to lowercase
-    e.label("__rt_stripos_fold_hay_done_linux_x86_64");
-    e.instruction("cmp dl, 65");                                                // is the needle byte at or above 'A'?
-    e.instruction("jb __rt_stripos_fold_needle_done_linux_x86_64");             // bytes below 'A' are compared verbatim
-    e.instruction("cmp dl, 90");                                                // is the needle byte at or below 'Z'?
-    e.instruction("ja __rt_stripos_fold_needle_done_linux_x86_64");             // bytes above 'Z' are compared verbatim
-    e.instruction("add dl, 32");                                                // fold the uppercase needle byte to lowercase
-    e.label("__rt_stripos_fold_needle_done_linux_x86_64");
+    e.instruction("movzx edx, BYTE PTR [rsi + rdx]");                           // fold it through the lowercase table
     e.instruction("cmp al, dl");                                                // compare the folded haystack and needle bytes
     e.instruction("jne __rt_stripos_next_linux_x86_64");                        // abandon this candidate on the first mismatch
     e.instruction("add QWORD PTR [rbp - 80], 1");                               // advance to the next needle byte
@@ -359,6 +341,7 @@ mod tests {
             emit_stripos(&mut emitter);
             let assembly = emitter.output();
             assert!(assembly.contains("memchr"), "{name}: {assembly}");
+            assert!(assembly.contains("_ascii_lower"), "{name}: {assembly}");
             assert!(!assembly.contains("__rt_stripos_outer"), "{name}: {assembly}");
         }
     }
