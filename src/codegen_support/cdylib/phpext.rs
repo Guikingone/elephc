@@ -218,8 +218,8 @@ fn emit_release_replacement_owners(emitter: &mut Emitter, base: usize, suffix: &
     emitter.label(&loop_label);
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
             abi::load_at_offset(emitter, "x10", base);
+            abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
             emitter.instruction("cmp x9, x10");                                // retire only pins acquired below this export boundary
             emitter.instruction(&format!("b.ls {done}"));
             emitter.instruction("sub x9, x9, #1");
@@ -231,8 +231,8 @@ fn emit_release_replacement_owners(emitter: &mut Emitter, base: usize, suffix: &
             emitter.instruction(&format!("b {loop_label}"));
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
             abi::load_at_offset(emitter, "r11", base);
+            abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
             emitter.instruction("cmp r10, r11");                               // retire only pins acquired below this export boundary
             emitter.instruction(&format!("jbe {done}"));
             emitter.instruction("sub r10, 1");

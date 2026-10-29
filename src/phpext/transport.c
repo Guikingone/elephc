@@ -17,6 +17,7 @@ typedef struct ep_host_predecessor {
     const uintptr_t *tail;
     uint64_t sequence;
     bool detach_pending;
+    bool discard_pending;
     zval exception;
 } ep_host_predecessor;
 

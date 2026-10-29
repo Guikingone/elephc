@@ -454,6 +454,26 @@ fn replacement_records_follow_live_native_chains() {
     try { echo $value['missing']; }
     finally { throw new RuntimeException('native', 0, new Exception('intrinsic')); }
 }
+#[Export] function php_rethrow_replacement_into_host_callback(array $value): void {
+    try { try { echo $value['first']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) {
+        try { throw $error; } finally { echo $value['second']; }
+    }
+}
+#[Export] function php_nested_sweep_inner(array $value): int {
+    for ($i = 0; $i < 2; $i++) {
+        try { try { echo $value['inner']; } finally { throw new RuntimeException('inner'); } }
+        catch (RuntimeException $error) {}
+    }
+    return 7;
+}
+#[Export] function php_nested_sweep_outer(array $value): void {
+    try { try { echo $value['outer']; } finally { throw new RuntimeException('outer'); } }
+    catch (RuntimeException $error) {
+        echo '[', php_nested_sweep_inner($value), ']';
+        throw $error;
+    }
+}
 "#, r#"
 $dump = function (Throwable $error): void {
     while ($error) {
@@ -474,6 +494,70 @@ catch (Throwable $error) { $dump($error); }
 $host = 0;
 try { php_replacement_with_intrinsic_previous([]); }
 catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_rethrow_replacement_into_host_callback([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_nested_sweep_outer([]); }
+catch (Throwable $error) { $dump($error); }
+"#);
+}
+
+/// The bounded live-pin failure reports the specific producer limit.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn live_replacement_pin_limit_is_descriptive() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("live_replacement_pin_limit", r#"<?php
+#[Export] function php_live_replacement_pin_limit(array $value): int {
+    $saved = new RuntimeException('native');
+    for ($i = 0; $i < 65; $i++) {
+        try { try { echo $value['missing']; } finally { throw $saved; } }
+        catch (RuntimeException $error) {}
+    }
+    return 1;
+}
+"#);
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+set_error_handler(function () { throw new DomainException('host'); });
+try { php_live_replacement_pin_limit([]); echo 'unexpected'; }
+catch (Error $error) { echo $error->getMessage(); }
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout,
+        b"PHP extension exception chain exceeds the maximum live replacement pin count (64)");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// Wide exports execute replacement-owner cleanup beyond AArch64's small frame offsets.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn wide_signature_replacement_cleanup_matches_php() {
+    compare(r#"<?php
+#[Export] function php_wide_replacement_cleanup(
+    int $v0, int $v1, int $v2, int $v3, int $v4,
+    int $v5, int $v6, int $v7, int $v8, int $v9,
+    int $v10, int $v11, int $v12, int $v13, int $v14,
+    int $v15, int $v16, int $v17, int $v18, int $v19,
+    int $v20, int $v21, int $v22, int $v23, array $value
+): void {
+    try { echo $value['missing']; }
+    finally { throw new RuntimeException('wide-' . ($v0 + $v23)); }
+}
+"#, r#"
+set_error_handler(function () { throw new DomainException('host'); });
+try {
+    php_wide_replacement_cleanup(
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+        12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, []
+    );
+} catch (Throwable $error) {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+}
 "#);
 }
 
@@ -698,6 +782,7 @@ function php_discard_replacement(array $value): int {
 }
 #[Export] function php_after_replacement_discard(array $value): mixed {
     php_discard_replacement($value);
+    echo 'after-discard|';
     return $value['second'];
 }
 "#, r#"
@@ -709,6 +794,10 @@ catch (Throwable $error) {
         $error->getPrevious() ? get_class($error->getPrevious()) : 'none';
 }
 $host = 0;
+class HostDiscardException extends Exception {
+    public function __destruct() { echo 'D(', $this->getMessage(), ')|'; }
+}
+set_error_handler(function () use (&$host) { throw new HostDiscardException('host' . ++$host); });
 try { php_after_replacement_discard([]); }
 catch (Throwable $error) {
     echo '|';

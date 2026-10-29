@@ -126,6 +126,7 @@ static const char *ep_infrastructure_error(uintptr_t status)
         case 1: return "PHP extension result exceeds the maximum nesting depth (64)";
         case 3: return "elephc heap allocation failed";
         case 4: return "elephc native runtime failed";
+        case 6: return "PHP extension exception chain exceeds the maximum live replacement pin count (64)";
         default: return NULL;
     }
 }
@@ -178,6 +179,7 @@ const uintptr_t *elephc_php_stale_finally_replacement(
             predecessor->tail = NULL;
             predecessor->sequence = 0;
             predecessor->detach_pending = false;
+            predecessor->discard_pending = false;
         }
         return root;
     }
@@ -195,6 +197,34 @@ static void ep_clear_discarded_host_exception(ep_call *call)
     call->previous_exceptions = NULL;
     call->previous_exceptions_tail = NULL;
     call->previous_exception_anchor = NULL;
+}
+
+/* Destroy discarded replacement predecessors at the first safe Zend boundary. */
+static void ep_clear_discarded_host_predecessors(ep_call *call)
+{
+    if (ep_is_host_exit()) { return; }
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *predecessor = &call->host_predecessors[i];
+        if (!predecessor->discard_pending) { continue; }
+        bool active = call->active_host_predecessor == predecessor;
+        zval stored = predecessor->exception;
+        ZVAL_UNDEF(&predecessor->exception);
+        predecessor->root = NULL;
+        predecessor->tail = NULL;
+        predecessor->sequence = 0;
+        predecessor->detach_pending = false;
+        predecessor->discard_pending = false;
+        if (active) {
+            call->active_host_predecessor = NULL;
+            if (call->host_exception && EG(exception)) { zend_clear_exception(); }
+            call->host_exception = false;
+            call->discarded_host_exception = false;
+            call->previous_exceptions = NULL;
+            call->previous_exceptions_tail = NULL;
+            call->previous_exception_anchor = NULL;
+        }
+        if (!Z_ISUNDEF(stored)) { zval_ptr_dtor(&stored); }
+    }
 }
 
 /* Move a caught replacement's host predecessor out of EG(exception) at a safe Zend boundary. */
@@ -248,6 +278,7 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     ep_current = NULL;
     pthread_mutex_unlock(&ep_native_lock);
     zend_try {
+        ep_clear_discarded_host_predecessors(call);
         ep_clear_discarded_host_exception(call);
         ep_detach_host_predecessor(call, false);
     } zend_catch {
@@ -306,16 +337,18 @@ void elephc_php_result(const zval *value)
     }
 }
 
-/* Native code flags either the null host marker or a discarded replacement chain node. */
+/* Native code flags either the null host marker or every discarded replacement chain node. */
 void elephc_php_discard_exception(const uintptr_t *object)
 {
     ep_call *call = ep_current;
-    if (!call || !call->host_exception || call->host_bailout) { return; }
+    if (!call || call->host_bailout) { return; }
     if (!object) {
-        call->discarded_host_exception = true;
-    } else if (call->active_host_predecessor
-        && call->active_host_predecessor->root == object) {
-        call->active_host_predecessor->detach_pending = true;
+        if (call->host_exception) { call->discarded_host_exception = true; }
+        return;
+    }
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *predecessor = &call->host_predecessors[i];
+        if (predecessor->root == object) { predecessor->discard_pending = true; }
     }
 }
 
@@ -336,7 +369,7 @@ void elephc_php_finally_replacement(const uintptr_t *object, const uintptr_t *ta
     }
     if (!predecessor) {
         if (call->host_predecessor_count >= EP_HOST_PREDECESSOR_LIMIT) {
-            call->error = "PHP extension exception chain exceeds the maximum live replacement count (64)";
+            call->error = "PHP extension exception chain exceeds the maximum live replacement pin count (64)";
             return;
         }
         predecessor = &call->host_predecessors[call->host_predecessor_count++];
@@ -345,6 +378,7 @@ void elephc_php_finally_replacement(const uintptr_t *object, const uintptr_t *ta
     predecessor->tail = tail ? tail : object;
     predecessor->sequence = ++call->host_predecessor_sequence;
     predecessor->detach_pending = false;
+    predecessor->discard_pending = false;
     ZVAL_UNDEF(&predecessor->exception);
     call->active_host_predecessor = predecessor;
 }
@@ -419,7 +453,7 @@ void elephc_php_previous_exception(const uintptr_t *object)
         &copy->message, &copy->message_len, &copy->code)) {
         return;
     }
-    copy->host_predecessor_key = NULL;
+    copy->host_predecessor_key = object;
     copy->anchor = call->previous_exception_anchor;
     if (call->previous_exceptions_tail) {
         call->previous_exceptions_tail->next = copy;
@@ -631,6 +665,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     /* The call allocation is on the heap: setjmp cannot invalidate its cleanup fields. */
     zend_try {
         if (call->host_bailout) { zend_bailout(); }
+        ep_clear_discarded_host_predecessors(call);
         ep_clear_discarded_host_exception(call);
         ep_detach_host_predecessor(call, false);
         bool host_exit = ep_is_host_exit();

@@ -12,7 +12,7 @@ use crate::codegen_support::{
     abi,
     cdylib::{
         BOUNDARY_STATUS, PHPEXT_REPLACEMENT_OWNER_BASE, PHPEXT_REPLACEMENT_OWNER_COUNT,
-        PHPEXT_REPLACEMENT_OWNER_LIMIT, PHPEXT_REPLACEMENT_OWNERS,
+        PHPEXT_REPLACEMENT_OWNER_LIMIT, PHPEXT_REPLACEMENT_OWNERS, STATUS_REPLACEMENT_LIMIT,
     },
     emit::Emitter,
     platform::Arch,
@@ -62,7 +62,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
         emitter.bl_c("elephc_php_finally_replacement");
         emitter.instruction("b __rt_exception_chain_return");                  // the null host marker owns no native reference
         emitter.label("__rt_exception_chain_replacement_overflow");
-        emitter.instruction("mov x9, #4");                                     // fail closed instead of retaining an untracked raw identity
+        emitter.instruction(&format!("mov x9, #{STATUS_REPLACEMENT_LIMIT}"));  // expose the bounded replacement-pin failure precisely
         abi::emit_store_reg_to_symbol(emitter, "x9", BOUNDARY_STATUS, 0);
         emitter.instruction("b __rt_exception_chain_return");
         emitter.label("__rt_exception_chain_has_pending");
@@ -170,7 +170,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
         emitter.bl_c("elephc_php_finally_replacement");
         emitter.instruction("jmp __rt_exception_chain_return");                // the null host marker owns no native reference
         emitter.label("__rt_exception_chain_replacement_overflow");
-        emitter.instruction("mov r10, 4");                                     // fail closed instead of tracking a reusable raw pointer
+        emitter.instruction(&format!("mov r10, {STATUS_REPLACEMENT_LIMIT}"));  // expose the bounded replacement-pin failure precisely
         abi::emit_store_reg_to_symbol(emitter, "r10", BOUNDARY_STATUS, 0);
         emitter.instruction("jmp __rt_exception_chain_return");
         emitter.label("__rt_exception_chain_has_pending");
@@ -252,8 +252,8 @@ fn emit_aarch64_replacement_sweep(emitter: &mut Emitter) {
     emitter.bl_c("elephc_php_stale_finally_replacement");
     emitter.instruction("cbz x0, __rt_exception_chain_replacement_swept");
     emitter.instruction("str x0, [sp, #16]");                                  // keep the stale root across compaction and releases
-    abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
     abi::emit_load_symbol_to_reg(emitter, "x10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
     abi::emit_extern_symbol_address(emitter, "x11", PHPEXT_REPLACEMENT_OWNERS);
     emitter.instruction("mov x12, x9");                                        // read cursor starts at this export's first owner
     emitter.instruction("mov x13, x9");                                        // write cursor compacts retained owners in place
@@ -386,11 +386,32 @@ mod tests {
             let tail_walk = asm[swept..].find("__rt_throwable_previous").unwrap() + swept;
             let recovered_root = &asm[swept..tail_walk];
             match arch {
-                Arch::AArch64 => assert!(recovered_root.contains("ldr x0, [sp]"), "{name}: {asm}"),
-                Arch::X86_64 => assert!(
-                    recovered_root.contains("mov rax, QWORD PTR [rbp - 8]"),
-                    "{name}: {asm}"
-                ),
+                Arch::AArch64 => {
+                    assert!(recovered_root.contains("ldr x0, [sp]"), "{name}: {asm}");
+                    let sweep_callback_return = asm
+                        .find("cbz x0, __rt_exception_chain_replacement_swept")
+                        .unwrap();
+                    let compact = asm
+                        .find("__rt_exception_chain_replacement_compact:")
+                        .unwrap();
+                    let sweep_setup = &asm[sweep_callback_return..compact];
+                    let count = sweep_setup
+                        .find(PHPEXT_REPLACEMENT_OWNER_COUNT)
+                        .unwrap();
+                    let base = sweep_setup.find(PHPEXT_REPLACEMENT_OWNER_BASE).unwrap();
+                    assert!(count < base, "{name}: {asm}");
+                    assert!(asm.contains(&format!("mov x9, #{STATUS_REPLACEMENT_LIMIT}")));
+                }
+                Arch::X86_64 => {
+                    assert!(
+                        recovered_root.contains("mov rax, QWORD PTR [rbp - 8]"),
+                        "{name}: {asm}"
+                    );
+                    assert!(
+                        asm.contains(&format!("mov r10, {STATUS_REPLACEMENT_LIMIT}")),
+                        "{name}: {asm}"
+                    );
+                }
             }
             assert!(asm.find("__rt_incref").unwrap() < asm.find(&replacement).unwrap(),
                 "{name}: {asm}");

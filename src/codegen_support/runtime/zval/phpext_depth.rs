@@ -18,6 +18,7 @@ pub(super) fn emit_guard(emitter: &mut Emitter) {
     let invalid = "L_phpext_pack_invalid_result";
     let full = "L_phpext_pack_depth_exceeded";
     let counted = "L_phpext_pack_array_depth";
+    let implementation = "L_phpext_pack_element_impl";
     let scratch = abi::secondary_scratch_reg(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -26,7 +27,7 @@ pub(super) fn emit_guard(emitter: &mut Emitter) {
             emitter.instruction("cmp x0, #4");                                  // indexed arrays consume one logical nesting level
             emitter.instruction(&format!("b.eq {counted}"));                    // count the indexed container before descending into its elements
             emitter.instruction("cmp x0, #5");                                  // hashes consume the same single logical nesting level
-            emitter.instruction("b.ne __rt_zval_pack_element_impl");            // scalars and nested Mixed wrappers do not increase array depth
+            emitter.instruction(&format!("b.ne {implementation}"));             // scalars and nested Mixed wrappers do not increase array depth
         }
         Arch::X86_64 => {
             emitter.instruction("cmp rax, 8");                                  // admit known PHP value tags through null before pointer normalization
@@ -34,7 +35,7 @@ pub(super) fn emit_guard(emitter: &mut Emitter) {
             emitter.instruction("cmp rax, 4");                                  // indexed arrays consume one logical nesting level
             emitter.instruction(&format!("je {counted}"));                      // count the indexed container before descending into its elements
             emitter.instruction("cmp rax, 5");                                  // hashes consume the same single logical nesting level
-            emitter.instruction("jne __rt_zval_pack_element_impl");             // scalars and nested Mixed wrappers do not increase array depth
+            emitter.instruction(&format!("jne {implementation}"));              // scalars and nested Mixed wrappers do not increase array depth
         }
     }
     emitter.label(counted);
@@ -74,6 +75,7 @@ pub(super) fn emit_guard(emitter: &mut Emitter) {
         crate::codegen_support::cdylib::STATUS_RUNTIME_FAILURE as i64);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_jump(emitter, "__rt_throw_current");
+    emitter.label(implementation);
     emitter.label_global("__rt_zval_pack_element_impl");
 }
 
@@ -107,9 +109,11 @@ mod tests {
                 assert!(asm.find(branch).unwrap() < implementation, "{target:?}");
                 assert!(implementation < asm.find(normalized).unwrap(), "{target:?}");
                 assert!(asm[..implementation].contains("__rt_throw_current"), "{target:?}");
-                let skip = if target.arch == Arch::X86_64 { "jne __rt_zval_pack_element_impl" }
-                    else { "b.ne __rt_zval_pack_element_impl" };
+                let skip = if target.arch == Arch::X86_64 { "jne L_phpext_pack_element_impl" }
+                    else { "b.ne L_phpext_pack_element_impl" };
                 assert!(asm.find(skip).unwrap() < implementation, "{target:?}");
+                assert!(asm.find("L_phpext_pack_element_impl:").unwrap() < implementation,
+                    "{target:?}");
                 assert!(asm[..implementation].contains("elephc_php_unsupported_result"), "{target:?}");
             }
         }

@@ -150,13 +150,17 @@ if it rethrows the replacement directly or through a native `previous` chain, th
 host exception remains the tail of that chain. While the native catch body is
 running, however, its caught Throwable cannot expose the host object through
 `getPrevious()`: host objects are not imported into the native object heap. The
-chain is restored when it crosses back into Zend.
+chain is restored when it crosses back into Zend. A caught replacement keeps its
+host predecessor alive until the runtime can prove whether it is rethrown. An
+explicit `return` or other finally exit that discards the chain retires that host
+predecessor at the next safe Zend boundary before later output callbacks.
 
 One active synchronous export stack can retain at most 64 simultaneously live
-native replacement roots while preserving displaced host exceptions. Settled
-or discarded roots are reclaimed and do not consume the limit. Exceeding the
-live limit fails the invocation with an `Error` instead of retaining an
-untracked native pointer.
+native replacement pins while preserving displaced host exceptions. Each
+replacement event consumes one pin, including repeated throws of the same native
+object. Settled or discarded events are reclaimed and no longer consume the
+limit. Exceeding it fails the invocation with an `Error` that names the live-pin
+limit instead of retaining an untracked native pointer.
 
 Synchronous reentry on the same host Fiber is supported. If an error handler
 suspends a Fiber while native frames remain active, another Fiber or the main

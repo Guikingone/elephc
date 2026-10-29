@@ -32,6 +32,7 @@ pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
 pub(crate) const STATUS_PHP_EXCEPTION: i32 = 2;
 pub(crate) const STATUS_ALLOCATION_FAILURE: i32 = 3;
 pub(crate) const STATUS_RUNTIME_FAILURE: i32 = 4;
+pub(crate) const STATUS_REPLACEMENT_LIMIT: i32 = 6;
 
 pub(crate) const BOUNDARY_ACTIVE: &str = "_elephc_boundary_active";
 pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
@@ -364,6 +365,27 @@ mod tests {
         }
     }
 
+    /// Wide AArch64 exports load the frame base before the global count reuses x9.
+    #[test]
+    fn phpext_wide_aarch64_thunks_preserve_replacement_release_count() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = wide_integer_export();
+            emit_phpext_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            let asm = emitter.output();
+            let release = asm.find("L_wide_release_replacement_owner:").unwrap();
+            let compare = asm[release..].find("cmp x9, x10").unwrap() + release;
+            let setup = &asm[release..compare];
+            let base = setup.find("sub x9, x29, #256").unwrap();
+            let count = setup.find(PHPEXT_REPLACEMENT_OWNER_COUNT).unwrap();
+            assert!(base < count, "{target:?}: {asm}");
+        }
+    }
+
     /// Nested entries read their linked runtime's actual arena bound on every library target.
     #[test]
     fn nested_boundary_reads_linked_concat_capacity_on_all_targets() {
@@ -408,6 +430,35 @@ mod tests {
         ExportedFunction {
             name: "roundtrip".to_string(),
             c_name: "roundtrip".to_string(),
+            source_sig: source_sig.clone(),
+            internal_sig: source_sig,
+            span: Span::dummy(),
+            php_void_return: false,
+        }
+    }
+
+    /// Builds an export whose replacement-owner base lies beyond AArch64's unscaled range.
+    fn wide_integer_export() -> ExportedFunction {
+        let params = (0..25)
+            .map(|index| (format!("value{index}"), PhpType::Int))
+            .collect::<Vec<_>>();
+        let source_sig = FunctionSig {
+            params,
+            param_type_exprs: vec![None; 25],
+            param_attributes: vec![Vec::new(); 25],
+            defaults: vec![None; 25],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; 25],
+            declared_params: vec![true; 25],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        };
+        ExportedFunction {
+            name: "wide".to_string(),
+            c_name: "wide".to_string(),
             source_sig: source_sig.clone(),
             internal_sig: source_sig,
             span: Span::dummy(),
