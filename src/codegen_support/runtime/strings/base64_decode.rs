@@ -78,6 +78,47 @@ pub fn emit_base64_decode(emitter: &mut Emitter) {
     emitter.instruction("mov x16, #0");                                         // accumulated sextets not yet written as bytes
     emitter.instruction("mov x17, #0");                                         // number of pending bits in the accumulator
     abi::emit_symbol_address(emitter, "x15", "_b64_decode_tbl");
+    emitter.instruction("b __rt_b64dec_fast");                                  // start with the four-character fast path
+
+    // -- four-character fast path: all four bytes must be alphabet sextets --
+    emitter.label("__rt_b64dec_fast");
+    emitter.instruction("cmp x2, #4");                                          // is a full quartet available?
+    emitter.instruction("b.lt __rt_b64dec_loop");                               // the tail keeps the one-character state machine
+    emitter.instruction("ldrb w4, [x1]");                                       // load the first encoded byte
+    emitter.instruction("ldrb w4, [x15, x4]");                                  // classify the first byte
+    emitter.instruction("cmp w4, #64");                                         // is it a Base64 sextet?
+    emitter.instruction("b.hs __rt_b64dec_loop");                               // padding, whitespace or invalid input falls back
+    emitter.instruction("ldrb w5, [x1, #1]");                                   // load the second encoded byte
+    emitter.instruction("ldrb w5, [x15, x5]");                                  // classify the second byte
+    emitter.instruction("cmp w5, #64");                                         // is it a Base64 sextet?
+    emitter.instruction("b.hs __rt_b64dec_loop");                               // fall back on any non-sextet
+    emitter.instruction("ldrb w6, [x1, #2]");                                   // load the third encoded byte
+    emitter.instruction("ldrb w6, [x15, x6]");                                  // classify the third byte
+    emitter.instruction("cmp w6, #64");                                         // is it a Base64 sextet?
+    emitter.instruction("b.hs __rt_b64dec_loop");                               // fall back on any non-sextet
+    emitter.instruction("ldrb w7, [x1, #3]");                                   // load the fourth encoded byte
+    emitter.instruction("ldrb w7, [x15, x7]");                                  // classify the fourth byte
+    emitter.instruction("cmp w7, #64");                                         // is it a Base64 sextet?
+    emitter.instruction("b.hs __rt_b64dec_loop");                               // fall back on any non-sextet
+
+    // -- decode the four sextets into three bytes --
+    emitter.instruction("lsl w8, w4, #2");                                      // first byte = top six bits of sextet 0
+    emitter.instruction("lsr w0, w5, #4");                                      // plus the top two bits of sextet 1
+    emitter.instruction("orr w8, w8, w0");                                      // assemble the first decoded byte
+    emitter.instruction("strb w8, [x9, x10]");                                  // write the first decoded byte
+    emitter.instruction("add x14, x9, x10");                                    // address the second decoded byte
+    emitter.instruction("lsl w8, w5, #4");                                      // second byte = low four bits of sextet 1
+    emitter.instruction("lsr w0, w6, #2");                                      // plus the top four bits of sextet 2
+    emitter.instruction("orr w8, w8, w0");                                      // assemble the second decoded byte
+    emitter.instruction("strb w8, [x14, #1]");                                  // write the second decoded byte
+    emitter.instruction("lsl w8, w6, #6");                                      // third byte = low two bits of sextet 2
+    emitter.instruction("orr w8, w8, w7");                                      // plus all six bits of sextet 3
+    emitter.instruction("strb w8, [x14, #2]");                                  // write the third decoded byte
+    emitter.instruction("add x1, x1, #4");                                      // consume the four encoded bytes
+    emitter.instruction("sub x2, x2, #4");                                      // account for the consumed quartet
+    emitter.instruction("add x10, x10, #3");                                    // account for the three decoded bytes
+    emitter.instruction("add x11, x11, #4");                                    // four accepted characters are now accounted for
+    emitter.instruction("b __rt_b64dec_fast");                                  // process the next complete quartet
 
     // -- one character per iteration: skipped bytes must not rotate the quartet lane --
     emitter.label("__rt_b64dec_loop");
@@ -173,6 +214,8 @@ fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: base64_decode ---");
     emitter.label_global("__rt_base64_decode");
 
+    emitter.instruction("push r14");                                            // preserve the fast-path sextet registers
+    emitter.instruction("push r15");                                            // preserve the second fast-path sextet register
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed encoded string
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the input, the strict flag, and the padding tally
@@ -189,6 +232,49 @@ fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r10d, r10d");                                      // j: index of the decoded byte currently being assembled
     emitter.instruction("xor r11d, r11d");                                      // i: count of ACCEPTED characters, the `i % 4` quartet lane
     abi::emit_symbol_address(emitter, "r8", "_b64_decode_tbl");                 // hold the php-src reverse-lookup table for the whole decode loop
+    emitter.instruction("jmp __rt_b64dec_fast_x86");                            // start with the four-character fast path
+
+    // -- four-character fast path: all four bytes must be alphabet sextets --
+    emitter.label("__rt_b64dec_fast_x86");
+    emitter.instruction("cmp rcx, 4");                                          // is a full quartet available?
+    emitter.instruction("jb __rt_b64dec_loop_x86");                             // the tail keeps the one-character state machine
+    emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // load the first encoded byte
+    emitter.instruction("movzx eax, BYTE PTR [r8 + rax]");                      // classify the first byte
+    emitter.instruction("cmp eax, 64");                                         // is it a Base64 sextet?
+    emitter.instruction("jae __rt_b64dec_loop_x86");                            // padding, whitespace or invalid input falls back
+    emitter.instruction("movzx edx, BYTE PTR [rsi + 1]");                       // load the second encoded byte
+    emitter.instruction("movzx edx, BYTE PTR [r8 + rdx]");                      // classify the second byte
+    emitter.instruction("cmp edx, 64");                                         // is it a Base64 sextet?
+    emitter.instruction("jae __rt_b64dec_loop_x86");                            // fall back on any non-sextet
+    emitter.instruction("movzx r14d, BYTE PTR [rsi + 2]");                      // load the third encoded byte
+    emitter.instruction("movzx r14d, BYTE PTR [r8 + r14]");                     // classify the third byte
+    emitter.instruction("cmp r14d, 64");                                        // is it a Base64 sextet?
+    emitter.instruction("jae __rt_b64dec_loop_x86");                            // fall back on any non-sextet
+    emitter.instruction("movzx r15d, BYTE PTR [rsi + 3]");                      // load the fourth encoded byte
+    emitter.instruction("movzx r15d, BYTE PTR [r8 + r15]");                     // classify the fourth byte
+    emitter.instruction("cmp r15d, 64");                                        // is it a Base64 sextet?
+    emitter.instruction("jae __rt_b64dec_loop_x86");                            // fall back on any non-sextet
+
+    // -- decode the four sextets into three bytes --
+    emitter.instruction("shl eax, 2");                                          // first byte = top six bits of sextet 0
+    emitter.instruction("mov r8d, edx");                                        // copy sextet 1 before extracting its high bits
+    emitter.instruction("shr r8d, 4");                                          // plus the top two bits of sextet 1
+    emitter.instruction("or eax, r8d");                                         // assemble the first decoded byte
+    emitter.instruction("mov BYTE PTR [r9 + r10], al");                         // write the first decoded byte
+    emitter.instruction("shl edx, 4");                                          // second byte = low four bits of sextet 1
+    emitter.instruction("mov r8d, r14d");                                       // copy sextet 2 before extracting its high bits
+    emitter.instruction("shr r8d, 2");                                          // plus the top four bits of sextet 2
+    emitter.instruction("or edx, r8d");                                         // assemble the second decoded byte
+    emitter.instruction("mov BYTE PTR [r9 + r10 + 1], dl");                     // write the second decoded byte
+    emitter.instruction("shl r14d, 6");                                         // third byte = low two bits of sextet 2
+    emitter.instruction("or r14d, r15d");                                       // plus all six bits of sextet 3
+    emitter.instruction("mov BYTE PTR [r9 + r10 + 2], r14b");                   // write the third decoded byte
+    emitter.instruction("add rsi, 4");                                          // consume the four encoded bytes
+    emitter.instruction("sub rcx, 4");                                          // account for the consumed quartet
+    emitter.instruction("add r10, 3");                                          // account for the three decoded bytes
+    emitter.instruction("add r11, 4");                                          // four accepted characters are now accounted for
+    abi::emit_symbol_address(emitter, "r8", "_b64_decode_tbl");                 // restore the reverse table for the next quartet
+    emitter.instruction("jmp __rt_b64dec_fast_x86");                            // process the next complete quartet
 
     emitter.label("__rt_b64dec_loop_x86");
     emitter.instruction("test rcx, rcx");                                       // stop once every encoded byte has been classified
@@ -283,6 +369,8 @@ fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, 1");                                           // report a successful decode to the caller
     emitter.instruction("add rsp, 64");                                         // release the base64 decoder spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r15");                                             // restore the second fast-path sextet register
+    emitter.instruction("pop r14");                                             // restore the first fast-path sextet register
     emitter.instruction("ret");                                                 // return the decoded string pair
 
     emitter.label("__rt_b64dec_fail_x86");
@@ -293,5 +381,28 @@ fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r8d, r8d");                                        // report the strict-mode rejection to the caller
     emitter.instruction("add rsp, 64");                                         // release the base64 decoder spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r15");                                             // restore the second fast-path sextet register
+    emitter.instruction("pop r14");                                             // restore the first fast-path sextet register
     emitter.instruction("ret");                                                 // return PHP's `false` decode result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets keep the four-character decode fast path.
+    #[test]
+    fn base64_decode_emits_the_quartet_fast_path_on_all_targets() {
+        for (name, label) in [
+            ("macos-aarch64", "__rt_b64dec_fast"),
+            ("linux-x86_64", "__rt_b64dec_fast_x86"),
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_base64_decode(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains(label), "{name}: {assembly}");
+        }
+    }
 }
