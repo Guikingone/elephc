@@ -464,6 +464,49 @@ function concat_warning(array $items): string {
     );
 }
 
+/// A warning-capable comparison RHS persists an earlier scratch-backed string cast.
+#[test]
+fn comparison_transient_string_is_persisted_before_warning_rhs() {
+    use crate::ir::{Effects, Op, ValueDef};
+    let module = super::lower_source(
+        r#"<?php
+function compare_warning(array $items, int $prefix, string $fill): bool {
+    return (string)(strlen($fill . $fill) + $prefix) === (string)$items["missing"] . "536625";
+}
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "compare_warning")
+        .expect("expected compare_warning EIR function");
+    let (block, persist) = function
+        .blocks
+        .iter()
+        .find_map(|block| {
+            block.instructions.iter().enumerate().find_map(|(position, id)| {
+                let inst = function.instruction(*id)?;
+                let source = inst.operands.first().and_then(|value| {
+                    function.value(*value).and_then(|value| match value.def {
+                        ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                        _ => None,
+                    })
+                });
+                (inst.op == Op::StrPersist && source.is_some_and(|source| source.op == Op::Cast))
+                    .then_some((block, position))
+            })
+        })
+        .expect("expected the comparison's string cast to be persisted");
+    assert!(
+        block.instructions[persist + 1..].iter().any(|id| {
+            function
+                .instruction(*id)
+                .is_some_and(|inst| inst.effects.contains(Effects::MAY_WARN))
+        }),
+        "the persisted comparison operand must precede the warning-capable RHS"
+    );
+}
+
 /// A nested index call sees the persisted byte receiver published until the outer read completes.
 #[test]
 fn string_offset_nested_index_owner_on_all_targets() {

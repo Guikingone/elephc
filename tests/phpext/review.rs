@@ -373,6 +373,58 @@ foreach (['php_absorb_replacement', 'php_rethrow_replacement', 'php_wrap_replace
 "#);
 }
 
+/// Replacement identity is runtime-proven, one-shot, retained, and spliced at its original tail.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn host_replacement_tracking_uses_exact_runtime_chain_points() {
+    compare(r#"<?php
+#[Export] function php_catch_inside_finally(array $value): void {
+    try { echo $value['missing']; }
+    finally {
+        try { throw new RuntimeException('inner'); }
+        catch (RuntimeException $error) {}
+    }
+}
+#[Export] function php_absorb_then_host(array $value): mixed {
+    try { try { echo $value['first']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) {}
+    return $value['second'];
+}
+function php_absorb_for_reuse(array $value): void {
+    try { try { echo $value['missing']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) {}
+}
+#[Export] function php_throw_after_absorb(array $value): void {
+    php_absorb_for_reuse($value);
+    throw new RuntimeException('later');
+}
+#[Export] function php_splice_replacement_tail(array $value): void {
+    try { try { echo $value['missing']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) { $saved = $error; }
+    try { throw new TypeError('pending'); }
+    finally { throw new Exception('outer', 0, $saved); }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+set_error_handler(function ($level, $message) { throw new DomainException('host'); });
+foreach ([
+    'php_catch_inside_finally',
+    'php_absorb_then_host',
+    'php_throw_after_absorb',
+    'php_splice_replacement_tail',
+] as $function) {
+    try { $function([]); }
+    catch (Throwable $error) { $dump($error); }
+}
+"#);
+}
+
 /// A host callback exception in finally adopts the older native exception as previous.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
@@ -853,6 +905,34 @@ $fill = str_repeat('x', 262140);
 var_dump(php_cast_int_spill([], 12345, $fill));
 $nested = 'php_wrap_float_spills';
 var_dump(php_cast_float_spill([], 12345.5, $fill));
+"#,
+        &["--heap-size=524288"],
+    );
+}
+
+/// Comparison operands survive a warning handler that wraps the integer scratch ring.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn nested_reentry_preserves_comparison_spill_views() {
+    compare_with_options(
+        r#"<?php
+#[Export] function php_compare_int_spill(array $value, int $prefix, string $fill): bool {
+    return (string)(strlen($fill . $fill) + $prefix) ===
+        (string)$value['missing'] . '536625';
+}
+#[Export] function php_wrap_comparison_spills(): string {
+    $result = '';
+    for ($i = 0; $i < 8; $i++) { $result = (string)$i; }
+    return $result;
+}
+"#,
+        r#"
+set_error_handler(function () {
+    php_wrap_comparison_spills();
+    return true;
+});
+$fill = str_repeat('x', 262140);
+var_dump(php_compare_int_spill([], 12345, $fill));
 "#,
         &["--heap-size=524288"],
     );

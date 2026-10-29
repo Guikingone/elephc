@@ -4,11 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define EP_HOST_PREDECESSOR_LIMIT 64
+
 typedef struct ep_allocation {
     struct ep_allocation *next;
     max_align_t alignment;
     unsigned char bytes[];
 } ep_allocation;
+
+typedef struct ep_host_predecessor {
+    const uintptr_t *root;
+    const uintptr_t *tail;
+    bool detach_pending;
+    zval exception;
+} ep_host_predecessor;
 
 typedef struct ep_exception_copy {
     struct ep_exception_copy *next;
@@ -19,7 +28,7 @@ typedef struct ep_exception_copy {
     size_t message_len;
     zend_long code;
     zend_object *anchor;
-    bool caught_host_replacement;
+    ep_host_predecessor *host_predecessor_after;
 } ep_exception_copy;
 
 typedef struct ep_call {
@@ -38,7 +47,10 @@ typedef struct ep_call {
     ep_exception_copy *previous_exceptions;
     ep_exception_copy *previous_exceptions_tail;
     zend_object *previous_exception_anchor;
-    const uintptr_t *caught_host_replacement;
+    ep_host_predecessor host_predecessors[EP_HOST_PREDECESSOR_LIMIT];
+    size_t host_predecessor_count;
+    ep_host_predecessor *active_host_predecessor;
+    ep_host_predecessor *exception_host_predecessor_after;
     char *output;
     size_t output_len;
     size_t output_capacity;
@@ -49,11 +61,9 @@ typedef struct ep_call {
     bool host_exception;
     bool host_bailout;
     bool discarded_host_exception;
-    bool exception_contains_caught_host_replacement;
     zend_string *warning;
     char *parked_warning_buffer;
     zval pending_exception;
-    zval caught_host_exception;
     const HashTable *ancestors[64];
 } ep_call;
 
@@ -102,10 +112,18 @@ static void ep_call_free_storage(ep_call *call)
 static void ep_call_destroy(ep_call *call)
 {
     zval pending = call->pending_exception;
-    zval caught_host = call->caught_host_exception;
+    zval host_predecessors[EP_HOST_PREDECESSOR_LIMIT];
+    size_t host_predecessor_count = 0;
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        if (!Z_ISUNDEF(call->host_predecessors[i].exception)) {
+            host_predecessors[host_predecessor_count++] = call->host_predecessors[i].exception;
+        }
+    }
     ep_call_free_storage(call);
     if (!Z_ISUNDEF(pending)) { zval_ptr_dtor(&pending); }
-    if (!Z_ISUNDEF(caught_host)) { zval_ptr_dtor(&caught_host); }
+    for (size_t i = 0; i < host_predecessor_count; i++) {
+        zval_ptr_dtor(&host_predecessors[i]);
+    }
 }
 
 /* Fatal request termination can skip Fiber destructors, leaving parked calls in this chain. */

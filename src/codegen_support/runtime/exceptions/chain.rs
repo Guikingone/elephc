@@ -8,7 +8,15 @@
 //! - The new exception is borrowed and rooted by the caller; the old exception owner is consumed.
 //! - Both chains are traversed through the concrete-layout previous reader.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    abi,
+    cdylib::{
+        BOUNDARY_STATUS, PHPEXT_REPLACEMENT_OWNER_COUNT, PHPEXT_REPLACEMENT_OWNER_LIMIT,
+        PHPEXT_REPLACEMENT_OWNERS,
+    },
+    emit::Emitter,
+    platform::Arch,
+};
 
 /// Emits exception chaining with raw-object and boxed-property ownership on every target.
 pub fn emit_exception_chain(emitter: &mut Emitter) {
@@ -27,7 +35,38 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame
     emitter.instruction("str x0, [sp]");                                        // start at the new exception whose caller roots the chain
     emitter.instruction("str x1, [sp, #8]");                                    // own the old exception until a link adopts it or it is released
-    emitter.instruction("cbz x1, __rt_exception_chain_return");                 // there is no previous owner to attach
+    if emitter.phpext_output {
+        emitter.instruction("cbnz x1, __rt_exception_chain_has_pending");       // ordinary native pending owners use the normal chain path
+        emitter.instruction("cbz x0, __rt_exception_chain_return");             // only a native replacement can own a displaced host escape
+        abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        emitter.instruction(&format!("cmp x9, #{}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound pins by the adapter's exception nesting contract
+        emitter.instruction("b.hs __rt_exception_chain_replacement_overflow");
+        emitter.instruction("str x0, [sp, #40]");                               // seed the replacement's intrinsic previous-chain tail
+        emitter.label("__rt_exception_chain_replacement_tail");
+        emitter.instruction("bl __rt_throwable_previous");                     // borrow the next constructor/finally predecessor
+        emitter.instruction("cbz x0, __rt_exception_chain_replacement_ready");
+        emitter.instruction("str x0, [sp, #40]");                               // remember the exact point before later outer chains append
+        emitter.instruction("b __rt_exception_chain_replacement_tail");
+        emitter.label("__rt_exception_chain_replacement_ready");
+        emitter.instruction("ldr x0, [sp]");                                    // retain the replacement identity through boundary copying
+        emitter.instruction("bl __rt_incref");
+        abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        abi::emit_extern_symbol_address(emitter, "x10", PHPEXT_REPLACEMENT_OWNERS);
+        emitter.instruction("str x0, [x10, x9, lsl #3]");                      // publish the retained owner before exposing its identity
+        emitter.instruction("add x9, x9, #1");
+        abi::emit_store_reg_to_symbol(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        emitter.instruction("ldr x0, [sp]");                                    // C receives the replacement root and its original chain tail
+        emitter.instruction("ldr x1, [sp, #40]");
+        emitter.bl_c("elephc_php_finally_replacement");
+        emitter.instruction("b __rt_exception_chain_return");                  // the null host marker owns no native reference
+        emitter.label("__rt_exception_chain_replacement_overflow");
+        emitter.instruction("mov x9, #4");                                     // fail closed instead of retaining an untracked raw identity
+        abi::emit_store_reg_to_symbol(emitter, "x9", BOUNDARY_STATUS, 0);
+        emitter.instruction("b __rt_exception_chain_return");
+        emitter.label("__rt_exception_chain_has_pending");
+    } else {
+        emitter.instruction("cbz x1, __rt_exception_chain_return");             // there is no previous owner to attach
+    }
     emitter.instruction("ldr x9, [x1]");                                        // internal force-close markers are never PHP-visible previous exceptions
     emitter.instruction("cmn x9, #3");                                          // recognize the reserved forced-unwind class identity
     emitter.instruction("b.eq __rt_exception_chain_release");                   // consume the marker instead of attaching it to a real Throwable
@@ -99,8 +138,42 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve the current node, old owner, and replacement state
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // begin at the new exception rooted by the caller
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // keep the old owner until adoption or release
-    emitter.instruction("test rdi, rdi");                                       // inspect the incoming previous owner
-    emitter.instruction("jz __rt_exception_chain_return");                      // skip traversal when no previous exception exists
+    if emitter.phpext_output {
+        emitter.instruction("test rdi, rdi");                                   // distinguish a native pending owner from the null host marker
+        emitter.instruction("jnz __rt_exception_chain_has_pending");
+        emitter.instruction("test rax, rax");                                   // only a real native replacement needs retained identity
+        emitter.instruction("jz __rt_exception_chain_return");
+        abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        emitter.instruction(&format!("cmp r10, {}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound pins by the adapter's exception nesting contract
+        emitter.instruction("jae __rt_exception_chain_replacement_overflow");
+        emitter.instruction("mov QWORD PTR [rbp - 48], rax");                  // seed the intrinsic previous-chain tail
+        emitter.label("__rt_exception_chain_replacement_tail");
+        emitter.instruction("call __rt_throwable_previous");                   // borrow the next constructor/finally predecessor
+        emitter.instruction("test rax, rax");
+        emitter.instruction("jz __rt_exception_chain_replacement_ready");
+        emitter.instruction("mov QWORD PTR [rbp - 48], rax");                  // retain the exact insertion point before outer chains append
+        emitter.instruction("jmp __rt_exception_chain_replacement_tail");
+        emitter.label("__rt_exception_chain_replacement_ready");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                   // pin the replacement against allocator address reuse
+        emitter.instruction("call __rt_incref");
+        abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        abi::emit_extern_symbol_address(emitter, "r11", PHPEXT_REPLACEMENT_OWNERS);
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], rax");               // publish the retained owner before the C identity mapping
+        emitter.instruction("add r10, 1");
+        abi::emit_store_reg_to_symbol(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                   // pass root and original chain tail through SysV
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");
+        emitter.bl_c("elephc_php_finally_replacement");
+        emitter.instruction("jmp __rt_exception_chain_return");                // the null host marker owns no native reference
+        emitter.label("__rt_exception_chain_replacement_overflow");
+        emitter.instruction("mov r10, 4");                                     // fail closed instead of tracking a reusable raw pointer
+        abi::emit_store_reg_to_symbol(emitter, "r10", BOUNDARY_STATUS, 0);
+        emitter.instruction("jmp __rt_exception_chain_return");
+        emitter.label("__rt_exception_chain_has_pending");
+    } else {
+        emitter.instruction("test rdi, rdi");                                   // inspect the incoming previous owner
+        emitter.instruction("jz __rt_exception_chain_return");                  // skip traversal when no previous exception exists
+    }
     emitter.instruction("cmp QWORD PTR [rdi], -3");                             // internal forced-unwind markers cannot escape through getPrevious
     emitter.instruction("je __rt_exception_chain_release");                     // release the marker while preserving the real pending Throwable
     if emitter.phpext_output {
@@ -186,7 +259,7 @@ mod tests {
         }
     }
 
-    /// Hosted chains export an older native Throwable before a null host escape releases it.
+    /// Hosted chains retain real finally replacements and export older native pending owners.
     #[test]
     fn hosted_exception_chain_exports_native_previous_on_every_host_target() {
         for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
@@ -195,10 +268,16 @@ mod tests {
             emit_exception_chain(&mut emitter);
             let callback = emitter.target.extern_symbol("elephc_php_previous_exception");
             let continuation = emitter.target.extern_symbol("elephc_php_exception_previous");
+            let replacement = emitter.target.extern_symbol("elephc_php_finally_replacement");
             let asm = emitter.output();
             assert!(asm.contains(&callback), "{name}: {asm}");
             assert!(asm.contains(&continuation), "{name}: {asm}");
-            assert_eq!(asm.matches("__rt_throwable_previous\n").count(), 3, "{name}: {asm}");
+            assert!(asm.contains(&replacement), "{name}: {asm}");
+            assert!(asm.contains(PHPEXT_REPLACEMENT_OWNER_COUNT), "{name}: {asm}");
+            assert!(asm.contains(PHPEXT_REPLACEMENT_OWNERS), "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_throwable_previous\n").count(), 4, "{name}: {asm}");
+            assert!(asm.find("__rt_incref").unwrap() < asm.find(&replacement).unwrap(),
+                "{name}: {asm}");
             assert!(asm.find(&callback).unwrap() < asm.find("__rt_exception_chain_release:").unwrap(),
                 "{name}: {asm}");
         }

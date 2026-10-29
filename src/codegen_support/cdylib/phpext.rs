@@ -19,6 +19,11 @@ pub(crate) fn emit_phpext_exports(
 ) {
     reserve_boundary_data(data);
     data.add_comm("_elephc_phpext_pack_depth".into(), 8);
+    data.add_comm(PHPEXT_REPLACEMENT_OWNER_COUNT.into(), 8);
+    data.add_comm(
+        PHPEXT_REPLACEMENT_OWNERS.into(),
+        PHPEXT_REPLACEMENT_OWNER_LIMIT * 8,
+    );
     let error = data.add_string(b"elephc PHP extension runtime failure");
     emit_error_helpers(emitter, target);
     lifecycle::emit(emitter, target, heap_debug, startup, (&error.0, error.1));
@@ -43,6 +48,8 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     let mut used = 40 + boxes.len() * 8;
     used += 8;
     let exception_cursor = used;
+    used += 8;
+    let replacement_owner_base = used;
     let mut params = Vec::new();
     for (_, ty) in &export.source_sig.params {
         let mut slots = Vec::new();
@@ -67,6 +74,8 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     }
     abi::emit_load_symbol_to_reg(emitter, result, BOUNDARY_STATUS, 0);
     abi::store_at_offset(emitter, result, saved_boundary_status);
+    abi::emit_load_symbol_to_reg(emitter, result, PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    abi::store_at_offset(emitter, result, replacement_owner_base);
     boundary::emit_initialize_hidden_collector_owner(emitter, hidden);
     emitter.bl_c("elephc_php_stack_floor");                                      // use the current PHP thread or Fiber boundary instead of process stack limits
     abi::emit_store_reg_to_symbol(emitter, result, "_stack_limit", 0);
@@ -183,6 +192,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
         abi::load_at_offset(emitter, result, slot);
         abi::emit_call_label(emitter, "__rt_decref_mixed");
     }
+    emit_release_replacement_owners(emitter, replacement_owner_base, &name);
     boundary::emit_leave_boundary(emitter, concat);
     abi::load_at_offset(emitter, result, saved_boundary_status);
     abi::emit_store_reg_to_symbol(emitter, result, BOUNDARY_STATUS, 0);
@@ -190,6 +200,42 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     for (reg, offset) in &preserved { abi::load_at_offset(emitter, reg, *offset); }
     abi::emit_frame_restore(emitter, frame);
     abi::emit_return(emitter);
+}
+
+/// Releases every native replacement pin added by this export, including nested failures.
+fn emit_release_replacement_owners(emitter: &mut Emitter, base: usize, suffix: &str) {
+    let loop_label = format!("L_{suffix}_release_replacement_owner");
+    let done = format!("L_{suffix}_released_replacement_owners");
+    emitter.label(&loop_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+            abi::load_at_offset(emitter, "x10", base);
+            emitter.instruction("cmp x9, x10");                                // retire only pins acquired below this export boundary
+            emitter.instruction(&format!("b.ls {done}"));
+            emitter.instruction("sub x9, x9, #1");
+            abi::emit_store_reg_to_symbol(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+            abi::emit_extern_symbol_address(emitter, "x10", PHPEXT_REPLACEMENT_OWNERS);
+            emitter.instruction("ldr x0, [x10, x9, lsl #3]");                  // consume the last retained replacement owner
+            emitter.instruction("str xzr, [x10, x9, lsl #3]");                // make an escaping destructor path idempotent
+            abi::emit_call_label(emitter, "__rt_decref_any");
+            emitter.instruction(&format!("b {loop_label}"));
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+            abi::load_at_offset(emitter, "r11", base);
+            emitter.instruction("cmp r10, r11");                               // retire only pins acquired below this export boundary
+            emitter.instruction(&format!("jbe {done}"));
+            emitter.instruction("sub r10, 1");
+            abi::emit_store_reg_to_symbol(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+            abi::emit_extern_symbol_address(emitter, "r11", PHPEXT_REPLACEMENT_OWNERS);
+            emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");           // consume the last retained replacement owner
+            emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");            // make an escaping destructor path idempotent
+            abi::emit_call_label(emitter, "__rt_decref_any");
+            emitter.instruction(&format!("jmp {loop_label}"));
+        }
+    }
+    emitter.label(&done);
 }
 
 /// Materializes physical EIR arguments, including boxed arrays and nullable scalars.

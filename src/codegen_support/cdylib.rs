@@ -35,6 +35,10 @@ pub(crate) const STATUS_RUNTIME_FAILURE: i32 = 4;
 
 pub(crate) const BOUNDARY_ACTIVE: &str = "_elephc_boundary_active";
 pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
+pub(crate) const PHPEXT_REPLACEMENT_OWNER_COUNT: &str =
+    "_elephc_phpext_replacement_owner_count";
+pub(crate) const PHPEXT_REPLACEMENT_OWNERS: &str = "_elephc_phpext_replacement_owners";
+pub(crate) const PHPEXT_REPLACEMENT_OWNER_LIMIT: usize = 64;
 
 /// Converts a guarded host callback failure into a contained native cleanup unwind.
 pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
@@ -351,6 +355,9 @@ mod tests {
             let copy = asm.find(&continuation).unwrap();
             let release = asm[copy..].find("__rt_decref_any").map(|offset| copy + offset).unwrap();
             assert!(walk < copy && copy < release, "{target:?}: {asm}");
+            assert!(asm.contains("_elephc_phpext_replacement_owner_count"), "{target:?}: {asm}");
+            assert!(asm.contains("_elephc_phpext_replacement_owners"), "{target:?}: {asm}");
+            assert!(asm.contains("L_roundtrip_release_replacement_owner"), "{target:?}: {asm}");
         }
     }
 
