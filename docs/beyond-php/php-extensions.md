@@ -283,9 +283,12 @@ but cannot be called yet: it throws an `Error` saying why.
   others, nor the rest of the teardown, and the program then exits with status
   255. Allocations an extension makes in MINIT or with `pemalloc(…, 1)` (or a
   persistent string or table) are kept, as in PHP.
-  One difference remains: an extension object a global variable shares with
-  another, or a static property holds, is freed with the program's globals,
-  before RSHUTDOWN, where PHP frees it after the resources close.
+  At the program's end the objects go in PHP's order too: a global that is an
+  object's only reference is freed first, every remaining `__destruct` runs
+  before RSHUTDOWN, and the objects a static property or a shared global holds
+  are freed after the resources close, statics first. A `--web` worker ends
+  each request with the plainer order: its globals and statics are released
+  before RSHUTDOWN.
 - **Integrations with other extensions are compiled out.** Elephc does not
   host `session`, `pcre`, streams or output buffering, so an optional
   integration guarded by `HAVE_PHP_SESSION` and the like (msgpack's and

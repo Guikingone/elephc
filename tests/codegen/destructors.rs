@@ -228,3 +228,31 @@ f();
     );
     assert_eq!(out, "before\ndestruct c\ndestruct b\ndestruct a\ndestruct static\n");
 }
+
+/// At the program's end php-src first destroys the top-level variables that hold an object's only
+/// reference, newest variable first, then runs every remaining destructor in creation order (a
+/// shared variable, a static, an array element) before freeing anything. elephc released the
+/// variables in declaration order and the static properties last.
+#[test]
+fn test_program_end_destructs_in_php_order() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class D { public function __construct(public string $n) {} public function __destruct() { echo "destruct {$this->n}\n"; } }
+class K { public static $s; }
+function mk(string $n): D { return new D($n); }
+$a = new D("a");
+$b = mk("b");
+$c = new D("c"); $c2 = $c;
+K::$s = new D("s");
+$arr = [new D("in-array")];
+$m = $argc > 9 ? 1 : new D("mixed");
+echo "end\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "end\ndestruct mixed\ndestruct b\ndestruct a\ndestruct c\ndestruct s\ndestruct in-array\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -175,11 +175,11 @@ if ($case === '') {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "bool(false)
 int(3)
 ");
-    // Elephc ends the program on these misses where PHP throws a catchable Error; what matters
-    // here is that none of them reaches the internal symbol.
+    // Each miss throws PHP's Error, uncaught here; what matters is that none of them reaches the
+    // internal symbol.
     for (case, refused) in [
         ("function", "undefined function"),
-        ("method", "callable array"),
+        ("method", "Call to undefined method DemoCounter::__elephcObject()"),
         ("class", "Class \"__ElephcPhpExtOwner\" not found"),
     ] {
         let run = Command::new(dir.join("main")).arg(case).current_dir(&dir).output().expect("run the compiled program");
@@ -1047,6 +1047,38 @@ echo \"done\\n\";
     );
     assert_success(&run, "compiled program");
     assert_eq!(String::from_utf8_lossy(&run.stdout), "Cannot modify readonly property DemoRecord::$number\ndone\n");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// The program's end follows php-src's `php_request_shutdown` around a hosted extension: a global
+/// that is an engine object's only reference is freed first, every remaining `__destruct` runs
+/// before RSHUTDOWN, and the objects a static property or a shared global holds are freed only
+/// after the request's resources close, statics first.
+#[test]
+fn shared_and_static_engine_objects_are_freed_after_resources_close() {
+    let dir = project("shutdown-order");
+    let source = r#"<?php
+class D { public function __construct(public string $n) {} public function __destruct() { fwrite(STDERR, "elephc_demo: DESTRUCT {$this->n}\n"); } }
+class Keep { public static $c; public static $d; }
+$solo = new D("solo-global");
+$x = new D("shared-global"); $y = $x;
+Keep::$d = new D("static");
+$c1 = new DemoCounter(1);
+$c2 = new DemoCounter(2); $c2b = $c2;
+Keep::$c = new DemoCounter(3);
+demo_open_handle('h');
+echo "end\n";
+"#;
+    let (traced, status, stdout) = run_traced(&dir, source);
+    assert_eq!((status, stdout.as_str()), (Some(0), "end\n"));
+    assert_eq!(
+        traced,
+        [
+            "RINIT", "FREE counter 1", "DESTRUCT solo-global", "DESTRUCT shared-global", "DESTRUCT static",
+            "RSHUTDOWN Hello", "CLOSE h alive=1", "FREE counter 3", "FREE counter 2", "POST_DEACTIVATE Hello",
+            "MSHUTDOWN",
+        ]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 

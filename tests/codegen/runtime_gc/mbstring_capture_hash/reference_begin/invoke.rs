@@ -85,7 +85,12 @@ echo "done\n";
         }
     }
     expected.push_str("collection:0\ndone\n");
-    expected.push_str(&"late:2\nlate:6\n".repeat(8));
+    // The sixteen replacement objects the shims' hash slots still hold are destructed at the
+    // program's end in object-handle order, as php-src's shutdown does; freed handles are reused
+    // newest first, so the order follows the run's frees rather than alternating.
+    for mode in [6, 2, 2, 2, 6, 2, 6, 2, 6, 2, 6, 2, 6, 2, 6, 6] {
+        expected.push_str(&format!("late:{mode}\n"));
+    }
     assert_capture(RuntimeBuiltinId::MbEreg, source, "(?<key>a)", 3, true, false, &expected, "");
 }
 

@@ -755,24 +755,36 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.uses_pcntl_signal_handlers() {
         abi::emit_call_label(ctx.emitter, "__rt_pcntl_release_handlers");
     }
-    emit_main_local_epilogue_cleanup(ctx);
-    emit_main_static_local_cleanup(ctx);
-    emit_main_global_epilogue_cleanup(ctx);
     let (static_properties, hosting_tables) =
         super::runtime_metadata::static_properties_hosting_last(ctx.module);
-    emit_main_static_property_cleanup(ctx, static_properties);
-    // Hosted extensions end the request (RSHUTDOWN, then the open resources close) after the
-    // program's destructors, then their hosting tables release the engine objects (`free_obj` may
-    // still use module state), then the request deactivates (INI restore, post-deactivate,
-    // request heap), and the exit
-    // sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object store
-    // before `zend_post_deactivate_modules` and both before `php_module_shutdown`. The hook's own
-    // request phases then find no request left.
     let hosts_php_ext = !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module);
-    if hosts_php_ext {
-        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
-        abi::emit_call_label(ctx.emitter, &symbol);
+    if module_orders_shutdown_like_php(ctx.module, hosts_php_ext) {
+        // php-src's `php_request_shutdown`: `zend_call_destructors` first destroys the global
+        // variables that are an object's only reference, newest first, then runs every remaining
+        // destructor in object-handle order without freeing anything; RSHUTDOWN follows (with the
+        // open resources closing, see `elephc_php_ext_request_shutdown`), and only then does
+        // `shutdown_executor` release the static properties and the remaining globals.
+        emit_main_sole_object_release(ctx);
+        abi::emit_call_label(ctx.emitter, "__rt_shutdown_destructors");
+        if hosts_php_ext {
+            let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
+            abi::emit_call_label(ctx.emitter, &symbol);
+        }
+        emit_main_static_property_cleanup(ctx, static_properties);
+        emit_main_static_local_cleanup(ctx);
+        emit_main_local_epilogue_cleanup(ctx);
+        emit_main_global_epilogue_cleanup(ctx);
+    } else {
+        emit_main_local_epilogue_cleanup(ctx);
+        emit_main_static_local_cleanup(ctx);
+        emit_main_global_epilogue_cleanup(ctx);
+        emit_main_static_property_cleanup(ctx, static_properties);
     }
+    // Hosted extensions' hosting tables then release the engine objects (`free_obj` may still use
+    // module state), the request deactivates (INI restore, post-deactivate, request heap), and the
+    // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
+    // store before `zend_post_deactivate_modules` and both before `php_module_shutdown`. The
+    // hook's own request phases then find no request left.
     emit_main_static_property_cleanup(ctx, hosting_tables);
     // Last owner teardown: a destructor above, or an engine object a hosting table released, may
     // still reach C code that calls a callback.
@@ -922,6 +934,110 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
+/// Whether the program end follows php-src's destructor order (`emit_main_epilogue`): only when
+/// it is observable, through a class with `__destruct`, a hosted extension's object handlers, or
+/// classes eval may declare. Any other program keeps the plain release order, and no heap walk.
+fn module_orders_shutdown_like_php(module: &crate::ir::Module, hosts_php_ext: bool) -> bool {
+    hosts_php_ext
+        || module.required_runtime_features.eval_bridge
+        || module
+            .class_infos
+            .values()
+            .any(|info| info.methods.contains_key(&crate::names::php_symbol_key("__destruct")))
+}
+
+/// php-src's first shutdown pass (`zval_call_destructor` over the global symbol table, in
+/// reverse): a top-level variable that holds an object's ONLY reference releases it now, newest
+/// variable first, so its destructor runs and it is freed before the other objects' destructors
+/// and before RSHUTDOWN. The slot is cleared, so the later local cleanup skips it. A typed object
+/// slot qualifies when the object's refcount is 1; a `mixed` slot when its box and the boxed
+/// object both are.
+fn emit_main_sole_object_release(ctx: &mut FunctionContext<'_>) {
+    let locals = main_cleanup_locals(ctx)
+        .into_iter()
+        .filter(|(name, _, ty, _)| {
+            !name.starts_with("slot") && matches!(ty, PhpType::Object(_) | PhpType::Mixed)
+        })
+        .collect::<Vec<_>>();
+    let (value, object) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x11"),
+        Arch::X86_64 => ("rax", "rcx"),
+    };
+    for (name, slot, ty, offset) in locals.into_iter().rev() {
+        let skip = ctx.next_label("sole_object_keep");
+        ctx.emitter.comment(&format!("shutdown: release ${name} if it is the object's only reference"));
+        abi::load_at_offset(ctx.emitter, value, offset);
+        // A slot can hold null or a null sentinel rather than a pointer: only managed heap blocks.
+        emit_branch_unless_managed_heap_pointer(ctx, value, &skip);
+        emit_branch_unless_sole_reference(ctx, value, &skip);
+        if matches!(ty, PhpType::Mixed) {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("ldr x10, [{value}]"));    // the boxed value's runtime tag
+                    ctx.emitter.instruction("cmp x10, #6");                     // an object?
+                    ctx.emitter.instruction(&format!("b.ne {skip}"));           // other values wait for the plain cleanup
+                    ctx.emitter.instruction(&format!("ldr {object}, [{value}, #8]")); // the boxed object
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("cmp QWORD PTR [{value}], 6")); // is the boxed value an object?
+                    ctx.emitter.instruction(&format!("jne {skip}"));            // other values wait for the plain cleanup
+                    ctx.emitter.instruction(&format!("mov {object}, QWORD PTR [{value} + 8]")); // the boxed object
+                }
+            }
+            emit_branch_unless_managed_heap_pointer(ctx, object, &skip);
+            emit_branch_unless_sole_reference(ctx, object, &skip);
+        }
+        emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_int_immediate(ctx.emitter, result, 0);
+        abi::store_at_offset(ctx.emitter, result, offset);
+        ctx.emitter.label(&skip);
+    }
+}
+
+/// Branches to `skip` unless `reg` points into the managed heap's handed-out storage (null, the
+/// null sentinels and foreign pointers all fail). Clobbers x9/x10 or r10/r11 only.
+fn emit_branch_unless_managed_heap_pointer(ctx: &mut FunctionContext<'_>, reg: &str, skip: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_heap_buf");
+            ctx.emitter.instruction("add x10, x9, #16");                        // the first payload begins after the uniform heap header
+            ctx.emitter.instruction(&format!("cmp {reg}, x10"));                // below the managed heap?
+            ctx.emitter.instruction(&format!("b.lo {skip}"));                   // null, sentinels and foreign values own nothing here
+            abi::emit_symbol_address(ctx.emitter, "x10", "_heap_off");
+            ctx.emitter.instruction("ldr x10, [x10]");                          // the heap's bump offset
+            ctx.emitter.instruction("add x10, x9, x10");                        // the end of handed-out storage
+            ctx.emitter.instruction(&format!("cmp {reg}, x10"));                // past it?
+            ctx.emitter.instruction(&format!("b.hs {skip}"));                   // not a managed block
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", "_heap_buf");
+            ctx.emitter.instruction("lea r11, [r10 + 16]");                     // the first payload begins after the uniform heap header
+            ctx.emitter.instruction(&format!("cmp {reg}, r11"));                // below the managed heap?
+            ctx.emitter.instruction(&format!("jb {skip}"));                     // null, sentinels and foreign values own nothing here
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_heap_off", 0);
+            ctx.emitter.instruction("add r11, r10");                            // the end of handed-out storage
+            ctx.emitter.instruction(&format!("cmp {reg}, r11"));                // past it?
+            ctx.emitter.instruction(&format!("jae {skip}"));                    // not a managed block
+        }
+    }
+}
+
+/// Branches to `skip` unless the managed block `reg` points at has exactly one owner.
+fn emit_branch_unless_sole_reference(ctx: &mut FunctionContext<'_>, reg: &str, skip: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr w10, [{reg}, #-12]"));        // the block's refcount
+            ctx.emitter.instruction("cmp w10, #1");                             // a single owner?
+            ctx.emitter.instruction(&format!("b.ne {skip}"));                   // shared: released after RSHUTDOWN
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp DWORD PTR [{reg} - 12], 1")); // a single owner?
+            ctx.emitter.instruction(&format!("jne {skip}"));                    // shared: released after RSHUTDOWN
+        }
+    }
+}
+
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     let mut globals = ctx.module.data.global_names.clone();
     // Eval exposes process globals even when no source-level global instruction names them.
