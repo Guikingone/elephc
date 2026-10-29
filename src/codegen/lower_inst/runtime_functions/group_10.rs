@@ -270,6 +270,9 @@ pub(super) fn lower(
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
                 )
         }),
+        RuntimeFnId::StrSplitCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_str_split_count(ctx, inst)
+        }),
         RuntimeFnId::Bin2HexLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_bin2hex_len(ctx, inst)
         }),

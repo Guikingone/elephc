@@ -65,6 +65,7 @@ mod substr_replace;
 mod str_offset_set;
 mod str_pad;
 mod str_split;
+mod str_split_count;
 mod str_word_count;
 mod addslashes;
 mod stripslashes;
@@ -227,6 +228,7 @@ pub use str_offset_set::emit_str_offset_set;
 pub use str_pad::emit_str_pad;
 /// Emit string padding helper.
 pub use str_split::emit_str_split;
+pub use str_split_count::emit_str_split_count;
 /// Emit string to array split helper.
 pub use addslashes::emit_addslashes;
 /// Emit addslashes escaping helper.

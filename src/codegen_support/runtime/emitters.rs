@@ -99,6 +99,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_substr_count(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);
+    strings::emit_str_split_count(emitter);
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);

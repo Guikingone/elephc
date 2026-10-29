@@ -21,6 +21,8 @@ mod strpos_int_sink;
 mod strstr_len_sink;
 #[path = "optimizer/string_len_sink.rs"]
 mod string_len_sink;
+#[path = "optimizer/str_split_count_sink.rs"]
+mod str_split_count_sink;
 #[path = "optimizer/json_decode_count_sink.rs"]
 mod json_decode_count_sink;
 #[path = "optimizer/array_sum_int_sink.rs"]

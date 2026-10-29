@@ -761,6 +761,8 @@ pub enum RuntimeFnId {
     StrRepeat,
     StrReplace,
     StrSplit,
+    /// Allocation-free `count(str_split(...))` chunk count.
+    StrSplitCount,
     StrStartsWith,
     StrWordCount,
     Strcasecmp,
@@ -926,6 +928,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrstrLen => Some((2, Some(3))),
             RuntimeFnId::ChunkSplitLen => Some((3, Some(3))),
             RuntimeFnId::Bin2HexLen => Some((1, Some(1))),
+            RuntimeFnId::StrSplitCount => Some((1, Some(2))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
@@ -1800,7 +1803,9 @@ impl RuntimeFnId {
             // The length-only split keeps chunk_split()'s validation and allocation fatal.
             RuntimeFnId::ChunkSplitLen => RuntimeFnId::ChunkSplit.effects(),
             // The length-only encoder keeps bin2hex()'s coercion and allocation fatal.
-            RuntimeFnId::Bin2HexLen => E::PURE,
+            RuntimeFnId::Bin2HexLen => E::from_bits_retain(E::MAY_FATAL.bits()),
+            // The count-only split keeps str_split()'s length validation and coercion.
+            RuntimeFnId::StrSplitCount => RuntimeFnId::StrSplit.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
             RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The raw encoder keeps the JSON error state and encoder side effects.
@@ -2539,6 +2544,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrstrLen
                 | RuntimeFnId::ChunkSplitLen
                 | RuntimeFnId::Bin2HexLen
+                | RuntimeFnId::StrSplitCount
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
@@ -3582,6 +3588,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrstrLen => "strstr_len",
             RuntimeFnId::ChunkSplitLen => "chunk_split_len",
             RuntimeFnId::Bin2HexLen => "bin2hex_len",
+            RuntimeFnId::StrSplitCount => "str_split_count",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",

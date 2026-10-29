@@ -91,7 +91,7 @@ pub(crate) use simple::{
     lower_trim_like, lower_ucfirst,
 };
 pub(crate) use strip_tags::lower_strip_tags;
-pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split};
+pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split, lower_str_split_count};
 
 #[allow(unused_imports)]
 pub(super) use common::{

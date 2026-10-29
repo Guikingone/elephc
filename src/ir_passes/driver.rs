@@ -36,6 +36,7 @@ use super::string_len_sink::StringLenSink;
 use super::json_decode_count_sink::JsonDecodeCountSink;
 use super::json_encode_len_sink::JsonEncodeLenSink;
 use super::sqrt_add_int_sink::SqrtAddIntSink;
+use super::str_split_count_sink::StrSplitCountSink;
 use super::strpos_int_sink::StrposIntSink;
 use super::strstr_len_sink::StrstrLenSink;
 use super::array_map_sum_add_int_sink::ArrayMapSumAddIntSink;
@@ -159,6 +160,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(AbsIntSink),
         Box::new(StringLenSink),
         Box::new(StrposIntSink),
+        Box::new(StrSplitCountSink),
         Box::new(StrstrLenSink),
         Box::new(SqrtAddIntSink),
         Box::new(JsonEncodeLenSink),
