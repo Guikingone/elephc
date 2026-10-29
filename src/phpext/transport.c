@@ -12,6 +12,7 @@ typedef struct ep_allocation {
 
 typedef struct ep_exception_copy {
     struct ep_exception_copy *next;
+    struct ep_exception_copy *previous;
     char *name;
     size_t name_len;
     char *message;
@@ -31,6 +32,8 @@ typedef struct ep_call {
     char *exception_message;
     size_t exception_message_len;
     zend_long exception_code;
+    ep_exception_copy *exception_previous;
+    ep_exception_copy *exception_chain_tail;
     ep_exception_copy *previous_exceptions;
     ep_exception_copy *previous_exceptions_tail;
     zend_object *previous_exception_anchor;

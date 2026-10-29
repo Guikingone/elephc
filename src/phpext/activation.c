@@ -260,6 +260,25 @@ static int ep_copy_exception(ep_call *call, const uintptr_t *object, char **name
     return call->error != NULL;
 }
 
+/* Copy one native previous-chain node and append it to the active copied root. */
+int elephc_php_exception_previous(const uintptr_t *object)
+{
+    ep_call *call = ep_current;
+    if (!call || !object || call->error) { return 1; }
+    ep_exception_copy *copy = ep_alloc(call, sizeof(ep_exception_copy));
+    if (!copy || ep_copy_exception(call, object, &copy->name, &copy->name_len,
+        &copy->message, &copy->message_len, &copy->code)) {
+        return 1;
+    }
+    if (call->exception_chain_tail) {
+        call->exception_chain_tail->previous = copy;
+    } else {
+        call->exception_previous = copy;
+    }
+    call->exception_chain_tail = copy;
+    return 0;
+}
+
 /* Preserve an older native Throwable before a host callback escape consumes its owner. */
 void elephc_php_previous_exception(const uintptr_t *object)
 {
@@ -277,6 +296,7 @@ void elephc_php_previous_exception(const uintptr_t *object)
         call->previous_exceptions = copy;
     }
     call->previous_exceptions_tail = copy;
+    call->exception_chain_tail = copy;
 }
 
 /* Copy the primary compact native Throwable at the invocation boundary. */
@@ -293,6 +313,8 @@ int elephc_php_exception(const uintptr_t *object, uintptr_t status)
         call->error = "elephc native runtime failed";
         return 1;
     }
+    call->exception_previous = NULL;
+    call->exception_chain_tail = NULL;
     return ep_copy_exception(call, object, &call->exception_name, &call->exception_name_len,
         &call->exception_message, &call->exception_message_len, &call->exception_code);
 }
@@ -326,6 +348,30 @@ static void ep_materialize_exception(char *name, size_t name_len, char *message,
     zend_update_property_long(ce, exception, "code", sizeof("code") - 1, code);
 }
 
+/* Materialize copied previous links in order without recursing on the C stack. */
+static zend_object *ep_materialize_previous_chain(zend_object *tail, ep_exception_copy *copy)
+{
+    while (copy) {
+        zval value;
+        ep_materialize_exception(copy->name, copy->name_len, copy->message,
+            copy->message_len, copy->code, &value);
+        zend_object *previous = Z_OBJ(value);
+        zend_exception_set_previous(tail, previous);
+        ZVAL_UNDEF(&value);
+        tail = previous;
+        copy = copy->previous;
+    }
+    return tail;
+}
+
+/* Materialize one copied native Throwable and every native previous link it owns. */
+static zend_object *ep_materialize_exception_copy(ep_exception_copy *copy, zval *value)
+{
+    ep_materialize_exception(copy->name, copy->name_len, copy->message,
+        copy->message_len, copy->code, value);
+    return ep_materialize_previous_chain(Z_OBJ_P(value), copy->previous);
+}
+
 /* Throwable previous properties are private on either the Exception or Error base. */
 static zend_object *ep_host_previous(zend_object *exception)
 {
@@ -340,15 +386,14 @@ static zend_object *ep_host_previous(zend_object *exception)
 static void ep_insert_previous(ep_exception_copy *copy)
 {
     zval value;
-    ep_materialize_exception(copy->name, copy->name_len, copy->message,
-        copy->message_len, copy->code, &value);
+    zend_object *native_tail = ep_materialize_exception_copy(copy, &value);
     if (copy->anchor) {
         zend_object *cursor = EG(exception);
         while (cursor) {
             zend_object *previous = ep_host_previous(cursor);
             if (previous == copy->anchor) {
                 GC_ADDREF(copy->anchor);
-                zend_exception_set_previous(Z_OBJ(value), copy->anchor);
+                zend_exception_set_previous(native_tail, copy->anchor);
                 zend_update_property(zend_get_exception_base(cursor), cursor,
                     "previous", sizeof("previous") - 1, &value);
                 zval_ptr_dtor(&value);
@@ -447,6 +492,8 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
                 ep_materialize_exception(call->exception_name, call->exception_name_len,
                     call->exception_message, call->exception_message_len,
                     call->exception_code, &call->pending_exception);
+                ep_materialize_previous_chain(Z_OBJ(call->pending_exception),
+                    call->exception_previous);
                 zval thrown = call->pending_exception;
                 ZVAL_UNDEF(&call->pending_exception);
                 zend_throw_exception_object(&thrown);

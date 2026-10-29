@@ -41,6 +41,8 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     let saved_result = 40;
     let boxes = (0..export.source_sig.params.len()).map(|i| 48 + i * 8).collect::<Vec<_>>();
     let mut used = 40 + boxes.len() * 8;
+    used += 8;
+    let exception_cursor = used;
     let mut params = Vec::new();
     for (_, ty) in &export.source_sig.params {
         let mut slots = Vec::new();
@@ -137,6 +139,26 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
             emitter.instruction(&format!("jnz {rollback}"));                    // let the adapter roll back a failed native conversion without recursive frees
         }
     }
+    let copy_previous = format!("L_{name}_copy_exception_previous");
+    let copied_previous = format!("L_{name}_copied_exception_previous");
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_previous");
+    emitter.label(&copy_previous);
+    abi::emit_branch_if_int_result_zero(emitter, &copied_previous);
+    abi::store_at_offset(emitter, result, exception_cursor);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
+    emitter.bl_c("elephc_php_exception_previous");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("cbnz w0, {rollback}")),  // roll back if copying any previous node exceeds the transport budget
+        Arch::X86_64 => {
+            emitter.instruction("test eax, eax");                               // inspect the continuation callback's C int status
+            emitter.instruction(&format!("jnz {rollback}"));                    // abandon partial transport without releasing rolled-back native owners
+        }
+    }
+    abi::load_at_offset(emitter, result, exception_cursor);
+    abi::emit_call_label(emitter, "__rt_throwable_previous");
+    abi::emit_jump(emitter, &copy_previous);
+    emitter.label(&copied_previous);
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_call_label(emitter, "__rt_decref_any");

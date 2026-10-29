@@ -332,6 +332,28 @@ mod tests {
         }
     }
 
+    /// Hosted exception thunks copy each native previous link before releasing its owner.
+    #[test]
+    fn phpext_exception_thunks_copy_native_previous_chains_on_every_host_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_phpext_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            let asm = emitter.output();
+            let continuation = target.extern_symbol("elephc_php_exception_previous");
+            assert!(asm.contains(&continuation), "{target:?}: {asm}");
+            let walk = asm.find("__rt_throwable_previous").unwrap();
+            let copy = asm.find(&continuation).unwrap();
+            let release = asm[copy..].find("__rt_decref_any").map(|offset| copy + offset).unwrap();
+            assert!(walk < copy && copy < release, "{target:?}: {asm}");
+        }
+    }
+
     /// Nested entries read their linked runtime's actual arena bound on every library target.
     #[test]
     fn nested_boundary_reads_linked_concat_capacity_on_all_targets() {

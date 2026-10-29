@@ -355,6 +355,39 @@ catch (Throwable $error) {
 "#);
 }
 
+/// Native constructor and finally previous chains remain intact across host interleavings.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn native_previous_chains_survive_php_boundary() {
+    compare(r#"<?php
+#[Export] function php_native_finally_chain(): void {
+    try { throw new RuntimeException('first'); }
+    finally { throw new TypeError('second'); }
+}
+#[Export] function php_constructor_chain(): void {
+    throw new RuntimeException('outer', 3, new Exception('inner', 4));
+}
+#[Export] function php_host_spliced_chain(array $value): void {
+    try {
+        try { throw new RuntimeException('a'); }
+        finally { throw new TypeError('b'); }
+    } finally { echo $value['missing']; }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), ':', $error->getCode(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+try { php_native_finally_chain(); } catch (Throwable $error) { $dump($error); }
+try { php_constructor_chain(); } catch (Throwable $error) { $dump($error); }
+set_error_handler(function () { throw new LogicException('host'); });
+try { php_host_spliced_chain([]); } catch (Throwable $error) { $dump($error); }
+"#);
+}
+
 /// Array helpers propagate a null-object host warning escape after retiring partial owners.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
@@ -710,6 +743,43 @@ $value = [1, 2, 'key' => ['nested']];
 foreach ($value as &$item) {} unset($item);
 echo json_encode(php_values($value));
 "#);
+}
+
+/// Native-created empty lists keep Zend's negative-key append cursor, including nested lists.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn native_empty_lists_preserve_negative_append_cursor() {
+    compare(r#"<?php
+#[Export] function php_empty_list(): array { return []; }
+#[Export] function php_nested_empty_lists(): array { return ['a' => [], 'b' => [[]]]; }
+"#, r#"
+$plain = php_empty_list();
+$plain[-5] = 1;
+$plain[] = 2;
+$nested = php_nested_empty_lists();
+$nested['a'][-5] = 3;
+$nested['a'][] = 4;
+$nested['b'][0][-5] = 5;
+$nested['b'][0][] = 6;
+echo json_encode([$plain, $nested]);
+"#);
+}
+
+/// Zend internal handlers reject extra arguments even though userland PHP functions ignore them.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn exported_functions_use_internal_exact_arity() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("arity", "<?php #[Export] function php_add(int $left, int $right): int { return $left + $right; }");
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+try { php_add(1, 2, 3); }
+catch (ArgumentCountError $error) { echo get_class($error), ':', $error->getMessage(); }
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout,
+        b"ArgumentCountError:php_add() expects exactly 2 arguments, 3 given");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
 /// Parameter errors report the caller's actual type and nullable spelling, including false/null.

@@ -35,7 +35,14 @@ fn emit_aarch64(emitter: &mut Emitter) {
         emitter.instruction("cbnz x0, __rt_exception_chain_scan");              // native exceptions can adopt the older native owner directly
         emitter.instruction("ldr x0, [sp, #8]");                                // expose the native owner before the host escape consumes it
         emitter.bl_c("elephc_php_previous_exception");                           // copy the previous Throwable into malloc-owned transport
-        emitter.instruction("b __rt_exception_chain_release");                  // release the native owner after the adapter has copied it
+        emitter.instruction("ldr x0, [sp, #8]");                                // begin walking every previous link owned by that copied root
+        emitter.label("__rt_exception_chain_copy_previous");
+        emitter.instruction("bl __rt_throwable_previous");                      // borrow the next native previous link without retaining it
+        emitter.instruction("cbz x0, __rt_exception_chain_release");            // finish once the full native chain has been copied
+        emitter.instruction("str x0, [sp, #40]");                               // preserve the current node across the C callback
+        emitter.bl_c("elephc_php_exception_previous");                           // append this node to the active malloc-owned copied chain
+        emitter.instruction("ldr x0, [sp, #40]");                               // continue traversal from the node just copied
+        emitter.instruction("b __rt_exception_chain_copy_previous");            // preserve every constructor and finally-chain link
     }
     emitter.label("__rt_exception_chain_scan");
     emitter.instruction("ldr x0, [sp, #8]");                                    // restart the old chain for this new-chain node
@@ -101,7 +108,16 @@ fn emit_x86_64(emitter: &mut Emitter) {
         emitter.instruction("jnz __rt_exception_chain_scan");                   // native replacements use the ordinary in-runtime chain
         emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                   // expose the native owner before the host escape consumes it
         emitter.bl_c("elephc_php_previous_exception");                           // copy the previous Throwable into malloc-owned transport
-        emitter.instruction("jmp __rt_exception_chain_release");                // release the native owner after the adapter has copied it
+        emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // begin walking every previous link owned by that copied root
+        emitter.label("__rt_exception_chain_copy_previous");
+        emitter.instruction("call __rt_throwable_previous");                    // borrow the next native previous link without retaining it
+        emitter.instruction("test rax, rax");                                   // inspect whether another copied node remains
+        emitter.instruction("jz __rt_exception_chain_release");                 // release the root after the whole native chain is copied
+        emitter.instruction("mov QWORD PTR [rbp - 24], rax");                   // preserve the current node across the SysV callback
+        emitter.instruction("mov rdi, rax");                                    // pass the borrowed current node to the adapter
+        emitter.bl_c("elephc_php_exception_previous");                           // append it to the active malloc-owned copied chain
+        emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                   // continue traversal from the node just copied
+        emitter.instruction("jmp __rt_exception_chain_copy_previous");          // preserve every constructor and finally-chain link
     }
     emitter.label("__rt_exception_chain_scan");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restart the old chain at its root
@@ -178,8 +194,11 @@ mod tests {
             emitter.phpext_output = true;
             emit_exception_chain(&mut emitter);
             let callback = emitter.target.extern_symbol("elephc_php_previous_exception");
+            let continuation = emitter.target.extern_symbol("elephc_php_exception_previous");
             let asm = emitter.output();
             assert!(asm.contains(&callback), "{name}: {asm}");
+            assert!(asm.contains(&continuation), "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_throwable_previous\n").count(), 3, "{name}: {asm}");
             assert!(asm.find(&callback).unwrap() < asm.find("__rt_exception_chain_release:").unwrap(),
                 "{name}: {asm}");
         }

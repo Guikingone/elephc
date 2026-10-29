@@ -53,6 +53,9 @@ and `null`, including supported nullable signatures and `mixed` values that
 contain this subset. `void` and `never` returns are supported. Zend parses
 arguments, applies caller strictness and handles named and optional arguments.
 Supported defaults are scalar constants, null and empty arrays.
+Zend registers these handlers as internal functions, so non-variadic exports reject
+arguments beyond the declared parameter list. This differs from userland PHP
+functions, which ignore extra positional arguments.
 Exported parameters and returns require explicit type declarations, including
 `mixed` for supported dynamic values. A null default requires an explicitly
 nullable declaration such as `?int $value = null`; implicit nullability is rejected.
@@ -157,8 +160,8 @@ lifecycle; unsupported helpers receive a compilation diagnostic.
 ## Verification
 
 The [example](../../examples/php-extension/main.php) contains integer, string,
-array and exception exports. Its driver also runs against the identical PHP
-source for a byte-for-byte comparison.
+array and exception exports. Its driver also runs calls within the declared
+arity against the identical PHP source for a byte-for-byte comparison.
 
 ```sh
 cargo test -p elephc --test phpext_tests -- --include-ignored
