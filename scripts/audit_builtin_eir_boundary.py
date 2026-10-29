@@ -59,6 +59,7 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "Bin2HexLen",
     "StrSplitCount",
     "Base64DecodedLen",
+    "ParseUrlCount",
     "StriposInt",
     "StrrposInt",
     "StrriposInt",

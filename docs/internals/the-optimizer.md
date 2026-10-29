@@ -763,6 +763,12 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
+`src/ir_passes/parse_url_count_sink.rs` folds `count(parse_url(...))` into
+`ParseUrlCount`. Only the full-array form is eligible: the runtime parser runs in a
+count-only mode that returns the component bit count, and an invalid URL returns
+status zero so the lowering raises PHP's count `TypeError`. Component-selector
+calls keep the ordinary parser because their result is a scalar or null.
+
 `src/ir_passes/base64_decode_len_sink.rs` folds `strlen(base64_decode(...))` into
 `Base64DecodedLen`. The helper counts accepted sextets, ignores whitespace and lax
 invalid bytes, and reproduces strict-mode padding rejection; a rejected decode answers
