@@ -145,3 +145,22 @@ fn emit_strripos_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                         // return the not-found sentinel when no haystack offset matches the needle
     emitter.instruction("ret");                                                 // return the not-found sentinel to the caller
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets fold ASCII case without a branch per byte.
+    #[test]
+    fn strripos_emits_branchless_case_folding_on_all_targets() {
+        for (name, fold) in [("macos-aarch64", "csel"), ("linux-x86_64", "cmovb")] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_strripos(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains(fold), "{name}: {assembly}");
+            assert!(!assembly.contains("__rt_strripos_fold_needle"), "{name}: {assembly}");
+        }
+    }
+}

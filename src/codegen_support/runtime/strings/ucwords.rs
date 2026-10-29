@@ -241,3 +241,22 @@ fn emit_ucwords_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mutated copy
     emitter.instruction("ret");                                                 // return the mutated concat-backed copy in the standard x86_64 string result registers
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets keep the inline default-separator fast path.
+    #[test]
+    fn ucwords_emits_the_default_separator_path_on_all_targets() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_ucwords(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("__rt_ucwords_default_loop"), "{name}: {assembly}");
+            assert!(assembly.contains("_ucwords_default_seps"), "{name}: {assembly}");
+        }
+    }
+}

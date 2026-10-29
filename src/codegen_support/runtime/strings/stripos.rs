@@ -344,3 +344,22 @@ fn emit_stripos_linux_x86_64(e: &mut Emitter) {
     e.instruction("mov rax, -1");                                               // a needle longer than the haystack cannot match
     e.instruction("ret");                                                       // return the not-found sentinel
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets use the memchr candidate scan rather than the old byte loop.
+    #[test]
+    fn stripos_emits_the_candidate_scan_on_all_targets() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_stripos(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("memchr"), "{name}: {assembly}");
+            assert!(!assembly.contains("__rt_stripos_outer"), "{name}: {assembly}");
+        }
+    }
+}
