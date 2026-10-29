@@ -30,6 +30,28 @@ pub(crate) fn lower_ip2long(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers the raw `(int)ip2long()` path; invalid addresses become zero.
+pub(crate) fn lower_ip2long_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_single_string_arg(ctx, inst, "ip2long")?;
+    move_string_result_to_c_abi_pair(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_ip2long");
+    let ok = ctx.next_label("ip2long_int_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // does the parser report an invalid address?
+            ctx.emitter.instruction(&format!("b.ge {ok}"));                     // valid addresses keep the parsed integer
+            ctx.emitter.instruction("mov x0, #0");                              // PHP's (int)false is zero
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // does the parser report an invalid address?
+            ctx.emitter.instruction(&format!("jns {ok}"));                      // valid addresses keep the parsed integer
+            ctx.emitter.instruction("xor eax, eax");                            // PHP's (int)false is zero
+        }
+    }
+    ctx.emitter.label(&ok);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `inet_ntop()` and `inet_pton()` and boxes invalid-address results as PHP false.
 pub(crate) fn lower_inet(
     ctx: &mut FunctionContext<'_>,

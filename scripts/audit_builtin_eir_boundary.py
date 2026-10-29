@@ -62,6 +62,7 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "ParseUrlCount",
     "CountCharsDistinct",
     "InetPtonLen",
+    "Ip2longInt",
     "StripTagsLen",
     "StriposInt",
     "StrrposInt",

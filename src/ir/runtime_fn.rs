@@ -656,6 +656,8 @@ pub enum RuntimeFnId {
     InetPton,
     /// Allocation-free `strlen(inet_pton(...))` packed-address length.
     InetPtonLen,
+    /// Raw `(int)ip2long()` result; invalid addresses become zero.
+    Ip2longInt,
     Ip2long,
     Lcfirst,
     Long2ip,
@@ -943,6 +945,7 @@ impl RuntimeFnId {
             RuntimeFnId::ParseUrlCount => Some((1, Some(1))),
             RuntimeFnId::CountCharsDistinct => Some((1, Some(1))),
             RuntimeFnId::InetPtonLen => Some((1, Some(1))),
+            RuntimeFnId::Ip2longInt => Some((1, Some(1))),
             RuntimeFnId::StripTagsLen => Some((1, Some(2))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
@@ -1829,6 +1832,8 @@ impl RuntimeFnId {
             RuntimeFnId::CountCharsDistinct => RuntimeFnId::CountChars.effects(),
             // The length-only scan keeps inet_pton()'s address validation and warnings.
             RuntimeFnId::InetPtonLen => RuntimeFnId::InetPton.effects(),
+            // The raw integer keeps ip2long()'s address parsing and warnings.
+            RuntimeFnId::Ip2longInt => RuntimeFnId::Ip2long.effects(),
             // The length-only scan keeps strip_tags()'s allow-list coercion and diagnostics.
             RuntimeFnId::StripTagsLen => RuntimeFnId::StripTags.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
@@ -2574,6 +2579,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ParseUrlCount
                 | RuntimeFnId::CountCharsDistinct
                 | RuntimeFnId::InetPtonLen
+                | RuntimeFnId::Ip2longInt
                 | RuntimeFnId::StripTagsLen
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
@@ -3629,6 +3635,7 @@ impl RuntimeFnId {
             RuntimeFnId::ParseUrlCount => "parse_url_count",
             RuntimeFnId::CountCharsDistinct => "count_chars_distinct",
             RuntimeFnId::InetPtonLen => "inet_pton_len",
+            RuntimeFnId::Ip2longInt => "ip2long_int",
             RuntimeFnId::StripTagsLen => "strip_tags_len",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",

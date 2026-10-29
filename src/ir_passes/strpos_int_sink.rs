@@ -1,15 +1,15 @@
 //! Purpose:
-//! Specializes a boxed `strpos()`-family search whose only observation is an `(int)` cast
-//! into the raw integer search result.
+//! Specializes a boxed `strpos()`-family search or `ip2long()` call whose only
+//! observation is an `(int)` cast into the raw integer result.
 //!
 //! Called from:
 //! - The EIR fixed-point pass driver after the length and math sinks.
 //!
 //! Key details:
-//! - Applies to `strpos`, `stripos`, `strrpos` and `strripos`; the search still runs with
+//! - Applies to `strpos`, `stripos`, `strrpos`, `strripos` and `ip2long`; the work still runs with
 //!   its original arguments, coercions, offset validation and warnings. Only the result
 //!   representation changes from `int|false` to `int`.
-//! - A not-found sentinel becomes zero, exactly like PHP's `(int)false`.
+//! - A not-found or invalid sentinel becomes zero, exactly like PHP's `(int)false`.
 //! - Any observer beyond one `Cast` to `I64` plus release scaffolding keeps the boxed call.
 
 use crate::ir::{DataPool, Function, Immediate, InstId, IrType, Op, Ownership, RuntimeCallTarget, RuntimeFnId};
@@ -52,18 +52,35 @@ impl IrPass for StrposIntSink {
     }
 }
 
-/// Returns whether `inst` is a two/three-operand boxed position search.
+/// Returns whether `inst` is a boxed position search or `ip2long()` call.
 fn is_boxed_position(inst: &crate::ir::Instruction) -> bool {
+    let Some(target) = inet_target(inst) else {
+        return false;
+    };
+    let arity_ok = match target {
+        RuntimeFnId::Ip2long => inst.operands.len() == 1,
+        RuntimeFnId::Stripos
+        | RuntimeFnId::Strpos
+        | RuntimeFnId::Strripos
+        | RuntimeFnId::Strrpos => matches!(inst.operands.len(), 2 | 3),
+        _ => return false,
+    };
     inst.op == Op::RuntimeCall
-        && matches!(
-            inst.immediate,
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                RuntimeFnId::Stripos | RuntimeFnId::Strpos | RuntimeFnId::Strripos | RuntimeFnId::Strrpos
-            )))
-        )
-        && matches!(inst.operands.len(), 2 | 3)
+        && arity_ok
         && inst.result.is_some()
         && inst.result_php_type.codegen_repr() == PhpType::Mixed
+}
+
+/// Returns the runtime target of a direct or profiled call instruction.
+fn inet_target(inst: &crate::ir::Instruction) -> Option<RuntimeFnId> {
+    let Some(Immediate::RuntimeCall(target)) = &inst.immediate else {
+        return None;
+    };
+    match target {
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. } => Some(*target),
+        _ => None,
+    }
 }
 
 /// Returns the raw integer runtime function for a boxed position search.
@@ -73,6 +90,7 @@ fn raw_variant(target: RuntimeFnId) -> Option<RuntimeFnId> {
         RuntimeFnId::Strpos => Some(RuntimeFnId::StrposInt),
         RuntimeFnId::Strripos => Some(RuntimeFnId::StrriposInt),
         RuntimeFnId::Strrpos => Some(RuntimeFnId::StrrposInt),
+        RuntimeFnId::Ip2long => Some(RuntimeFnId::Ip2longInt),
         _ => None,
     }
 }

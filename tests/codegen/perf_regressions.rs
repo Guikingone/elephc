@@ -193,3 +193,19 @@ echo $n, "\n";
         Duration::from_millis(100),
     );
 }
+
+/// `(int)ip2long()` keeps the raw integer parser and can be hoisted when loop-invariant.
+#[test]
+#[ignore = "wall-clock performance guard; run explicitly"]
+fn perf_ip2long_int_loop() {
+    assert_under(
+        "ip2long_int",
+        r#"<?php
+$s = '192.168.1.42';
+$n = 0;
+for ($i = 0; $i < 100000; $i++) { $n ^= ((int)ip2long($s)) + $i; }
+echo $n, "\n";
+"#,
+        Duration::from_millis(100),
+    );
+}

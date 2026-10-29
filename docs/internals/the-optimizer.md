@@ -763,6 +763,10 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
+`src/ir_passes/strpos_int_sink.rs` also folds an `(int)ip2long(...)` observation into
+the raw integer parser; an invalid address becomes zero, matching PHP's `(int)false`.
+A value observation keeps the boxed `int|false` result.
+
 `src/ir_passes/inet_pton_len_sink.rs` folds `strlen(inet_pton(...))` into the
 length-only mode of `__rt_inet_pton`: the address is still validated and IPv4/IPv6
 return 4/16, while an invalid address returns zero for `strlen(false)`. A value

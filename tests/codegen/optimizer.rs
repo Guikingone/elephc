@@ -29,6 +29,8 @@ mod count_chars_count_sink;
 mod strip_tags_len_sink;
 #[path = "optimizer/inet_pton_len_sink.rs"]
 mod inet_pton_len_sink;
+#[path = "optimizer/ip2long_int_sink.rs"]
+mod ip2long_int_sink;
 #[path = "optimizer/string_len_sink.rs"]
 mod string_len_sink;
 #[path = "optimizer/str_split_count_sink.rs"]
