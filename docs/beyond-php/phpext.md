@@ -182,6 +182,12 @@ reference construction, bridges, hosted extensions, web mode and process
 monitoring are rejected. Builtin helpers require an explicit audited producer
 lifecycle; unsupported helpers receive a compilation diagnostic.
 
+Functions loaded through `include` or `require` cannot be exported or reached
+from an export, even with an unconditional include. The compiler rejects these
+include-selected function variants because PHP extension output does not execute
+the source program's top-level include activation. Declare exported functions
+and their helpers in the entry source file.
+
 ## Verification
 
 The [example](../../examples/php-extension/main.php) contains integer, string,

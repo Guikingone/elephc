@@ -75,6 +75,12 @@ fn collect_mode(
     php: bool,
 ) -> Result<HashMap<String, ExportedFunction>, CompileError> {
     let mut exports = HashMap::new();
+    let include_variants = program.iter().filter_map(|stmt| {
+        let StmtKind::FunctionVariantGroup { name, variants } = &stmt.kind else {
+            return None;
+        };
+        Some(variants.iter().map(move |variant| (crate::names::php_symbol_key(variant), name)))
+    }).flatten().collect::<HashMap<_, _>>();
     let mut public_symbols = lifecycle_symbols()
         .into_iter()
         .map(|symbol| (symbol.to_string(), "cdylib lifecycle ABI".to_string()))
@@ -85,6 +91,13 @@ fn collect_mode(
         };
         if !has_export_attribute(stmt) {
             continue;
+        }
+        if php {
+            if let Some(public_name) = include_variants.get(&crate::names::php_symbol_key(name)) {
+                return Err(CompileError::new(stmt.span, &format!(
+                    "PHP export '{public_name}' is an include-selected function variant; --emit phpext does not execute top-level include activation"
+                )));
+            }
         }
         let sig = functions.get(name).ok_or_else(|| {
             CompileError::new(

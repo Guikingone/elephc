@@ -117,51 +117,63 @@ fn phpext_validation_rejects_unhosted_runtime_state() {
 #[test]
 fn phpext_validation_rejects_include_selected_function_variants() {
     let project = Project::new();
-    fs::write(
-        project.0.join("a.php"),
-        "<?php function helper(): int { return 1; }",
-    )
-    .unwrap();
-    fs::write(
-        project.0.join("b.php"),
-        "<?php function helper(): int { return 2; }",
-    )
-    .unwrap();
     let source = project.0.join("variants.php");
-    fs::write(
-        &source,
-        "<?php if ($argc > 5) { require __DIR__ . '/a.php'; } else { require __DIR__ . '/b.php'; } #[Export] function php_variant(): int { return helper(); }",
-    )
-    .unwrap();
-
-    for mode in [Some("--check"), Some("--emit-ir"), None] {
-        let mut command = Command::new(compiler_binary());
-        command.args(["--emit", "phpext"]);
-        if let Some(mode) = mode {
-            command.arg(mode);
+    for (included, main, expected) in [
+        (
+            "function helper(): int { return 1; }",
+            "if ($argc > 5) { require __DIR__ . '/a.php'; } else { require __DIR__ . '/b.php'; } #[Export] function php_variant(): int { return helper(); }",
+            "include-selected function variant 'helper'",
+        ),
+        (
+            "#[Export] function php_inner(): int { return 7; }",
+            "require __DIR__ . '/a.php';",
+            "PHP export 'php_inner' is an include-selected function variant",
+        ),
+        (
+            "#[Export] function php_inner(): int { return 7; }",
+            "if ($argc > 5) { require __DIR__ . '/a.php'; } else { require __DIR__ . '/b.php'; }",
+            "PHP export 'php_inner' is an include-selected function variant",
+        ),
+        (
+            "#[Export] function php_inner($value) { return $value; }",
+            "require __DIR__ . '/a.php';",
+            "PHP export 'php_inner' is an include-selected function variant",
+        ),
+    ] {
+        for file in ["a.php", "b.php"] {
+            fs::write(project.0.join(file), format!("<?php {included}")).unwrap();
         }
-        let output = command
-            .arg(&source)
-            .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
-            .output()
-            .unwrap();
-        let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !output.status.success(),
-            "{mode:?} accepted an include-selected function variant"
-        );
-        assert!(
-            diagnostic.contains("include-selected function variant 'helper'"),
-            "{mode:?}: {diagnostic}"
-        );
-        assert!(
-            diagnostic.contains("does not execute top-level include activation"),
-            "{mode:?}: {diagnostic}"
-        );
-        assert!(
-            !diagnostic.contains("query php-config"),
-            "{mode:?}: {diagnostic}"
-        );
+        fs::write(&source, format!("<?php {main}")).unwrap();
+        for mode in [Some("--check"), Some("--emit-ir"), None] {
+            let mut command = Command::new(compiler_binary());
+            command.args(["--emit", "phpext"]);
+            if let Some(mode) = mode {
+                command.arg(mode);
+            }
+            let output = command
+                .arg(&source)
+                .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
+                .output()
+                .unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success(),
+                "{mode:?} accepted an include-selected function variant"
+            );
+            assert!(diagnostic.contains(expected), "{mode:?}: {diagnostic}");
+            assert!(
+                !diagnostic.contains("__elephc_include_variant_"),
+                "{mode:?}: {diagnostic}"
+            );
+            assert!(
+                diagnostic.contains("does not execute top-level include activation"),
+                "{mode:?}: {diagnostic}"
+            );
+            assert!(
+                !diagnostic.contains("query php-config"),
+                "{mode:?}: {diagnostic}"
+            );
+        }
     }
 }
 
