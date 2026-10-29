@@ -15,6 +15,57 @@ families, and executable linking dead-strips unreachable helpers, so the final
 binary contains only the required subset. They remain part of that binary
 rather than an external shared dependency.
 
+## PHP extension producer runtime
+
+`--emit phpext` emits a distinct hosted runtime profile through
+`generate_phpext_runtime()`. Its output and warning helpers call the C adapter
+under `src/phpext/`, and native stack/allocation failures escape to an invocation
+boundary before a host PHP exception is raised. It bypasses the standalone
+runtime object cache so these helpers cannot be reused by executable output.
+
+`src/phpext/state.rs` places writable native storage into initialized data and a
+sparse zero-filled range. MINIT retains initialized bytes. RINIT activates the
+request; its first exported call lazily allocates an independent snapshot. The
+adapter exchanges both ranges at stable native addresses under a module
+mutex. PHP output/error callbacks run with the image parked and the lock released,
+allowing reentry and concurrent host requests. RSHUTDOWN prevents new entries
+but retains state for callbacks that another module or late Fiber destruction
+can still resume. The post-deactivate hook frees request storage after Zend
+blocks Fiber switching; MSHUTDOWN frees module storage. The initial producer
+capability policy rejects runtime families whose lifecycle has not been audited
+for this profile.
+
+When a native `finally` replaces a host callback exception, the hosted runtime
+pins the native replacement until the adapter can splice the host object at its
+recorded native chain tail. Each export has a separate pin range, so nested
+exports cannot sweep an outer call's owners. A stale-owner sweep reclaims settled
+events before enforcing the shared limit of 64 simultaneously live replacement
+pins across the active synchronous export stack. Reusing one object for multiple
+replacement events consumes one pin per event until those events settle. Catch
+and discard notifications walk the full native `previous` chain so a wrapper
+around the replacement settles the same host predecessor. Discard notifications
+retire the displaced host object at the next safe Zend boundary only when the
+discarded native chain has no remaining non-pin owner. Retained replacements
+detach and preserve their host predecessors. Stable per-call native identities
+also let materialization drop a host predecessor whose chain already contains
+the same replacement, reproducing Zend's cycle rule without comparing copied
+Zend-object addresses.
+
+Host callback exceptions nested inside an already-active native `finally` use a
+separate adapter-owned stack instead of immediately chaining through
+`EG(exception)`. Each entry keeps its native-copy list, chain anchor and active
+replacement record. A finally crossing commits an entry only when the pending
+host marker or native replacement chain identifies that level. A deferred
+discard removes every crossed entry with the newest escape, then activates the
+next uncrossed level; ordinary settlement restores exactly one entry. Nested
+exports also keep the parent callback's saved `EG(prev_exception)` private until
+that callback returns to the adapter.
+
+The actual Zend ABI comes from the selected PHP SDK. The producer reuses neutral
+`elephc-zend` value-layout facts and native zval transport helpers; the replacement
+engine is never linked. See [PHP extensions](../beyond-php/phpext.md) for the
+supported surface, snapshot costs and verification matrix.
+
 ## Eval execution paths
 
 `eval()` is an optional hybrid boundary rather than part of the ordinary
@@ -1723,14 +1774,14 @@ Compiled **executables** dead-strip unreachable runtime helpers at link time. On
 
 The runtime can also be emitted in **position-independent mode** for `--emit cdylib` builds: the emitter's `pic_data_refs` flag makes the `abi::symbols` helpers route every global data reference through the GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on AArch64) instead of direct PC-relative addressing. A separate `cdylib_boundary` flag controls exception activations and recoverable runtime exits, so those semantics no longer depend implicitly on PIC. Every internal ELF global receives `.hidden`; Mach-O uses `.private_extern`. The PIC and non-PIC variants produce different assembly text, so they cache as separate runtime objects.
 
-The cdylib boundary also makes recoverable unwinding explicit. Each cdylib user function publishes an exception-activation record that links the current frame to its generated cleanup callback. If an exception escapes any export, the existing Throwable machinery walks those records, releases function-owned values, and returns through the boundary handler. Heap and concat allocation exhaustion use the same active boundary to report `ELEPHC_STATUS_ALLOCATION_FAILURE`; other shared `emit_exit` paths become `ELEPHC_STATUS_RUNTIME_FAILURE` while a boundary is active, and executable fatal paths remain unchanged. Scalar wrappers preserve their original return signatures and expose the recorded result through `elephc_last_status`; owned-string wrappers preserve any fixed supported input layout, return status directly, copy successful bytes into independently owned runtime-heap storage, and transfer that buffer to the C caller for `elephc_free`. Boundary depth is counted, and each wrapper saves/restores `_concat_off`, so nested teardown cannot disable or corrupt its caller's boundary state. Diagnostic presence is stored separately from diagnostic length, so an empty Throwable message remains distinguishable from “no error”. See [The Codegen](the-codegen.md) and [Shared Libraries](../beyond-php/cdylib.md).
+The cdylib boundary also makes recoverable unwinding explicit. Each cdylib user function publishes an exception-activation record that links the current frame to its generated cleanup callback. If an exception escapes any export, the existing Throwable machinery walks those records, releases function-owned values, and returns through the boundary handler. Heap and concat allocation exhaustion use the same active boundary to report `ELEPHC_STATUS_ALLOCATION_FAILURE`; other shared `emit_exit` paths become `ELEPHC_STATUS_RUNTIME_FAILURE` while a boundary is active, and executable fatal paths remain unchanged. Scalar wrappers preserve their original return signatures and expose the recorded result through `elephc_last_status`; owned-string wrappers preserve any fixed supported input layout, return status directly, copy successful bytes into independently owned runtime-heap storage, and transfer that buffer to the C caller for `elephc_free`. Boundary depth is counted, and each wrapper saves/restores `_concat_off`. Nested entries set that cursor to the linked runtime's `_concat_capacity`, disabling scratch writes while an outer call may still own live views. The capacity metadata and runtime helper bounds share one sizing function, including heap-size limits, so nested teardown cannot disable or corrupt its caller's boundary state. Diagnostic presence is stored separately from diagnostic length, so an empty Throwable message remains distinguishable from “no error”. See [The Codegen](the-codegen.md) and [Shared Libraries](../beyond-php/cdylib.md).
 
 ## Runtime data
 
 The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` emits shared buffers, error strings, and lookup tables; `user.rs` emits per-program globals, statics, enum-case slots, and metadata tables; `instanceof.rs` formats dynamic `instanceof` lookup names. Together they declare global buffers using `.comm` and static data tables:
 
 ```asm
-.comm _concat_buf, <heap-size> ; heap-sized string buffer (default 8 MB)
+.comm _concat_buf, <heap-size> ; heap-sized string buffer (at least 64 KiB)
 .comm _concat_off, 8         ; current offset into string buffer
 .comm _print_r_mode, 8       ; print_r($v, true) return-mode capture flag
 .comm _print_r_off, 8        ; print_r capture write offset
