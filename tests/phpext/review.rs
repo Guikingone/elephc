@@ -190,6 +190,29 @@ echo 'ok';
     assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
+/// Invalid dynamic instanceof targets raise a host Error without terminating PHP.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn dynamic_instanceof_fatal_becomes_host_error() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("instanceof_fatal", r#"<?php
+#[Export] function php_is_instance(mixed $value, mixed $class): bool {
+    return $value instanceof $class;
+}
+#[Export] function php_instanceof_recover(int $value): int { return $value + 1; }
+"#);
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+try { php_is_instance(1, 2); exit(10); }
+catch (Error $error) {}
+if (php_instanceof_recover(41) !== 42) { exit(11); }
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 /// Compares independently executed source and native functions, preserving status and diagnostics.
 fn compare(source: &str, driver: &str) {
     compare_with_options(source, driver, &["--heap-size=524288"]);
