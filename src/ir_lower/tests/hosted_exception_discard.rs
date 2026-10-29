@@ -206,10 +206,19 @@ function chain_pending(array $value): void {
         let callback = hosted
             .find("elephc_php_finally_chain")
             .expect("the hosted finally-chain notification is missing");
+        let pending_callback = hosted
+            .find("elephc_php_finally_chain_pending")
+            .expect("the hosted pending-chain notification is missing");
+        let pending_walk = hosted[callback..pending_callback]
+            .find("__rt_throwable_previous")
+            .expect("the hosted pending exception chain walk is missing");
         let chain = hosted[callback..]
             .find("__rt_exception_chain")
             .expect("the native exception chain call is missing");
-        assert!(chain > 0, "{target}: the hosted callback must precede native chaining");
+        assert!(
+            pending_walk > 0 && pending_callback > callback && chain > pending_callback - callback,
+            "{target}: the adapter must inspect the pending chain before native chaining"
+        );
         assert!(
             !emit(Emit::Cdylib).contains("elephc_php_finally_chain"),
             "{target}: an ordinary cdylib references the PHP adapter"

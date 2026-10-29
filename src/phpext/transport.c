@@ -21,6 +21,7 @@ typedef struct ep_host_predecessor {
     size_t contained_root_identity_count;
     bool detach_pending;
     bool discard_pending;
+    bool activation_pending;
     zval exception;
 } ep_host_predecessor;
 
@@ -89,6 +90,7 @@ typedef struct ep_call {
     bool host_exception;
     bool host_bailout;
     bool ambient_prev_exception_stashed;
+    bool finally_chain_matched;
     size_t discarded_host_exception_depth;
     bool discard_chain_transient;
     zend_string *warning;

@@ -53,8 +53,13 @@ Zend-object addresses.
 
 Host callback exceptions nested inside an already-active native `finally` use a
 separate adapter-owned stack instead of immediately chaining through
-`EG(exception)`. Settling the newest escape restores one outer entry. Only an
-escaping newest exception consumes the stack into its Zend `previous` chain.
+`EG(exception)`. Each entry keeps its native-copy list, chain anchor and active
+replacement record. A finally crossing commits an entry only when the pending
+host marker or native replacement chain identifies that level. A deferred
+discard removes every crossed entry with the newest escape, then activates the
+next uncrossed level; ordinary settlement restores exactly one entry. Nested
+exports also keep the parent callback's saved `EG(prev_exception)` private until
+that callback returns to the adapter.
 
 The actual Zend ABI comes from the selected PHP SDK. The producer reuses neutral
 `elephc-zend` value-layout facts and native zval transport helpers; the replacement

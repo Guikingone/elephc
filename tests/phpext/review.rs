@@ -968,6 +968,119 @@ foreach (['php_cross_then_throw', 'php_cross_then_host', 'php_cross_catch'] as $
 "#);
 }
 
+/// Finally crossings consume parked host levels only when their pending chain owns that level.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn finally_crossings_match_their_pending_exception_chain() {
+    compare(r#"<?php
+#[Export] function php_unrelated_pending_catch(array $value): void {
+    try { echo $value['h1']; }
+    finally {
+        try {
+            try { throw new RuntimeException('A'); }
+            finally {
+                try { echo $value['h2']; }
+                finally { throw new RuntimeException('N'); }
+            }
+        } catch (RuntimeException $error) {}
+        echo 'after|';
+    }
+}
+function php_unrelated_pending_return_inner(array $value): int {
+    try {
+        try { throw new RuntimeException('A'); }
+        finally { echo $value['h2']; }
+    } finally { return 1; }
+}
+#[Export] function php_unrelated_pending_return(array $value): void {
+    try { echo $value['h1']; }
+    finally {
+        php_unrelated_pending_return_inner($value);
+        echo 'after|';
+    }
+}
+#[Export] function php_related_pending_discard(array $value): int {
+    try {
+        try {
+            try { echo $value['h1']; }
+            finally { throw new RuntimeException('N'); }
+        } finally { echo $value['h2']; }
+    } finally { return 1; }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+foreach (['php_unrelated_pending_catch', 'php_unrelated_pending_return'] as $function) {
+    $host = 0;
+    set_error_handler(function () use (&$host) {
+        throw new LogicException('host' . ++$host);
+    });
+    try { $function([]); }
+    catch (Throwable $error) { $dump($error); }
+    restore_error_handler();
+}
+$host = 0;
+set_error_handler(function () use (&$host) {
+    throw new LogicException('host' . ++$host);
+});
+var_dump(php_related_pending_discard([]));
+restore_error_handler();
+"#);
+}
+
+/// New native replacements wait for caught predecessors to detach their host exception.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn replacement_registration_preserves_pending_detaches() {
+    compare(r#"<?php
+#[Export] function php_replacement_after_named_catch(array $value): void {
+    try { echo $value['h1']; }
+    finally {
+        try {
+            try { echo $value['h2']; }
+            finally { throw new RuntimeException('N'); }
+        } catch (RuntimeException $error) {}
+        throw new TypeError('M');
+    }
+}
+#[Export] function php_replacement_after_variableless_catch(array $value): void {
+    try { echo $value['h1']; }
+    finally {
+        try {
+            try { echo $value['h2']; }
+            finally { throw new RuntimeException('N'); }
+        } catch (RuntimeException) {}
+        throw new TypeError('M');
+    }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+foreach ([
+    'php_replacement_after_named_catch',
+    'php_replacement_after_variableless_catch',
+] as $function) {
+    $host = 0;
+    set_error_handler(function () use (&$host) {
+        throw new LogicException('host' . ++$host);
+    });
+    try { $function([]); }
+    catch (Throwable $error) { $dump($error); }
+    restore_error_handler();
+}
+"#);
+}
+
 /// Settling a nested host escape restores the native-copy state of its outer host level.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

@@ -243,6 +243,69 @@ static void ep_chain_parked_host_exceptions(ep_call *call)
     call->host_exception = EG(exception) != NULL;
 }
 
+/* Return the newest replacement registered after any older record began settlement. */
+static ep_host_predecessor *ep_logical_host_predecessor(ep_call *call)
+{
+    ep_host_predecessor *selected = call->active_host_predecessor;
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *candidate = &call->host_predecessors[i];
+        if (candidate->activation_pending
+            && (!selected || candidate->sequence > selected->sequence)) {
+            selected = candidate;
+        }
+    }
+    return selected;
+}
+
+/* Make the oldest queued replacement active after the preceding record settles. */
+static void ep_activate_pending_host_predecessor(ep_call *call)
+{
+    if (call->active_host_predecessor) { return; }
+    ep_host_predecessor *selected = NULL;
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *candidate = &call->host_predecessors[i];
+        if (candidate->activation_pending
+            && (!selected || candidate->sequence < selected->sequence)) {
+            selected = candidate;
+        }
+    }
+    if (selected) {
+        selected->activation_pending = false;
+        call->active_host_predecessor = selected;
+    }
+}
+
+/* Advance native metadata to the parked level that resumes after a deferred host discard. */
+static void ep_defer_host_exception_discard(ep_call *call)
+{
+    if (!call->host_exception) { return; }
+    ep_parked_host_exception *resumed = call->parked_host_exceptions;
+    for (size_t skip = call->discarded_host_exception_depth;
+        skip && resumed; skip--) {
+        resumed = resumed->next;
+    }
+    call->discarded_host_exception_depth++;
+    while (resumed && resumed->crossed_finally) {
+        call->discarded_host_exception_depth++;
+        resumed = resumed->next;
+    }
+    call->previous_exceptions = NULL;
+    call->previous_exceptions_tail = NULL;
+    call->previous_exception_anchor = NULL;
+    call->active_host_predecessor = NULL;
+    if (resumed) {
+        call->previous_exceptions = resumed->previous_exceptions;
+        call->previous_exceptions_tail = resumed->previous_exceptions_tail;
+        call->previous_exception_anchor = resumed->previous_exception_anchor;
+        call->active_host_predecessor = resumed->active_host_predecessor;
+        resumed->previous_exceptions = NULL;
+        resumed->previous_exceptions_tail = NULL;
+        resumed->previous_exception_anchor = NULL;
+        resumed->active_host_predecessor = NULL;
+        resumed->state_activated = true;
+    }
+}
+
 /* Keep Zend's caller-owned saved slot outside this adapter's save/restore pair. */
 static void ep_stash_ambient_prev_exception(ep_call *call)
 {
@@ -392,6 +455,7 @@ static void ep_reset_host_predecessor(ep_host_predecessor *predecessor)
     predecessor->contained_root_identity_count = 0;
     predecessor->detach_pending = false;
     predecessor->discard_pending = false;
+    predecessor->activation_pending = false;
 }
 
 /* Forget every replacement whose native root is now owned only by adapter pins. */
@@ -433,11 +497,15 @@ const uintptr_t *elephc_php_stale_finally_replacement(
                 call->retired_host_exceptions = node;
                 ZVAL_UNDEF(&predecessor->exception);
             }
-            if (call->active_host_predecessor == predecessor) {
+            bool active = call->active_host_predecessor == predecessor;
+            if (active && (predecessor->detach_pending || predecessor->discard_pending)) {
+                ep_defer_host_exception_discard(call);
+            } else if (active) {
                 call->active_host_predecessor = NULL;
             }
             ep_reset_host_predecessor(predecessor);
         }
+        ep_activate_pending_host_predecessor(call);
         return root;
     }
     return NULL;
@@ -495,6 +563,7 @@ static void ep_clear_discarded_host_predecessors(ep_call *call)
             call->previous_exception_anchor = NULL;
             ep_restore_parked_host_exception(call);
             call->host_exception = EG(exception) != NULL;
+            ep_activate_pending_host_predecessor(call);
         }
         if (!Z_ISUNDEF(stored)) { zval_ptr_dtor(&stored); }
     }
@@ -503,27 +572,32 @@ static void ep_clear_discarded_host_predecessors(ep_call *call)
 /* Move a caught replacement's host predecessor out of EG(exception) at a safe Zend boundary. */
 static void ep_detach_host_predecessor(ep_call *call, bool force)
 {
-    ep_host_predecessor *predecessor = call->active_host_predecessor;
-    if (!predecessor || (!force && !predecessor->detach_pending)
-        || !call->host_exception || !EG(exception) || ep_is_host_exit()) {
-        return;
+    bool force_current = force;
+    while (call->active_host_predecessor) {
+        ep_host_predecessor *predecessor = call->active_host_predecessor;
+        if ((!force_current && !predecessor->detach_pending)
+            || !call->host_exception || !EG(exception) || ep_is_host_exit()) {
+            return;
+        }
+        for (ep_exception_copy *copy = call->previous_exceptions; copy; copy = copy->next) {
+            ep_insert_previous(call, copy, predecessor);
+        }
+        call->previous_exceptions = NULL;
+        call->previous_exceptions_tail = NULL;
+        call->previous_exception_anchor = NULL;
+        if (!Z_ISUNDEF(predecessor->exception)) {
+            zval_ptr_dtor(&predecessor->exception);
+        }
+        ZVAL_OBJ(&predecessor->exception, EG(exception));
+        EG(exception) = NULL;
+        predecessor->detach_pending = false;
+        call->active_host_predecessor = NULL;
+        call->discarded_host_exception_depth = 0;
+        ep_restore_parked_host_exception(call);
+        call->host_exception = EG(exception) != NULL;
+        ep_activate_pending_host_predecessor(call);
+        force_current = false;
     }
-    for (ep_exception_copy *copy = call->previous_exceptions; copy; copy = copy->next) {
-        ep_insert_previous(call, copy, predecessor);
-    }
-    call->previous_exceptions = NULL;
-    call->previous_exceptions_tail = NULL;
-    call->previous_exception_anchor = NULL;
-    if (!Z_ISUNDEF(predecessor->exception)) {
-        zval_ptr_dtor(&predecessor->exception);
-    }
-    ZVAL_OBJ(&predecessor->exception, EG(exception));
-    EG(exception) = NULL;
-    predecessor->detach_pending = false;
-    call->active_host_predecessor = NULL;
-    call->discarded_host_exception_depth = 0;
-    ep_restore_parked_host_exception(call);
-    call->host_exception = EG(exception) != NULL;
 }
 
 /* Park the native image around a guarded Zend callback, including nested module calls. */
@@ -638,33 +712,7 @@ void elephc_php_discard_exception(const uintptr_t *object)
     ep_call *call = ep_current;
     if (!call || call->host_bailout) { return; }
     if (!object) {
-        if (call->host_exception) {
-            ep_parked_host_exception *resumed = call->parked_host_exceptions;
-            for (size_t skip = call->discarded_host_exception_depth;
-                skip && resumed; skip--) {
-                resumed = resumed->next;
-            }
-            call->discarded_host_exception_depth++;
-            while (resumed && resumed->crossed_finally) {
-                call->discarded_host_exception_depth++;
-                resumed = resumed->next;
-            }
-            call->previous_exceptions = NULL;
-            call->previous_exceptions_tail = NULL;
-            call->previous_exception_anchor = NULL;
-            call->active_host_predecessor = NULL;
-            if (resumed) {
-                call->previous_exceptions = resumed->previous_exceptions;
-                call->previous_exceptions_tail = resumed->previous_exceptions_tail;
-                call->previous_exception_anchor = resumed->previous_exception_anchor;
-                call->active_host_predecessor = resumed->active_host_predecessor;
-                resumed->previous_exceptions = NULL;
-                resumed->previous_exceptions_tail = NULL;
-                resumed->previous_exception_anchor = NULL;
-                resumed->active_host_predecessor = NULL;
-                resumed->state_activated = true;
-            }
-        }
+        ep_defer_host_exception_discard(call);
         return;
     }
     size_t pins = ep_replacement_pin_count(object);
@@ -713,29 +761,70 @@ void elephc_php_finally_replacement(const uintptr_t *object, const uintptr_t *ta
     predecessor->contained_root_identity_count = 0;
     predecessor->detach_pending = false;
     predecessor->discard_pending = false;
+    predecessor->activation_pending = false;
     ZVAL_UNDEF(&predecessor->exception);
-    call->active_host_predecessor = predecessor;
+    ep_host_predecessor *logical = ep_logical_host_predecessor(call);
+    bool activation_pending = call->active_host_predecessor
+        && (call->active_host_predecessor->detach_pending
+            || call->active_host_predecessor->discard_pending
+            || logical != call->active_host_predecessor);
+    if (activation_pending) {
+        predecessor->activation_pending = true;
+    } else {
+        call->active_host_predecessor = predecessor;
+    }
 }
 
-/* Mark one older host level once the current escape crosses that level's finally. */
-void elephc_php_finally_chain(const uintptr_t *replacement)
+/* Select the next older host level that has not already joined the escaping chain. */
+static ep_parked_host_exception *ep_finally_chain_candidate(ep_call *call)
 {
-    ep_call *call = ep_current;
-    if (!call || call->host_bailout || call->error) { return; }
-    bool continued_replacement = replacement && call->active_host_predecessor
-        && call->active_host_predecessor->root == replacement;
-    if (replacement && !continued_replacement) { return; }
     ep_parked_host_exception *parked = call->parked_host_exceptions;
     for (size_t skip = call->discarded_host_exception_depth;
         skip && parked; skip--) {
         parked = parked->next;
     }
-    for (;
-        parked; parked = parked->next) {
-        if (!parked->crossed_finally) {
-            parked->crossed_finally = true;
-            return;
-        }
+    while (parked && parked->crossed_finally) { parked = parked->next; }
+    return parked;
+}
+
+/* Match a native pending-chain node to the replacement owned by the parked level. */
+static void ep_match_finally_chain_pending(ep_call *call, const uintptr_t *pending)
+{
+    if (call->finally_chain_matched || !pending) { return; }
+    ep_parked_host_exception *parked = ep_finally_chain_candidate(call);
+    if (parked && parked->active_host_predecessor
+        && parked->active_host_predecessor->root == pending) {
+        parked->crossed_finally = true;
+        call->finally_chain_matched = true;
+    }
+}
+
+/* Begin one finally crossing with both the escaping and pending native identities. */
+void elephc_php_finally_chain(const uintptr_t *replacement, const uintptr_t *pending)
+{
+    ep_call *call = ep_current;
+    if (!call || call->host_bailout || call->error) { return; }
+    call->finally_chain_matched = false;
+    if (pending) {
+        ep_match_finally_chain_pending(call, pending);
+        return;
+    }
+    ep_host_predecessor *logical = ep_logical_host_predecessor(call);
+    bool continued_replacement = replacement && logical && logical->root == replacement;
+    if (replacement && !continued_replacement) { return; }
+    ep_parked_host_exception *parked = ep_finally_chain_candidate(call);
+    if (parked) {
+        parked->crossed_finally = true;
+        call->finally_chain_matched = true;
+    }
+}
+
+/* Continue matching the remaining native pending chain without crossing twice. */
+void elephc_php_finally_chain_pending(const uintptr_t *pending)
+{
+    ep_call *call = ep_current;
+    if (call && !call->host_bailout && !call->error) {
+        ep_match_finally_chain_pending(call, pending);
     }
 }
 
@@ -743,10 +832,13 @@ void elephc_php_finally_chain(const uintptr_t *replacement)
 void elephc_php_catch_host_replacement(const uintptr_t *object)
 {
     ep_call *call = ep_current;
-    if (object && call && call->active_host_predecessor
-        && call->active_host_predecessor->root == object
-        && call->host_exception && !call->host_bailout) {
-        call->active_host_predecessor->detach_pending = true;
+    if (!object || !call || !call->host_exception || call->host_bailout) { return; }
+    for (size_t i = 0; i < call->host_predecessor_count; i++) {
+        ep_host_predecessor *predecessor = &call->host_predecessors[i];
+        if (predecessor->root == object) {
+            predecessor->detach_pending = true;
+            return;
+        }
     }
 }
 

@@ -106,16 +106,35 @@ fn lower_exception_finally_chain(
     }
     if ctx.emitter.phpext_output {
         let replacement = expect_operand(inst, 0)?;
+        let pending = expect_operand(inst, 1)?;
         let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(pending)?;
+        abi::emit_push_reg(ctx.emitter, result);
         ctx.load_value_to_result(replacement)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        let replacement_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let pending_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, replacement_arg, 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, pending_arg, 16);
+        ctx.emitter.bl_c("elephc_php_finally_chain");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        let visit = ctx.next_label("finally_chain_pending_visit");
+        let done = ctx.next_label("finally_chain_pending_done");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        ctx.emitter.label(&visit);
         abi::emit_push_reg(ctx.emitter, result);
         abi::emit_reg_move(
             ctx.emitter,
             abi::int_arg_reg_name(ctx.emitter.target, 0),
             result,
         );
-        ctx.emitter.bl_c("elephc_php_finally_chain");
+        ctx.emitter.bl_c("elephc_php_finally_chain_pending");
         abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
+        ctx.emitter.label(&done);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
     }
     lower_exception_chain(ctx, inst)
 }
