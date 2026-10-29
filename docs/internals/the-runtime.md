@@ -35,6 +35,15 @@ blocks Fiber switching; MSHUTDOWN frees module storage. The initial producer
 capability policy rejects runtime families whose lifecycle has not been audited
 for this profile.
 
+When a native `finally` replaces a host callback exception, the hosted runtime
+pins the native replacement until the adapter can splice the host object at its
+recorded native chain tail. Each export has a separate pin range, so nested
+exports cannot sweep an outer call's owners. A stale-owner sweep reclaims settled
+roots before enforcing the shared limit of 64 simultaneously live replacement
+pins across the active synchronous export stack. Catch and discard notifications
+walk the full native `previous` chain so a wrapper around the replacement settles
+the same host predecessor.
+
 The actual Zend ABI comes from the selected PHP SDK. The producer reuses neutral
 `elephc-zend` value-layout facts and native zval transport helpers; the replacement
 engine is never linked. See [PHP extensions](../beyond-php/phpext.md) for the

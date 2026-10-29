@@ -450,6 +450,10 @@ fn replacement_records_follow_live_native_chains() {
     catch (RuntimeException $error) {}
     try { echo $value['second']; } finally { throw $saved; }
 }
+#[Export] function php_replacement_with_intrinsic_previous(array $value): void {
+    try { echo $value['missing']; }
+    finally { throw new RuntimeException('native', 0, new Exception('intrinsic')); }
+}
 "#, r#"
 $dump = function (Throwable $error): void {
     while ($error) {
@@ -466,6 +470,9 @@ try { php_catch_wrapped_replacement([]); }
 catch (Throwable $error) { $dump($error); }
 $host = 0;
 try { php_reuse_replacement_tail([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_replacement_with_intrinsic_previous([]); }
 catch (Throwable $error) { $dump($error); }
 "#);
 }
@@ -678,17 +685,37 @@ fn nested_finally_returns_discard_host_exceptions() {
 function php_discard_helper(array $value): int {
     try { echo $value['missing']; } finally { return 1; }
 }
+function php_discard_replacement(array $value): int {
+    try {
+        try { echo $value['first']; }
+        finally { throw new RuntimeException('native'); }
+    } finally { return 1; }
+}
 #[Export] function php_after_discard(array $value): void {
     php_discard_helper($value);
     echo 'after|';
     throw new RuntimeException('native');
 }
+#[Export] function php_after_replacement_discard(array $value): mixed {
+    php_discard_replacement($value);
+    return $value['second'];
+}
 "#, r#"
-set_error_handler(function () { throw new LogicException('host'); });
+$host = 0;
+set_error_handler(function () use (&$host) { throw new DomainException('host' . ++$host); });
 try { php_after_discard([]); }
 catch (Throwable $error) {
     echo get_class($error), ':', $error->getMessage(), ':',
         $error->getPrevious() ? get_class($error->getPrevious()) : 'none';
+}
+$host = 0;
+try { php_after_replacement_discard([]); }
+catch (Throwable $error) {
+    echo '|';
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
 }
 "#);
 }

@@ -39,6 +39,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
         emitter.instruction("cbnz x1, __rt_exception_chain_has_pending");       // ordinary native pending owners use the normal chain path
         emitter.instruction("cbz x0, __rt_exception_chain_return");             // only a native replacement can own a displaced host escape
         emit_aarch64_replacement_sweep(emitter);
+        emitter.instruction("ldr x0, [sp]");                                    // recover the replacement clobbered by the stale-owner callback
         abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
         emitter.instruction(&format!("cmp x9, #{}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound simultaneously live replacement pins
         emitter.instruction("b.hs __rt_exception_chain_replacement_overflow");
@@ -145,6 +146,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
         emitter.instruction("test rax, rax");                                   // only a real native replacement needs retained identity
         emitter.instruction("jz __rt_exception_chain_return");
         emit_x86_64_replacement_sweep(emitter);
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                   // recover the replacement clobbered by the stale-owner callback
         abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
         emitter.instruction(&format!("cmp r10, {}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound simultaneously live replacement pins
         emitter.instruction("jae __rt_exception_chain_replacement_overflow");
@@ -370,6 +372,7 @@ mod tests {
             let continuation = emitter.target.extern_symbol("elephc_php_exception_previous");
             let replacement = emitter.target.extern_symbol("elephc_php_finally_replacement");
             let sweep = emitter.target.extern_symbol("elephc_php_stale_finally_replacement");
+            let arch = emitter.target.arch;
             let asm = emitter.output();
             assert!(asm.contains(&callback), "{name}: {asm}");
             assert!(asm.contains(&continuation), "{name}: {asm}");
@@ -379,6 +382,16 @@ mod tests {
             assert!(asm.contains(PHPEXT_REPLACEMENT_OWNER_COUNT), "{name}: {asm}");
             assert!(asm.contains(PHPEXT_REPLACEMENT_OWNERS), "{name}: {asm}");
             assert_eq!(asm.matches("__rt_throwable_previous\n").count(), 4, "{name}: {asm}");
+            let swept = asm.find("__rt_exception_chain_replacement_swept:").unwrap();
+            let tail_walk = asm[swept..].find("__rt_throwable_previous").unwrap() + swept;
+            let recovered_root = &asm[swept..tail_walk];
+            match arch {
+                Arch::AArch64 => assert!(recovered_root.contains("ldr x0, [sp]"), "{name}: {asm}"),
+                Arch::X86_64 => assert!(
+                    recovered_root.contains("mov rax, QWORD PTR [rbp - 8]"),
+                    "{name}: {asm}"
+                ),
+            }
             assert!(asm.find("__rt_incref").unwrap() < asm.find(&replacement).unwrap(),
                 "{name}: {asm}");
             assert!(asm.find(&callback).unwrap() < asm.find("__rt_exception_chain_release:").unwrap(),

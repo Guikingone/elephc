@@ -306,11 +306,16 @@ void elephc_php_result(const zval *value)
     }
 }
 
-/* Native code can only flag the discard while it owns the runtime lock. */
+/* Native code flags either the null host marker or a discarded replacement chain node. */
 void elephc_php_discard_exception(const uintptr_t *object)
 {
-    if (!object && ep_current && ep_current->host_exception && !ep_current->host_bailout) {
-        ep_current->discarded_host_exception = true;
+    ep_call *call = ep_current;
+    if (!call || !call->host_exception || call->host_bailout) { return; }
+    if (!object) {
+        call->discarded_host_exception = true;
+    } else if (call->active_host_predecessor
+        && call->active_host_predecessor->root == object) {
+        call->active_host_predecessor->detach_pending = true;
     }
 }
 

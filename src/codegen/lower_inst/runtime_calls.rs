@@ -93,7 +93,7 @@ pub(super) fn lower(
     }
 }
 
-/// Tells the PHP adapter when a native `finally` jump discarded its null host escape.
+/// Tells the PHP adapter when a native `finally` jump discarded a host escape or replacement.
 fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(
@@ -104,12 +104,18 @@ fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         let discarded = expect_operand(inst, 0)?;
         let result = abi::int_result_reg(ctx.emitter);
         ctx.load_value_to_result(discarded)?;
+        let visit = ctx.next_label("discard_host_replacement_visit");
+        ctx.emitter.label(&visit);
+        abi::emit_push_reg(ctx.emitter, result);
         abi::emit_reg_move(
             ctx.emitter,
             abi::int_arg_reg_name(ctx.emitter.target, 0),
             result,
         );
         ctx.emitter.bl_c("elephc_php_discard_exception");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
     }
     Ok(())
 }

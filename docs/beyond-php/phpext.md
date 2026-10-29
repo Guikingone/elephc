@@ -152,6 +152,12 @@ running, however, its caught Throwable cannot expose the host object through
 `getPrevious()`: host objects are not imported into the native object heap. The
 chain is restored when it crosses back into Zend.
 
+One active synchronous export stack can retain at most 64 simultaneously live
+native replacement roots while preserving displaced host exceptions. Settled
+or discarded roots are reclaimed and do not consume the limit. Exceeding the
+live limit fails the invocation with an `Error` instead of retaining an
+untracked native pointer.
+
 Synchronous reentry on the same host Fiber is supported. If an error handler
 suspends a Fiber while native frames remain active, another Fiber or the main
 context cannot enter that module until the owning call finishes. Such overlap
