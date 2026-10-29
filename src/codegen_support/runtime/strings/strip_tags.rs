@@ -73,6 +73,19 @@ mod tests {
         emitter.output()
     }
 
+    /// The no-allow-list fast path copies text with a sixteen-byte block and skips
+    /// ordinary tags without entering the full state machine.
+    #[test]
+    fn strip_tags_no_allow_list_uses_the_fast_path() {
+        let arm = strip_tags_asm(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm.contains("__rt_strip_tags_fast_entry:"), "{arm}");
+        assert!(arm.contains("str q0, [x23], #16"), "{arm}");
+
+        let x64 = strip_tags_asm(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("__rt_strip_tags_fast_entry_x86:"), "{x64}");
+        assert!(x64.contains("movdqu XMMWORD PTR [rbx], xmm0"), "{x64}");
+    }
+
     /// The hot output cursor stays in a callee-saved register instead of being
     /// reloaded and stored around every retained byte.
     #[test]

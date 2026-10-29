@@ -111,6 +111,9 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 144], rax");                      // remember that XML-specific closing rules are active
     emitter.instruction("mov r12, QWORD PTR [rbp - 8]");                        // reload the subject pointer for this scan step
     emitter.instruction("mov r13, QWORD PTR [rbp - 16]");                       // reload the subject byte length for this scan step
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // is an allow-list active?
+    emitter.instruction("jne __rt_strip_tags_loop_x86");                        // the full machine handles allowed tags
+    emitter.instruction("jmp __rt_strip_tags_fast_entry_x86");                  // no allow-list uses the simple tag skipper
 
     emitter.label("__rt_strip_tags_loop_x86");
     emitter.instruction("mov r14, QWORD PTR [rbp - 96]");                       // reload the subject scan cursor for this scan step
@@ -135,6 +138,7 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emit_state3_x86(emitter);
     emit_state4_x86(emitter);
     emit_helpers_x86(emitter);
+    emit_fast_path_x86(emitter);
 
     // -- publish the retained output and restore the caller --
     emitter.label("__rt_strip_tags_done_x86");
@@ -171,6 +175,123 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     // -- refuse impossible output or workspace sizes --
     emitter.label("__rt_strip_tags_overflow_x86");
     emitter.instruction("jmp __rt_alloc_overflow");                             // abort before a wrapped reservation can under-size the output
+}
+
+/// Emits the no-allow-list fast path for x86_64. Text blocks are copied with
+/// SSE2; ordinary tags are skipped with a direct quote-aware scan. Comments, PHP
+/// tags, declarations and nested angle brackets restart the full state machine.
+fn emit_fast_path_x86(emitter: &mut Emitter) {
+    emitter.label("__rt_strip_tags_fast_entry_x86");
+    emitter.instruction("xor r14d, r14d");                                      // start at the first subject byte
+    emitter.label("__rt_strip_tags_fast_x86");
+    emitter.instruction("cmp r14, r13");                                        // has the subject ended?
+    emitter.instruction("jae __rt_strip_tags_fast_done_x86");                   // publish the retained bytes
+    emitter.instruction("movzx eax, BYTE PTR [r12 + r14]");                     // load the next subject byte
+    emitter.instruction("mov r15d, eax");                                       // carry the byte into the tag checks
+    emitter.instruction("cmp al, 60");                                          // is this an opening delimiter?
+    emitter.instruction("jne __rt_strip_tags_fast_text_block_x86");             // copy ordinary text
+    emitter.instruction("lea r9, [r14 + 1]");                                   // address the byte after '<'
+    emitter.instruction("cmp r9, r13");                                         // is the opener the final byte?
+    emitter.instruction("jae __rt_strip_tags_fast_done_x86");                   // an unterminated tag is discarded
+    emitter.instruction("movzx ecx, BYTE PTR [r12 + r9]");                      // load the byte after '<'
+    emitter.instruction("cmp cl, 32");                                          // is the opener followed by a space?
+    emitter.instruction("je __rt_strip_tags_fast_copy_lt_x86");                 // whitespace keeps '<' as text
+    emitter.instruction("cmp cl, 9");                                           // is the lookahead below the whitespace range?
+    emitter.instruction("jb __rt_strip_tags_fast_tag_prefix_x86");              // a control byte is not whitespace
+    emitter.instruction("cmp cl, 13");                                          // is the lookahead inside the whitespace range?
+    emitter.instruction("jbe __rt_strip_tags_fast_copy_lt_x86");                // tab/newline/form-feed keeps '<' as text
+    emitter.label("__rt_strip_tags_fast_tag_prefix_x86");
+    emitter.instruction("cmp cl, 33");                                          // is this a declaration or comment?
+    emitter.instruction("je __rt_strip_tags_fast_fallback_x86");                // let the full machine handle it
+    emitter.instruction("cmp cl, 37");                                          // is this an ASP tag?
+    emitter.instruction("je __rt_strip_tags_fast_fallback_x86");                // let the full machine handle it
+    emitter.instruction("cmp cl, 63");                                          // is this a PHP tag?
+    emitter.instruction("je __rt_strip_tags_fast_fallback_x86");                // let the full machine handle it
+    emitter.instruction("mov r9, r14");                                         // remember the tag opener for a fallback
+    emitter.instruction("add r14, 1");                                          // consume the opening delimiter
+    emitter.label("__rt_strip_tags_fast_tag_loop_x86");
+    emitter.instruction("cmp r14, r13");                                        // has the tag reached EOF?
+    emitter.instruction("jae __rt_strip_tags_fast_done_x86");                   // an unterminated tag is discarded
+    emitter.instruction("movzx eax, BYTE PTR [r12 + r14]");                     // load the next tag byte
+    emitter.instruction("test al, al");                                         // are embedded NUL bytes present?
+    emitter.instruction("jz __rt_strip_tags_fast_tag_next_x86");                // embedded NULs are skipped
+    emitter.instruction("cmp al, 60");                                          // is this a nested angle bracket?
+    emitter.instruction("je __rt_strip_tags_fast_restart_tag_x86");             // the full machine tracks nesting
+    emitter.instruction("cmp al, 34");                                          // is this a double quote?
+    emitter.instruction("je __rt_strip_tags_fast_quote_x86");                   // skip the quoted attribute
+    emitter.instruction("cmp al, 39");                                          // is this a single quote?
+    emitter.instruction("je __rt_strip_tags_fast_quote_x86");                   // skip the quoted attribute
+    emitter.instruction("cmp al, 62");                                          // is this the tag closer?
+    emitter.instruction("je __rt_strip_tags_fast_tag_close_x86");               // consume the complete tag
+    emitter.label("__rt_strip_tags_fast_tag_next_x86");
+    emitter.instruction("add r14, 1");                                          // consume one tag byte
+    emitter.instruction("jmp __rt_strip_tags_fast_tag_loop_x86");               // scan the next tag byte
+    emitter.label("__rt_strip_tags_fast_tag_close_x86");
+    emitter.instruction("add r14, 1");                                          // consume the closing '>'
+    emitter.instruction("jmp __rt_strip_tags_fast_x86");                        // scan the next text run
+    emitter.label("__rt_strip_tags_fast_quote_x86");
+    emitter.instruction("mov r10b, al");                                        // remember the active quote byte
+    emitter.instruction("add r14, 1");                                          // consume the opening quote
+    emitter.label("__rt_strip_tags_fast_quote_loop_x86");
+    emitter.instruction("cmp r14, r13");                                        // did the quote reach EOF?
+    emitter.instruction("jae __rt_strip_tags_fast_done_x86");                   // the unterminated tag is discarded
+    emitter.instruction("movzx eax, BYTE PTR [r12 + r14]");                     // load the next quoted byte
+    emitter.instruction("test al, al");                                         // are embedded NUL bytes present?
+    emitter.instruction("jz __rt_strip_tags_fast_quote_next_x86");              // embedded NULs are skipped
+    emitter.instruction("cmp al, r10b");                                        // is this the matching quote?
+    emitter.instruction("je __rt_strip_tags_fast_quote_end_x86");               // resume ordinary tag scanning
+    emitter.label("__rt_strip_tags_fast_quote_next_x86");
+    emitter.instruction("add r14, 1");                                          // consume one quoted byte
+    emitter.instruction("jmp __rt_strip_tags_fast_quote_loop_x86");             // scan the next quoted byte
+    emitter.label("__rt_strip_tags_fast_quote_end_x86");
+    emitter.instruction("add r14, 1");                                          // consume the closing quote
+    emitter.instruction("jmp __rt_strip_tags_fast_tag_loop_x86");               // resume ordinary tag scanning
+    emitter.label("__rt_strip_tags_fast_restart_tag_x86");
+    emitter.instruction("mov r14, r9");                                         // restart at the tag opener
+    emitter.instruction("jmp __rt_strip_tags_fast_fallback_x86");               // let the full machine handle nesting
+    emitter.label("__rt_strip_tags_fast_copy_lt_x86");
+    emitter.instruction("mov BYTE PTR [rbx], 60");                              // retain the literal '<'
+    emitter.instruction("add rbx, 1");                                          // advance the output write cursor
+    emitter.instruction("add r14, 1");                                          // consume the literal '<'
+    emitter.instruction("jmp __rt_strip_tags_fast_x86");                        // scan the next text run
+    emitter.label("__rt_strip_tags_fast_text_block_x86");
+    emitter.instruction("lea r9, [r14 + 16]");                                  // tentatively take a full sixteen-byte block
+    emitter.instruction("cmp r9, r13");                                         // does the block stay inside the subject?
+    emitter.instruction("ja __rt_strip_tags_fast_text_scalar_x86");             // the tail is handled byte by byte
+    emitter.instruction("movdqu xmm0, XMMWORD PTR [r12 + r14]");                // load sixteen text bytes
+    emitter.instruction("pxor xmm1, xmm1");                                     // clear the NUL mask
+    emitter.instruction("pcmpeqb xmm1, xmm0");                                  // mark embedded NUL bytes
+    emitter.instruction("mov eax, 0x3c3c3c3c");                                 // broadcast the '<' delimiter
+    emitter.instruction("movd xmm2, eax");                                      // move the delimiter into an XMM register
+    emitter.instruction("pshufd xmm2, xmm2, 0");                                // replicate it across all sixteen bytes
+    emitter.instruction("pcmpeqb xmm2, xmm0");                                  // mark '<' bytes
+    emitter.instruction("por xmm1, xmm2");                                      // a special byte starts the scalar path
+    emitter.instruction("pmovmskb eax, xmm1");                                  // move the block verdict into an integer register
+    emitter.instruction("test eax, eax");                                       // did any byte need scalar handling?
+    emitter.instruction("jnz __rt_strip_tags_fast_text_scalar_x86");            // fall back to the scalar loop
+    emitter.instruction("movdqu XMMWORD PTR [rbx], xmm0");                      // copy the whole text block
+    emitter.instruction("add rbx, 16");                                         // advance the output write cursor
+    emitter.instruction("add r14, 16");                                         // consume the copied block
+    emitter.instruction("jmp __rt_strip_tags_fast_text_block_x86");             // scan the next block
+    emitter.label("__rt_strip_tags_fast_text_scalar_x86");
+    emitter.instruction("cmp r14, r13");                                        // has the subject ended?
+    emitter.instruction("jae __rt_strip_tags_fast_done_x86");                   // publish the retained bytes
+    emitter.instruction("movzx eax, BYTE PTR [r12 + r14]");                     // load the next text byte
+    emitter.instruction("test al, al");                                         // is this an embedded NUL?
+    emitter.instruction("jz __rt_strip_tags_fast_skip_nul_x86");                // embedded NULs are not emitted
+    emitter.instruction("cmp al, 60");                                          // is this an opening delimiter?
+    emitter.instruction("je __rt_strip_tags_fast_x86");                         // dispatch the tag opener
+    emitter.instruction("mov BYTE PTR [rbx], al");                              // copy one ordinary text byte
+    emitter.instruction("add rbx, 1");                                          // advance the output write cursor
+    emitter.label("__rt_strip_tags_fast_skip_nul_x86");
+    emitter.instruction("add r14, 1");                                          // consume the text byte
+    emitter.instruction("jmp __rt_strip_tags_fast_text_scalar_x86");            // continue with the tail
+    emitter.label("__rt_strip_tags_fast_fallback_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 96], r14");                       // preserve the scan cursor for the full machine
+    emitter.instruction("jmp __rt_strip_tags_loop_x86");                        // resume the state machine
+    emitter.label("__rt_strip_tags_fast_done_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 96], r14");                       // preserve the scan cursor at EOF
+    emitter.instruction("jmp __rt_strip_tags_done_x86");                        // publish or count the retained bytes
 }
 
 /// Emits output-state handling (state 0).

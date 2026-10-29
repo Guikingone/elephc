@@ -420,7 +420,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_urldecode` | URL decode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_htmlspecialchars` | HTML escape honouring the `ENT_*` quote and document-type flags | `x1`/`x2` + flags in `x3` | `x1`/`x2` |
 | `__rt_html_entity_decode` | Decode HTML entities | `x1`/`x2` | `x1`/`x2` |
-| `__rt_strip_tags` | Strip HTML and PHP tags, preserving allowed HTML tags while always removing comments and PHP tags. Mode `0` publishes and persists the stripped string; mode `1` (`x5`/`r8`) returns the retained byte count without publishing or persisting it | `x1`/`x2` = subject pointer/length, `x3`/`x4` = allow-list pointer/length, `x5`/`r8` = result mode | `x1`/`x2` = stripped string, or `x0`/`rax` = count |
+| `__rt_strip_tags` | Strip HTML and PHP tags, preserving allowed HTML tags while always removing comments and PHP tags. Calls without an allow-list use a text-block/quote-aware tag fast path; declarations, PHP tags, comments and nested angle brackets restart the full state machine. Mode `0` publishes and persists the stripped string; mode `1` (`x5`/`r8`) returns the retained byte count without publishing or persisting it | `x1`/`x2` = subject pointer/length, `x3`/`x4` = allow-list pointer/length, `x5`/`r8` = result mode | `x1`/`x2` = stripped string, or `x0`/`rax` = count |
 | `__rt_rawurlencode` | URL encode (RFC 3986) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_parse_url` | Parse URL bytes and select an array/string/int/null/false result | `x1`/`x2` + component in `x3` | `x0` (Mixed ptr) |
 | `__rt_stripslashes` | Remove escape backslashes | `x1`/`x2` | `x1`/`x2` |
