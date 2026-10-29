@@ -31,6 +31,9 @@ pub(super) fn try_lower(
                 RuntimeFnId::Substr
                     | RuntimeFnId::SubstrCount
                     | RuntimeFnId::Strpos
+                    | RuntimeFnId::Stripos
+                    | RuntimeFnId::Strrpos
+                    | RuntimeFnId::Strripos
                     | RuntimeFnId::StrContains
                     | RuntimeFnId::StrStartsWith
                     | RuntimeFnId::StrEndsWith
@@ -64,6 +67,9 @@ pub(super) fn try_lower(
                 target,
                 RuntimeFnId::SubstrCount
                     | RuntimeFnId::Strpos
+                    | RuntimeFnId::Stripos
+                    | RuntimeFnId::Strrpos
+                    | RuntimeFnId::Strripos
                     | RuntimeFnId::StrContains
                     | RuntimeFnId::StrStartsWith
                     | RuntimeFnId::StrEndsWith

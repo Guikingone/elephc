@@ -789,6 +789,18 @@ evaluation and its side effects remain; the binary `md5(..., true)` form,
 non-string operands, the replacement-pair `strtr()` form and any other observer
 keep the real call.
 
+## Borrowed string reads
+
+`src/ir_lower/expr/borrowed_string_args.rs` admits read-only string subjects for
+`substr()`, `substr_count()`, `strpos()`, `stripos()`, `strrpos()`, `strripos()`,
+`str_contains()`, `str_starts_with()` and `str_ends_with()` when every argument is
+an exact scalar and cannot run user code. Those calls borrow the subject directly
+instead of acquiring and releasing a per-call owner, which is why the reverse and
+case-insensitive searches now run at the same speed as `strpos()` and no longer
+carry a hidden string copy into the loop. Property receivers and named arguments
+use the same planner and remain eligible; a spread, default expression or
+user-code argument falls back to the ordinary owner ledger.
+
 ## Performance regression guards
 
 The optimized string paths are pinned by deterministic IR assertions rather than
