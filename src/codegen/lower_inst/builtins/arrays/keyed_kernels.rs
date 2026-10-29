@@ -24,6 +24,14 @@ pub(crate) fn lower_array_map_sum_add(
     lower_two_operand_kernel(ctx, inst, "__rt_array_map_sum_add")
 }
 
+/// Lowers the raw-int observation of the fused map+sum kernel.
+pub(crate) fn lower_array_map_sum_add_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_operand_kernel(ctx, inst, "__rt_array_map_sum_add_int")
+}
+
 /// Lowers the declared-int map+sum overflow preflight.
 pub(crate) fn lower_array_map_sum_add_safe(
     ctx: &mut FunctionContext<'_>,

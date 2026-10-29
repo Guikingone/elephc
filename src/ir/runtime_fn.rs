@@ -116,6 +116,8 @@ pub enum RuntimeFnId {
     ArrayMap,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
+    /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
+    ArrayMapSumAddInt,
     /// Overflow preflight for a declared-int fused map+sum callback.
     ArrayMapSumAddSafe,
     ArrayMerge,
@@ -888,7 +890,7 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
-            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
             RuntimeFnId::ArraySumInt => Some((1, Some(1))),
@@ -1720,6 +1722,11 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapSumAdd => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
+            // The raw map+sum entry returns a scalar; a promoted sum applies PHP's warned
+            // float-to-int conversion.
+            RuntimeFnId::ArrayMapSumAddInt => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::MAY_WARN.bits())
+            }
             // The preflight only reads the packed payload and returns a raw bool.
             RuntimeFnId::ArrayMapSumAddSafe => E::from_bits_retain(E::READS_HEAP.bits()),
             // The fused filter-count kernel only reads the packed payload.
@@ -2462,6 +2469,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayFilterCountMod
                 | RuntimeFnId::ArrayElementTypeCheck
                 | RuntimeFnId::ArraySumInt
+                | RuntimeFnId::ArrayMapSumAddInt
                 | RuntimeFnId::ArrayMapSumAddSafe
                 | RuntimeFnId::AbsInt
                 | RuntimeFnId::Base64EncodedLen
@@ -2927,6 +2935,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayLast => "array_last",
             RuntimeFnId::ArrayMap => "array_map",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
+            RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumAddSafe => "array_map_sum_add_safe",
             RuntimeFnId::ArrayMerge => "array_merge",
             RuntimeFnId::ArrayFilterCountMod => "array_filter_count_mod",

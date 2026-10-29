@@ -675,6 +675,20 @@ promotion sequence; a promoted sum terminates in PHP's warned float-to-int
 conversion. Any other observer — echo, a store, a second cast, a call, or a
 terminator — keeps the boxed `array_sum()` call.
 
+`src/ir_passes/array_sum_int_direct.rs` then removes the temporary-owner scaffold
+around an `ArraySumInt` call when its receiver is a stable, non-address-escaping PHP
+local. The source load becomes the reducer operand and the acquire, hidden-temporary
+store, call-operand owner push/pop and both temporary-slot releases are neutralized;
+the hidden slot is reclassified as a borrowed temp. A reference alias, an intervening
+source write or any foreign temporary-slot use keeps the original scaffold.
+
+`src/ir_passes/array_map_sum_add_int_sink.rs` applies the cast-observed rule to the
+frozen `array_sum(array_map(fn($x) => $x + C, $packedInts))` lowering. The boxed
+`ArrayMapSumAdd` call becomes `ArrayMapSumAddInt`, the cast result replaces the call
+result, and the cast/release scaffolding is retired. The raw kernel shares the
+existing vector/scalar body but skips the Mixed box; a promoted map or running sum
+terminates in PHP's warned float-to-int conversion.
+
 `src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to `abs()`.
 When the operand is a concrete int, bool, or null-capable tagged scalar and the
 boxed result is observed only through one `(int)` cast, the call becomes
@@ -719,13 +733,15 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
-`src/ir_passes/string_len_sink.rs` removes a hash/encoding whose bytes are never
-observed. When a one-argument `md5()` or `base64_encode()` call receives an
-already-materialized PHP string and its result feeds only one `str_len` (plus
-release scaffolding), the length observer becomes the constant `32` for md5 or
-`4 * ceil(len / 3)` via `Base64EncodedLen` for base64. The operand evaluation and
-its side effects remain; the binary `md5(..., true)` form, non-string operands
-and any other observer keep the real call.
+`src/ir_passes/string_len_sink.rs` removes a hash/encoding/case conversion whose
+bytes are never observed. When a one-argument `md5()`, `base64_encode()`,
+`strtolower()` or `strtoupper()` call receives an already-materialized PHP string
+and its result feeds only one `str_len` (plus release scaffolding), the length
+observer becomes the constant `32` for md5, `4 * ceil(len / 3)` via
+`Base64EncodedLen` for base64, or the source `str_len` for ASCII case conversion
+(byte length is unchanged). The operand evaluation and its side effects remain;
+the binary `md5(..., true)` form, non-string operands and any other observer keep
+the real call.
 
 ## EIR buffer resolution hoisting
 

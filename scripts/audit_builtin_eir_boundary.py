@@ -60,6 +60,7 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "ArrayElementTypeCheck",
     "ArrayFilterCountMod",
     "ArrayMapSumAdd",
+    "ArrayMapSumAddInt",
     "ArrayMapSumAddSafe",
     "ArraySumInt",
 }

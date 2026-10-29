@@ -10,7 +10,7 @@
 
 use crate::ir::{
     Builder, DataPool, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Op, Ownership,
-    RuntimeCallTarget, RuntimeFnId, ValueId,
+    RuntimeCallTarget, RuntimeFnId,
 };
 use crate::ir_passes::driver::IrPass;
 use crate::ir_passes::json_decode_count_sink::JsonDecodeCountSink;

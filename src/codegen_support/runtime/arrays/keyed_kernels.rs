@@ -42,11 +42,20 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
     let vector_pair = "__rt_array_map_sum_add_vector_pair";
     let vector_tail = "__rt_array_map_sum_add_vector_tail";
     let vector_box = "__rt_array_map_sum_add_vector_box";
+    let vector_raw = "__rt_array_map_sum_add_vector_raw";
     let vector_restart = "__rt_array_map_sum_add_vector_restart";
+    let done_raw = "__rt_array_map_sum_add_done_raw";
+    let float_raw = "__rt_array_map_sum_add_float_raw";
 
     emitter.blank();
     emitter.comment("--- runtime: array_map_sum_add (fused int kernel) ---");
+    emitter.label_global("__rt_array_map_sum_add_int");
+    emitter.instruction("mov x16, #1");                                         // raw result mode: skip the Mixed box
+    emitter.instruction("b __rt_array_map_sum_add_body");                       // share the kernel body with the boxed entry
     emitter.label_global("__rt_array_map_sum_add");
+    emitter.instruction("mov x16, #0");                                         // boxed result mode
+    emitter.instruction("b __rt_array_map_sum_add_body");                       // share the kernel body with the raw entry
+    emitter.label_global("__rt_array_map_sum_add_body");
     emitter.instruction("ldr x9, [x0]");                                        // load the packed element count
     emitter.instruction("add x10, x0, #24");                                    // skip the indexed-array header to the payload base
     emitter.instruction("mov x11, xzr");                                        // start the integer accumulator at zero
@@ -104,10 +113,14 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, x14");                                   // the gate proves this addition stays in range
 
     emitter.label(vector_box);
+    emitter.instruction(&format!("cbnz x16, {vector_raw}"));                    // raw result requested
     emitter.instruction("mov x0, #0");                                          // int Mixed tag for the vector sum
     emitter.instruction("mov x1, x13");                                         // int payload for the vector sum
     emitter.instruction("mov x2, xzr");                                         // the high payload word is unused for scalars
     emitter.instruction("b __rt_mixed_from_value");                             // box the integer sum and return
+    emitter.label(vector_raw);
+    emitter.instruction("mov x0, x13");                                         // return the raw vector sum
+    emitter.instruction("ret");                                                 // transfer the scalar result to the caller
 
     emitter.label(vector_restart);
     emitter.instruction("add x10, x0, #24");                                    // rebuild the element cursor from the original array base
@@ -156,16 +169,23 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
 
     emitter.label(done);
     emitter.instruction(&format!("cbnz x12, {box_float}"));                     // a promoted sum is returned as a float cell
+    emitter.instruction(&format!("cbnz x16, {done_raw}"));                      // raw int result requested
     emitter.instruction("mov x0, #0");                                          // int Mixed tag for the integer sum
     emitter.instruction("mov x1, x11");                                         // int payload for the integer sum
     emitter.instruction("mov x2, xzr");                                         // the high payload word is unused for scalars
     emitter.instruction("b __rt_mixed_from_value");                             // box the integer sum and return
+    emitter.label(done_raw);
+    emitter.instruction("mov x0, x11");                                         // return the raw integer sum
+    emitter.instruction("ret");                                                 // transfer the scalar result to the caller
 
     emitter.label(box_float);
+    emitter.instruction(&format!("cbnz x16, {float_raw}"));                     // raw float-to-int result requested
     emitter.instruction("fmov x1, d0");                                         // float payload for the promoted sum
     emitter.instruction("mov x0, #2");                                          // float Mixed tag for the promoted sum
     emitter.instruction("mov x2, xzr");                                         // the high payload word is unused for scalars
     emitter.instruction("b __rt_mixed_from_value");                             // box the float sum and return
+    emitter.label(float_raw);
+    emitter.instruction("b __rt_float_key_to_int");                             // apply PHP's warned float-to-int conversion
 }
 
 /// Emits `__rt_array_map_sum_add` for Linux x86_64.
@@ -181,11 +201,20 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     let vector_pair = "__rt_array_map_sum_add_vector_pair_x86";
     let vector_tail = "__rt_array_map_sum_add_vector_tail_x86";
     let vector_box = "__rt_array_map_sum_add_vector_box_x86";
+    let vector_raw = "__rt_array_map_sum_add_vector_raw_x86";
     let vector_restart = "__rt_array_map_sum_add_vector_restart_x86";
+    let done_raw = "__rt_array_map_sum_add_done_raw_x86";
+    let float_raw = "__rt_array_map_sum_add_float_raw_x86";
 
     emitter.blank();
     emitter.comment("--- runtime: array_map_sum_add (fused int kernel) ---");
+    emitter.label_global("__rt_array_map_sum_add_int");
+    emitter.instruction("mov eax, 1");                                          // raw result mode: skip the Mixed box
+    emitter.instruction("movd xmm7, eax");                                      // keep the mode in a free caller-saved XMM register
+    emitter.instruction("jmp __rt_array_map_sum_add_body");                     // share the kernel body with the boxed entry
     emitter.label_global("__rt_array_map_sum_add");
+    emitter.instruction("pxor xmm7, xmm7");                                     // boxed result mode
+    emitter.label_global("__rt_array_map_sum_add_body");
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the packed element count
     emitter.instruction("lea r9, [rdi + 24]");                                  // skip the indexed-array header to the payload base
     emitter.instruction("xor r8d, r8d");                                        // start the integer accumulator at zero
@@ -257,10 +286,15 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, rcx");                                        // the gate proves the tail addition stays in range
 
     emitter.label(vector_box);
+    emitter.instruction("movd ecx, xmm7");                                      // load the result mode
+    emitter.instruction("test ecx, ecx");                                       // raw result requested?
+    emitter.instruction(&format!("jnz {vector_raw}"));                          // return the raw int sum
     emitter.instruction("mov rdi, rax");                                        // int payload for the vector sum
     emitter.instruction("xor eax, eax");                                        // int Mixed tag for the vector sum
     emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the integer sum and return
+    emitter.label(vector_raw);
+    emitter.instruction("ret");                                                 // rax already holds the raw int sum
 
     emitter.label(vector_restart);
     emitter.instruction("lea r9, [rdi + 24]");                                  // rebuild the element cursor from the original array base
@@ -316,16 +350,27 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     emitter.label(done);
     emitter.instruction("test r11d, r11d");                                     // a promoted sum is returned as a float cell
     emitter.instruction(&format!("jnz {box_float}"));                           // box the promoted double
+    emitter.instruction("movd ecx, xmm7");                                      // load the result mode
+    emitter.instruction("test ecx, ecx");                                       // raw result requested?
+    emitter.instruction(&format!("jnz {done_raw}"));                            // return the raw integer sum
     emitter.instruction("xor eax, eax");                                        // int Mixed tag for the integer sum
     emitter.instruction("mov rdi, r8");                                         // int payload for the integer sum
     emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the integer sum and return
+    emitter.label(done_raw);
+    emitter.instruction("mov rax, r8");                                         // return the raw integer sum
+    emitter.instruction("ret");                                                 // transfer the scalar result to the caller
 
     emitter.label(box_float);
+    emitter.instruction("movd ecx, xmm7");                                      // load the result mode
+    emitter.instruction("test ecx, ecx");                                       // raw result requested?
+    emitter.instruction(&format!("jnz {float_raw}"));                           // apply the warned float-to-int conversion
     emitter.instruction("movq rdi, xmm0");                                      // float payload for the promoted sum
     emitter.instruction("mov eax, 2");                                          // float Mixed tag for the promoted sum
     emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the float sum and return
+    emitter.label(float_raw);
+    emitter.instruction("jmp __rt_float_key_to_int");                           // apply PHP's warned float-to-int conversion
 }
 
 /// Emits the AArch64 overflow preflight for a declared-int fused map callback.

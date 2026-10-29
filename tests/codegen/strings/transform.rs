@@ -987,6 +987,46 @@ echo strrev($s), "|", strrev("a"), "|", strrev(""), "|",
     assert_eq!(out, "qponmlkjihgfedcba|a||64|x|120\n");
 }
 
+/// Constant `str_repeat()` lengths fold without allocating; a runtime count keeps the call.
+#[test]
+fn test_strlen_str_repeat_lengths_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = "ab";
+echo strlen(str_repeat($s, 7)), '|';
+echo strlen(str_repeat("abc", 0)), '|';
+$n = $argc + 3;
+echo strlen(str_repeat($s, $n)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "14|0|8\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Length-only ASCII case conversion folds to the source length and keeps heap ownership clean.
+#[test]
+fn test_strlen_case_conversion_lengths_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = "Hello Wörld";
+$t = str_repeat("ab", 7);
+echo strlen(strtolower($s)), '|', strlen(strtoupper($s)), '|', strlen(strtolower($t)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "12|12|14\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Length-only md5/base64 observations fold to their exact encoded lengths while preserving
 /// operand evaluation, the binary md5 form, and heap ownership.
 #[test]

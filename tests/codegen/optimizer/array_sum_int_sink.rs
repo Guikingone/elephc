@@ -39,6 +39,66 @@ echo array_sum($hash) ^ 0, "\n";
     );
 }
 
+/// Emits the `main` function body for one source fixture in the requested optimizer mode.
+fn emit_main_ir(source: &str, ir_opt: bool) -> String {
+    let dir = make_cli_test_dir("elephc_array_sum_direct_ir");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write array-sum IR fixture");
+    let mode = if ir_opt { "--ir-opt=on" } else { "--ir-opt=off" };
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg(mode)
+        .arg(&php_path)
+        .output()
+        .expect("run elephc --emit-ir");
+    assert!(
+        output.status.success(),
+        "emit-ir failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).expect("EIR is UTF-8");
+    let main = text
+        .split("function main(")
+        .nth(1)
+        .expect("EIR contains main")
+        .split("\n  function ")
+        .next()
+        .expect("main body")
+        .to_string();
+    let _ = fs::remove_dir_all(dir);
+    main
+}
+
+/// A stable local receiver feeds the raw reducer directly, without a temporary owner frame.
+#[test]
+fn array_sum_direct_source_removes_the_owner_frame() {
+    let ir = emit_main_ir(
+        r#"<?php
+$a = range(1, 100);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum($a); }
+echo $n, "\n";
+"#,
+        true,
+    );
+    assert!(ir.contains("runtime.array_sum_int_value"), "{ir}");
+    assert!(!ir.contains("push_call_operand_owner"), "{ir}");
+    let call = ir
+        .lines()
+        .find(|line| line.contains("runtime.array_sum_int_value"))
+        .expect("raw reducer line");
+    let operand = call
+        .split("= runtime_call ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("reducer operand");
+    let definition = ir
+        .lines()
+        .find(|line| line.trim_start().starts_with(&format!("{operand}:")))
+        .expect("reducer operand definition");
+    assert!(definition.contains("load_local"), "{definition}");
+}
+
 /// Overflow-promoted sums keep PHP's warned float-to-int cast behavior.
 #[test]
 fn array_sum_int_sink_preserves_float_cast_warning() {

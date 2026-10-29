@@ -9,6 +9,7 @@
 //!   real IR data model without going through AST lowering.
 
 mod array_fill_loop_test;
+mod array_map_sum_add_int_sink_test;
 mod array_get_bounds_test;
 mod array_sum_loop_test;
 mod branch_simplify_test;
@@ -26,6 +27,7 @@ mod json_decode_count_sink_test;
 mod json_encode_len_sink_test;
 mod sqrt_add_int_sink_test;
 mod strpos_int_sink_test;
+mod array_sum_int_direct_test;
 mod array_sum_int_sink_test;
 mod checked_int_sink_test;
 mod checked_int_sink_bound_test;

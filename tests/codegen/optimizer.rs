@@ -21,6 +21,8 @@ mod strpos_int_sink;
 mod json_decode_count_sink;
 #[path = "optimizer/array_sum_int_sink.rs"]
 mod array_sum_int_sink;
+#[path = "optimizer/array_map_sum_add_int_sink.rs"]
+mod array_map_sum_add_int_sink;
 #[path = "optimizer/array_read_match.rs"]
 mod array_read_match;
 #[path = "optimizer/leaf_runtime_calls.rs"]

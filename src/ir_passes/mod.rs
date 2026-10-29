@@ -14,8 +14,10 @@
 
 mod allocation;
 mod array_fill_loop;
+mod array_map_sum_add_int_sink;
 mod array_get_bounds;
 mod abs_int_sink;
+mod array_sum_int_direct;
 mod array_sum_int_sink;
 mod string_len_sink;
 mod json_decode_count_sink;
