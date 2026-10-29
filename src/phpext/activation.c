@@ -16,6 +16,8 @@ static unsigned char *ep_template;
 static size_t ep_data_size, ep_zero_size;
 static ep_call *ep_current;
 
+static void ep_insert_previous(ep_exception_copy *copy);
+
 /* Initialized and zero-filled native storage need not be adjacent in the loaded module. */
 static void ep_state_save(unsigned char *image)
 {
@@ -133,11 +135,39 @@ static void ep_clear_discarded_host_exception(ep_call *call)
 {
     if (!call->discarded_host_exception || ep_is_host_exit()) { return; }
     if (EG(exception)) { zend_clear_exception(); }
+    if (!Z_ISUNDEF(call->caught_host_exception)) {
+        zval_ptr_dtor(&call->caught_host_exception);
+        ZVAL_UNDEF(&call->caught_host_exception);
+    }
     call->host_exception = false;
     call->discarded_host_exception = false;
+    call->caught_host_replacement = NULL;
+    call->exception_contains_caught_host_replacement = false;
     call->previous_exceptions = NULL;
     call->previous_exceptions_tail = NULL;
     call->previous_exception_anchor = NULL;
+}
+
+/* Move a caught replacement's host predecessor out of EG(exception) at a safe Zend boundary. */
+static void ep_detach_caught_host_exception(ep_call *call)
+{
+    if (!call->caught_host_replacement || !call->host_exception || !EG(exception)
+        || ep_is_host_exit()) {
+        return;
+    }
+    for (ep_exception_copy *copy = call->previous_exceptions; copy; copy = copy->next) {
+        ep_insert_previous(copy);
+    }
+    call->previous_exceptions = NULL;
+    call->previous_exceptions_tail = NULL;
+    call->previous_exception_anchor = NULL;
+    if (!Z_ISUNDEF(call->caught_host_exception)) {
+        zval_ptr_dtor(&call->caught_host_exception);
+    }
+    ZVAL_OBJ(&call->caught_host_exception, EG(exception));
+    EG(exception) = NULL;
+    call->host_exception = false;
+    call->discarded_host_exception = false;
 }
 
 /* Park the native image around a guarded Zend callback, including nested module calls. */
@@ -167,6 +197,7 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     pthread_mutex_unlock(&ep_native_lock);
     zend_try {
         ep_clear_discarded_host_exception(call);
+        ep_detach_caught_host_exception(call);
     } zend_catch {
         call->host_bailout = true;
     } zend_end_try();
@@ -231,6 +262,15 @@ void elephc_php_discard_exception(const uintptr_t *object)
     }
 }
 
+/* User catch binding identifies the native replacement that currently owns the host escape. */
+void elephc_php_catch_host_replacement(const uintptr_t *object)
+{
+    if (object && ep_current && ep_current->host_exception && !ep_current->host_bailout) {
+        ep_current->caught_host_replacement = object;
+        ep_current->exception_contains_caught_host_replacement = false;
+    }
+}
+
 /* Native conversion reports a type failure without allocating or entering Zend. */
 void elephc_php_unsupported_result(void)
 {
@@ -270,6 +310,7 @@ int elephc_php_exception_previous(const uintptr_t *object)
         &copy->message, &copy->message_len, &copy->code)) {
         return 1;
     }
+    copy->caught_host_replacement = object == call->caught_host_replacement;
     if (call->exception_chain_tail) {
         call->exception_chain_tail->previous = copy;
     } else {
@@ -306,6 +347,8 @@ int elephc_php_exception(const uintptr_t *object, uintptr_t status)
     if (!call) { return 1; }
     if (call->host_bailout) { return 0; }
     if (call->error) { return 1; }
+    call->exception_contains_caught_host_replacement =
+        object && object == call->caught_host_replacement;
     const char *error = ep_infrastructure_error(status);
     if (error) { call->error = error; return 1; }
     if (call->host_exception && !object && status == 2) { return 0; }
@@ -349,9 +392,13 @@ static void ep_materialize_exception(char *name, size_t name_len, char *message,
 }
 
 /* Materialize copied previous links in order without recursing on the C stack. */
-static zend_object *ep_materialize_previous_chain(zend_object *tail, ep_exception_copy *copy)
+static zend_object *ep_materialize_previous_chain(zend_object *tail, ep_exception_copy *copy,
+    bool *contains_caught_host_replacement)
 {
     while (copy) {
+        if (contains_caught_host_replacement && copy->caught_host_replacement) {
+            *contains_caught_host_replacement = true;
+        }
         zval value;
         ep_materialize_exception(copy->name, copy->name_len, copy->message,
             copy->message_len, copy->code, &value);
@@ -369,7 +416,7 @@ static zend_object *ep_materialize_exception_copy(ep_exception_copy *copy, zval 
 {
     ep_materialize_exception(copy->name, copy->name_len, copy->message,
         copy->message_len, copy->code, value);
-    return ep_materialize_previous_chain(Z_OBJ_P(value), copy->previous);
+    return ep_materialize_previous_chain(Z_OBJ_P(value), copy->previous, NULL);
 }
 
 /* Throwable previous properties are private on either the Exception or Error base. */
@@ -464,6 +511,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     zend_try {
         if (call->host_bailout) { zend_bailout(); }
         ep_clear_discarded_host_exception(call);
+        ep_detach_caught_host_exception(call);
         bool host_exit = ep_is_host_exit();
         if (!host_exit && call->error && EG(exception)) {
             /* A transport/runtime failure is authoritative over the incomplete host callback. */
@@ -492,8 +540,14 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
                 ep_materialize_exception(call->exception_name, call->exception_name_len,
                     call->exception_message, call->exception_message_len,
                     call->exception_code, &call->pending_exception);
-                ep_materialize_previous_chain(Z_OBJ(call->pending_exception),
-                    call->exception_previous);
+                zend_object *tail = ep_materialize_previous_chain(
+                    Z_OBJ(call->pending_exception), call->exception_previous,
+                    &call->exception_contains_caught_host_replacement);
+                if (call->exception_contains_caught_host_replacement
+                    && !Z_ISUNDEF(call->caught_host_exception)) {
+                    zend_exception_set_previous(tail, Z_OBJ(call->caught_host_exception));
+                    ZVAL_UNDEF(&call->caught_host_exception);
+                }
                 zval thrown = call->pending_exception;
                 ZVAL_UNDEF(&call->pending_exception);
                 zend_throw_exception_object(&thrown);

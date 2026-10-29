@@ -85,7 +85,8 @@ pub(super) fn persist_concat_lhs_if_rhs_can_reset(
 pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
     matches!(
         op,
-        Op::IToStr
+        Op::Cast
+            | Op::IToStr
             | Op::FToStr
             | Op::BoolToStr
             | Op::ResourceToStr

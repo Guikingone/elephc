@@ -144,6 +144,14 @@ Zend's graceful Fiber destruction is not an `exit`: compiled `finally` output,
 replacement exceptions and returns follow the same rules as native PHP during
 Fiber teardown.
 
+A catch inside the export can consume a native replacement thrown by `finally`.
+If the catch throws an unrelated exception, the older host exception is retired;
+if it rethrows the replacement directly or through a native `previous` chain, the
+host exception remains the tail of that chain. While the native catch body is
+running, however, its caught Throwable cannot expose the host object through
+`getPrevious()`: host objects are not imported into the native object heap. The
+chain is restored when it crosses back into Zend.
+
 Synchronous reentry on the same host Fiber is supported. If an error handler
 suspends a Fiber while native frames remain active, another Fiber or the main
 context cannot enter that module until the owning call finishes. Such overlap

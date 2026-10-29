@@ -84,6 +84,9 @@ pub enum RuntimeCallTarget {
     /// Notifies a hosted runtime that a `finally` jump discarded its pending exception.
     /// Standalone outputs have no host exception to retire, so their backend emits no code.
     ExceptionDiscard,
+    /// Marks a native exception consumed by a user catch while it replaces a pending host escape.
+    /// The hosted adapter keeps that host exception only when the caught native chain is rethrown.
+    ExceptionCatchHostReplacement,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -188,6 +191,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::ExceptionCatchHostReplacement => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
             RuntimeCallTarget::ArrayFetchForWrite
             | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
             | RuntimeCallTarget::PendingAppendFetchForWrite
@@ -277,6 +284,9 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ExceptionDiscard => "object.exception_discard",
+            RuntimeCallTarget::ExceptionCatchHostReplacement => {
+                "object.exception_catch_host_replacement"
+            }
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",

@@ -421,14 +421,14 @@ function warning_key(string $s, int $i): void { $items = ["seed" => 0]; $items[$
     }
 }
 
-/// A warning-capable array read persists an earlier numeric concat view before reentry.
+/// A warning-capable array read persists an earlier mixed string cast before reentry.
 #[test]
 fn concat_transient_string_is_persisted_before_warning_rhs() {
-    use crate::ir::{Effects, Op};
+    use crate::ir::{Effects, Op, ValueDef};
     let module = super::lower_source(
         r#"<?php
-function concat_warning(array $items, int $prefix): string {
-    return $prefix . $items["missing"];
+function concat_warning(array $items): string {
+    return $items["n"] . $items["missing"];
 }
 "#,
     );
@@ -437,31 +437,30 @@ function concat_warning(array $items, int $prefix): string {
         .iter()
         .find(|function| function.name == "concat_warning")
         .expect("expected concat_warning EIR function");
-    let block = function
+    let (block, persist) = function
         .blocks
         .iter()
-        .find(|block| {
-            block.instructions.iter().any(|id| {
-                function
-                    .instruction(*id)
-                    .is_some_and(|inst| inst.effects.contains(Effects::MAY_WARN))
+        .find_map(|block| {
+            block.instructions.iter().enumerate().find_map(|(position, id)| {
+                let inst = function.instruction(*id)?;
+                let source = inst.operands.first().and_then(|value| {
+                    function.value(*value).and_then(|value| match value.def {
+                        ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                        _ => None,
+                    })
+                });
+                (inst.op == Op::StrPersist && source.is_some_and(|source| source.op == Op::Cast))
+                    .then_some((block, position))
             })
         })
-        .expect("expected warning-capable array read");
-    let warning = block
-        .instructions
-        .iter()
-        .position(|id| {
+        .expect("expected the mixed string cast to be persisted");
+    assert!(
+        block.instructions[persist + 1..].iter().any(|id| {
             function
                 .instruction(*id)
                 .is_some_and(|inst| inst.effects.contains(Effects::MAY_WARN))
-        })
-        .expect("expected warning-capable array read position");
-    assert!(
-        block.instructions[..warning]
-            .iter()
-            .any(|id| function.instruction(*id).is_some_and(|inst| inst.op == Op::StrPersist)),
-        "numeric concat scratch must be persisted before the warning-capable RHS"
+        }),
+        "the persisted mixed cast must precede the warning-capable RHS"
     );
 }
 

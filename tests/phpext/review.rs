@@ -192,9 +192,14 @@ echo 'ok';
 
 /// Compares independently executed source and native functions, preserving status and diagnostics.
 fn compare(source: &str, driver: &str) {
+    compare_with_options(source, driver, &[]);
+}
+
+/// Compares source and extension execution with extra compiler options.
+fn compare_with_options(source: &str, driver: &str, options: &[&str]) {
     let project = Project::new();
     let sdk = project.sdk();
-    let module = project.compile("review", source);
+    let module = project.compile_with_options("review", source, options);
     let source_path = project.0.join("review.php");
     let script = format!("if (!extension_loaded('review')) {{ require {:?}; }}\n{driver}",
         source_path.to_str().unwrap());
@@ -331,6 +336,39 @@ catch (Throwable $error) {
     $previous = $error->getPrevious();
     echo get_class($error), ':', $error->getMessage(), ':',
         get_class($previous), ':', $previous->getMessage();
+}
+"#);
+}
+
+/// A caught native replacement retires its host predecessor unless that chain is rethrown.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn caught_finally_replacements_settle_host_predecessors() {
+    compare(r#"<?php
+#[Export] function php_absorb_replacement(array $value): void {
+    try { try { echo $value['missing']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) { throw new TypeError('after'); }
+}
+#[Export] function php_rethrow_replacement(array $value): void {
+    try { try { echo $value['missing']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) { throw $error; }
+}
+#[Export] function php_wrap_replacement(array $value): void {
+    try { try { echo $value['missing']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) { throw new TypeError('outer', 0, $error); }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+set_error_handler(function () { throw new DomainException('host'); });
+foreach (['php_absorb_replacement', 'php_rethrow_replacement', 'php_wrap_replacement'] as $function) {
+    try { $function([]); }
+    catch (Throwable $error) { $dump($error); }
 }
 "#);
 }
@@ -782,31 +820,41 @@ catch (ArgumentCountError $error) { echo get_class($error), ':', $error->getMess
     assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
-/// Same-Fiber reentry cannot overwrite a pending integer concat view in the spill ring.
+/// Same-Fiber reentry cannot overwrite pending cast views in integer or float spill rings.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
 fn nested_reentry_preserves_concat_spill_views() {
-    compare(
+    compare_with_options(
         r#"<?php
-#[Export] function php_spill_outer(array $value, int $prefix): string {
-    $last = '';
-    for ($i = 0; $i < 120000; $i++) { $last = (string)$i; }
-    if ($last === 'never') { return $last; }
-    return $prefix . $value['missing'];
+#[Export] function php_cast_int_spill(array $value, int $prefix, string $fill): string {
+    return (string)(strlen($fill . $fill) + $prefix) . $value['missing'];
+}
+#[Export] function php_cast_float_spill(array $value, float $prefix, string $fill): string {
+    return (string)(strlen($fill . $fill) + $prefix) . $value['missing'];
 }
 #[Export] function php_wrap_int_spills(): string {
     $result = '';
     for ($i = 0; $i < 8; $i++) { $result = (string)$i; }
     return $result;
 }
+#[Export] function php_wrap_float_spills(): string {
+    $result = '';
+    for ($i = 0; $i < 4; $i++) { $result = (string)($i + 0.25); }
+    return $result;
+}
 "#,
         r#"
-set_error_handler(function () {
-    php_wrap_int_spills();
+$nested = 'php_wrap_int_spills';
+set_error_handler(function () use (&$nested) {
+    $nested();
     return true;
 });
-echo php_spill_outer([], 12345);
+$fill = str_repeat('x', 262140);
+var_dump(php_cast_int_spill([], 12345, $fill));
+$nested = 'php_wrap_float_spills';
+var_dump(php_cast_float_spill([], 12345.5, $fill));
 "#,
+        &["--heap-size=524288"],
     );
 }
 

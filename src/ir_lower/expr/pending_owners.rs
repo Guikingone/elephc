@@ -35,8 +35,11 @@ pub(crate) fn lower_with_pending_owners<'m, 'f, T>(
     let source = ctx.builder.insertion_block().expect("pending owner publication block");
     let start = ctx.builder.function().block(source).unwrap().instructions.len();
     for operand in operands.iter_mut() {
-        let transient = ctx.builder.value_defining_instruction(operand.value)
-            .is_some_and(crate::ir::Instruction::creates_transient_string);
+        let transient = ctx.builder.value_ownership(operand.value) != Ownership::Owned
+            && ctx
+                .builder
+                .value_defining_instruction(operand.value)
+                .is_some_and(|inst| string_op_uses_scratch_storage(inst.op));
         if transient && operand.ir_type == IrType::Str {
             *operand = ctx.emit_value(
                 Op::StrPersist, vec![operand.value], None, PhpType::Str,

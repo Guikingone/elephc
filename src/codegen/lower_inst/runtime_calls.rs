@@ -50,6 +50,9 @@ pub(super) fn lower(
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
         RuntimeCallTarget::ExceptionDiscard => lower_exception_discard(ctx, inst),
+        RuntimeCallTarget::ExceptionCatchHostReplacement => {
+            lower_exception_catch_host_replacement(ctx, inst)
+        }
         RuntimeCallTarget::ArrayFetchForWrite
         | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, false)
@@ -107,6 +110,30 @@ fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             result,
         );
         ctx.emitter.bl_c("elephc_php_discard_exception");
+    }
+    Ok(())
+}
+
+/// Tells the PHP adapter that a user catch consumed a native replacement exception.
+fn lower_exception_catch_host_replacement(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "caught host replacement notification requires one operand",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let caught = expect_operand(inst, 0)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(caught)?;
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_catch_host_replacement");
     }
     Ok(())
 }

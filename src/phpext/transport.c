@@ -19,6 +19,7 @@ typedef struct ep_exception_copy {
     size_t message_len;
     zend_long code;
     zend_object *anchor;
+    bool caught_host_replacement;
 } ep_exception_copy;
 
 typedef struct ep_call {
@@ -37,6 +38,7 @@ typedef struct ep_call {
     ep_exception_copy *previous_exceptions;
     ep_exception_copy *previous_exceptions_tail;
     zend_object *previous_exception_anchor;
+    const uintptr_t *caught_host_replacement;
     char *output;
     size_t output_len;
     size_t output_capacity;
@@ -47,9 +49,11 @@ typedef struct ep_call {
     bool host_exception;
     bool host_bailout;
     bool discarded_host_exception;
+    bool exception_contains_caught_host_replacement;
     zend_string *warning;
     char *parked_warning_buffer;
     zval pending_exception;
+    zval caught_host_exception;
     const HashTable *ancestors[64];
 } ep_call;
 
@@ -98,8 +102,10 @@ static void ep_call_free_storage(ep_call *call)
 static void ep_call_destroy(ep_call *call)
 {
     zval pending = call->pending_exception;
+    zval caught_host = call->caught_host_exception;
     ep_call_free_storage(call);
     if (!Z_ISUNDEF(pending)) { zval_ptr_dtor(&pending); }
+    if (!Z_ISUNDEF(caught_host)) { zval_ptr_dtor(&caught_host); }
 }
 
 /* Fatal request termination can skip Fiber destructors, leaving parked calls in this chain. */
