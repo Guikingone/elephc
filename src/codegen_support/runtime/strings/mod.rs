@@ -74,6 +74,7 @@ mod base_convert;
 mod chunk_split;
 mod chunk_split_len;
 mod count_chars;
+mod count_chars_distinct;
 mod strtr;
 mod quotemeta;
 mod quoted_printable_encode;
@@ -243,6 +244,7 @@ pub use chunk_split::emit_chunk_split;
 pub use chunk_split_len::emit_chunk_split_len;
 /// Emit the count_chars byte-frequency tally.
 pub use count_chars::emit_count_chars;
+pub use count_chars_distinct::emit_count_chars_distinct;
 /// Emit the strtr pairwise and replacement-pair translators.
 pub use strtr::emit_strtr;
 /// Emit the quotemeta regular-expression metacharacter escaper.

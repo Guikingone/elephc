@@ -387,6 +387,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_str_split_count` | Allocation-free `count(str_split(...))`: returns `ceil(source length / chunk length)`, or zero for an empty source | source + chunk length | `x0` |
 | `__rt_base64_decoded_len` | Allocation-free `strlen(base64_decode(...))`: counts accepted sextets and reproduces strict padding rejection | encoded string + strict flag | `x0` |
 | `__rt_parse_url_count` | Allocation-free `count(parse_url(...))`: runs the full-array parser and returns the component bit count, or status zero for an invalid URL | URL string | `x0` = count, `x1` = status |
+| `__rt_count_chars_distinct` | Allocation-free `count(count_chars($s, 1))`: returns the number of distinct subject byte values | subject string | `x0` |
 | `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |

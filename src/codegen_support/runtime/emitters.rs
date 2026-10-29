@@ -109,6 +109,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_quoted_printable_encode(emitter);
     strings::emit_str_word_count(emitter);
     strings::emit_count_chars(emitter);
+    strings::emit_count_chars_distinct(emitter);
     strings::emit_strtr(emitter);
     strings::emit_wordwrap(emitter);
     strings::emit_bin2hex(emitter);

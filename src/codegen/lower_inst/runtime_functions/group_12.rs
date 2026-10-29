@@ -43,6 +43,9 @@ pub(super) fn lower(
         RuntimeFnId::CountChars => Some({
             crate::codegen::lower_inst::builtins::strings::lower_count_chars(ctx, inst)
         }),
+        RuntimeFnId::CountCharsDistinct => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_count_chars_distinct(ctx, inst)
+        }),
         RuntimeFnId::Strtr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strtr(ctx, inst)
         }),

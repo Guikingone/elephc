@@ -763,6 +763,10 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
+`src/ir_passes/count_chars_count_sink.rs` folds `count(count_chars($s, 1))` into
+`CountCharsDistinct`, which scans the subject into a 256-bit presence map and
+returns the distinct byte count without building the tally hash.
+
 `src/ir_passes/parse_url_count_sink.rs` folds `count(parse_url(...))` into
 `ParseUrlCount`. Only the full-array form is eligible: the runtime parser runs in a
 count-only mode that returns the component bit count, and an invalid URL returns

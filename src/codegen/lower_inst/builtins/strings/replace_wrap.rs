@@ -379,6 +379,25 @@ pub(crate) fn lower_count_chars(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Lowers the allocation-free `count(count_chars($s, 1))` helper.
+pub(crate) fn lower_count_chars_distinct(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "count_chars", 1, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "count_chars", "x1", "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_count_chars_distinct");
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "count_chars", "rax", "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_count_chars_distinct");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `str_word_count(string, format?, characters?)` through the shared runtime helper.
 ///
 /// The checker already fixed the result storage from the literal `$format`, so the only

@@ -445,7 +445,7 @@ pub(crate) use scalar::load_as_int;
 pub(crate) use replace_wrap::lower_base_convert;
 pub(crate) use split::lower_base_to_number;
 pub(crate) use replace_wrap::{lower_chunk_split, lower_chunk_split_len};
-pub(crate) use replace_wrap::lower_count_chars;
+pub(crate) use replace_wrap::{lower_count_chars, lower_count_chars_distinct};
 pub(crate) use split::lower_dec_to_base;
 pub(crate) use split::lower_length_limited_compare;
 pub(crate) use replace_wrap::lower_str_word_count;

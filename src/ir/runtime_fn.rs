@@ -515,6 +515,8 @@ pub enum RuntimeFnId {
     /// Allocation-free `strlen(chunk_split(...))` length computation.
     ChunkSplitLen,
     CountChars,
+    /// Allocation-free distinct-byte count for `count(count_chars($s, 1))`.
+    CountCharsDistinct,
     Crc32,
     CtypeAlnum,
     CtypeAlpha,
@@ -935,6 +937,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrSplitCount => Some((1, Some(2))),
             RuntimeFnId::Base64DecodedLen => Some((1, Some(2))),
             RuntimeFnId::ParseUrlCount => Some((1, Some(1))),
+            RuntimeFnId::CountCharsDistinct => Some((1, Some(1))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
@@ -1816,6 +1819,8 @@ impl RuntimeFnId {
             RuntimeFnId::Base64DecodedLen => RuntimeFnId::Base64Decode.effects(),
             // The count-only parser keeps parse_url()'s invalid-URL/error effects.
             RuntimeFnId::ParseUrlCount => RuntimeFnId::ParseUrl.effects(),
+            // The distinct-byte scan keeps count_chars()'s mode validation effects.
+            RuntimeFnId::CountCharsDistinct => RuntimeFnId::CountChars.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
             RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The raw encoder keeps the JSON error state and encoder side effects.
@@ -2557,6 +2562,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrSplitCount
                 | RuntimeFnId::Base64DecodedLen
                 | RuntimeFnId::ParseUrlCount
+                | RuntimeFnId::CountCharsDistinct
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
@@ -3603,6 +3609,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrSplitCount => "str_split_count",
             RuntimeFnId::Base64DecodedLen => "base64_decoded_len",
             RuntimeFnId::ParseUrlCount => "parse_url_count",
+            RuntimeFnId::CountCharsDistinct => "count_chars_distinct",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",
