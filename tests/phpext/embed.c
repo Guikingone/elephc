@@ -99,7 +99,15 @@ static void report_large_malloc_ranges(void)
     large_malloc_ranges record = {0};
     for (unsigned i = 0; i < count && record.count < 64; i++) {
         malloc_zone_t *zone = (malloc_zone_t *)zones[i];
-        if (!zone->introspect || !zone->introspect->enumerator) { continue; }
+        if (!zone->introspect) { continue; }
+        if (zone->introspect->statistics) {
+            malloc_statistics_t stats = {0};
+            malloc_zone_statistics(zone, &stats);
+            fprintf(stderr, "malloc zone %p (%s): %u blocks, %zu bytes in use, %zu bytes allocated\n",
+                (void *)zone, zone->zone_name ? zone->zone_name : "unnamed", stats.blocks_in_use,
+                stats.size_in_use, stats.size_allocated);
+        }
+        if (!zone->introspect->enumerator) { continue; }
         record.zone = zones[i];
         status = zone->introspect->enumerator(mach_task_self(), &record, MALLOC_PTR_IN_USE_RANGE_TYPE,
             zones[i], read_local_memory, record_large_malloc_ranges);

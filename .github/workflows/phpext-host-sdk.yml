@@ -143,6 +143,16 @@ jobs:
         if: runner.os == 'macOS'
         run: python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config" --leaks
 
+      - name: Check macOS lifecycle across independent module builds
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..8}; do
+            echo "macOS lifecycle build $attempt/8"
+            python3 scripts/phpext/test_embed.py --php-config "$RUNNER_TEMP/phpext-test-host/bin/php-config" --leaks
+          done
+
       - name: Check standalone null declaration parsing
         run: cargo test -p elephc --test parser_tests standalone_null
 
