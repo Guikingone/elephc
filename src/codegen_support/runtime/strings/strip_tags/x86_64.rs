@@ -24,6 +24,7 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame before allocating scanner state
     emitter.instruction("mov rbp, rsp");                                        // establish a stable base for all scanner state slots
     emitter.instruction("sub rsp, 208");                                        // reserve scanner state and callee-saved register spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 192], r8");                       // preserve the requested result mode
     emitter.instruction("mov QWORD PTR [rbp - 152], rbx");                      // preserve the saved caller rbx across subsequent scan operations
     emitter.instruction("mov QWORD PTR [rbp - 160], r12");                      // preserve the saved caller r12 across subsequent scan operations
     emitter.instruction("mov QWORD PTR [rbp - 168], r13");                      // preserve the saved caller r13 across subsequent scan operations
@@ -53,7 +54,7 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_reserve");                            // reserve bounded output and allow-list workspace
     super::emit_mark_reserved_result_temporary(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the output reservation start across subsequent scan operations
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the output write cursor across subsequent scan operations
+    emitter.instruction("mov rbx, rax");                                        // keep the output write cursor in a callee-saved register
     emitter.instruction("xor eax, eax");                                        // initialize the per-call workspace and length slots to zero
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the collected-tag buffer across subsequent scan operations
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the collected-tag length across subsequent scan operations
@@ -138,10 +139,26 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     // -- publish the retained output and restore the caller --
     emitter.label("__rt_strip_tags_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the output reservation start for this scan step
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the output write cursor for this scan step
+    emitter.instruction("mov rdx, rbx");                                        // take the live output write cursor
     emitter.instruction("sub rdx, rax");                                        // derive retained output length from the final write cursor
+    emitter.instruction("cmp QWORD PTR [rbp - 192], 0");                        // was a full string result requested?
+    emitter.instruction("je __rt_strip_tags_publish_x86");                      // full string results publish and persist the reservation
+    emitter.instruction("mov QWORD PTR [rbp - 192], rdx");                      // preserve the counted length across an optional heap release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    emitter.instruction("mov r11, rax");                                        // classify the reservation by its offset from concat scratch
+    emitter.instruction("sub r11, r10");                                        // scratch reservations stay inside the shared window
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", emitter.concat_capacity as i64);
+    emitter.instruction("cmp r11, r10");                                        // did this call fall back to owned heap storage?
+    emitter.instruction("jb __rt_strip_tags_count_return_x86");                 // scratch reservations need no deallocation
+    emitter.instruction("call __rt_heap_free_safe");                            // discard output bytes the length-only caller never observes
+    emitter.label("__rt_strip_tags_count_return_x86");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 192]");                      // reload the counted output length
+    emitter.instruction("mov rax, rdx");                                        // return the length in the integer result register
+    emitter.instruction("jmp __rt_strip_tags_restore_x86");                     // skip string publication
+    emitter.label("__rt_strip_tags_publish_x86");
     emitter.instruction("call __rt_concat_publish");                            // publish only the retained output bytes
     emitter.instruction("call __rt_str_persist");                               // return independent storage while adopting a sole heap reservation in place
+    emitter.label("__rt_strip_tags_restore_x86");
     emitter.instruction("mov rbx, QWORD PTR [rbp - 152]");                      // reload the saved caller rbx for this scan step
     emitter.instruction("mov r12, QWORD PTR [rbp - 160]");                      // reload the saved caller r12 for this scan step
     emitter.instruction("mov r13, QWORD PTR [rbp - 168]");                      // reload the saved caller r13 for this scan step
@@ -171,8 +188,8 @@ fn emit_state0_x86(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strip_tags_isspace_x86");                    // classify lookahead using PHP's C-locale whitespace rules
     emitter.instruction("test eax, eax");                                       // test the C-locale whitespace result before the guarded scan transition
     emitter.instruction("jz __rt_strip_tags_s0_open_x86");                      // recognize markup only when the opener is not followed by whitespace
-    emitter.instruction("mov eax, 60");                                         // supply the opening tag delimiter to tag collection
-    emitter.instruction("call __rt_strip_tags_putc_x86");                       // append one retained byte to the output
+    emitter.instruction("mov BYTE PTR [rbx], 60");                              // append the literal opening delimiter to the output
+    emitter.instruction("add rbx, 1");                                          // advance the output write cursor
     emitter.instruction("jmp __rt_strip_tags_advance_x86");                     // consume this byte and continue scanning
     emitter.label("__rt_strip_tags_s0_open_x86");
     emitter.instruction("mov QWORD PTR [rbp - 136], 60");                       // preserve the last significant PHP byte across subsequent scan operations
@@ -196,8 +213,8 @@ fn emit_state0_x86(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rbp - 112], 0");                        // check the active quote delimiter before accepting the next scan transition
     emitter.instruction("jne __rt_strip_tags_advance_x86");                     // consume this byte and continue scanning
     emitter.label("__rt_strip_tags_s0_copy_x86");
-    emitter.instruction("mov eax, r15d");                                       // forward the current subject byte to output or tag collection
-    emitter.instruction("call __rt_strip_tags_putc_x86");                       // append one retained byte to the output
+    emitter.instruction("mov BYTE PTR [rbx], r15b");                            // append one retained byte to the output
+    emitter.instruction("add rbx, 1");                                          // advance the output write cursor
     emitter.instruction("jmp __rt_strip_tags_advance_x86");                     // consume this byte and continue scanning
 }
 
@@ -533,15 +550,6 @@ fn emit_helpers_x86(emitter: &mut Emitter) {
     emitter.instruction("add QWORD PTR [rbp - 96], 1");                         // advance the subject scan cursor after consuming its delimiter
     emitter.instruction("jmp __rt_strip_tags_loop_x86");                        // resume state dispatch at the saved subject cursor
 
-    // -- write one kept output byte --
-    emitter.comment("-- write one kept output byte --");
-    emitter.label("__rt_strip_tags_putc_x86");
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the output write cursor for this scan step
-    emitter.instruction("mov BYTE PTR [rdx], al");                              // append one retained byte to the output cursor
-    emitter.instruction("add rdx, 1");                                          // advance the output cursor after retaining one byte
-    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // preserve the output write cursor across subsequent scan operations
-    emitter.instruction("ret");                                                 // return after advancing the output cursor
-
     // -- append one collected tag byte when an allow-list is active --
     emitter.comment("-- append one collected tag byte when an allow-list is active --");
     emitter.label("__rt_strip_tags_collect_x86");
@@ -560,7 +568,7 @@ fn emit_helpers_x86(emitter: &mut Emitter) {
     emitter.label("__rt_strip_tags_emit_tag_x86");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the collected-tag buffer for this scan step
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the collected-tag length for this scan step
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the output write cursor for this scan step
+    emitter.instruction("mov rdi, rbx");                                        // take the live output write cursor
     emitter.instruction("xor r8d, r8d");                                        // start copying the allowed raw tag at its first byte
     emitter.label("__rt_strip_tags_emit_tag_loop_x86");
     emitter.instruction("cmp r8, rcx");                                         // stop after copying every byte of the complete raw tag
@@ -570,8 +578,7 @@ fn emit_helpers_x86(emitter: &mut Emitter) {
     emitter.instruction("add r8, 1");                                           // advance the raw-tag traversal cursor
     emitter.instruction("jmp __rt_strip_tags_emit_tag_loop_x86");               // copy the next byte of an allowed tag
     emitter.label("__rt_strip_tags_emit_tag_done_x86");
-    emitter.instruction("add rdi, rcx");                                        // advance the output cursor past the complete retained tag
-    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // preserve the output write cursor across subsequent scan operations
+    emitter.instruction("add rbx, rcx");                                        // advance the output cursor past the complete retained tag
     emitter.instruction("ret");                                                 // return after committing the retained tag bytes
 
     // -- load the next subject byte, or 0 at EOF, into al --

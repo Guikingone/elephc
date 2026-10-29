@@ -198,6 +198,9 @@ pub(super) fn lower(
         RuntimeFnId::StripTags => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strip_tags(ctx, inst)
         }),
+        RuntimeFnId::StripTagsLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strip_tags_len(ctx, inst)
+        }),
         RuntimeFnId::Stripos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
                     ctx,

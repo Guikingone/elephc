@@ -776,6 +776,8 @@ pub enum RuntimeFnId {
     Strncasecmp,
     Strncmp,
     StripTags,
+    /// Allocation-free `strlen(strip_tags(...))` output-length computation.
+    StripTagsLen,
     Stripos,
     Strpos,
     /// Raw `(int)strpos()` observed only through an integer cast; absent matches become zero.
@@ -938,6 +940,7 @@ impl RuntimeFnId {
             RuntimeFnId::Base64DecodedLen => Some((1, Some(2))),
             RuntimeFnId::ParseUrlCount => Some((1, Some(1))),
             RuntimeFnId::CountCharsDistinct => Some((1, Some(1))),
+            RuntimeFnId::StripTagsLen => Some((1, Some(2))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
@@ -1821,6 +1824,8 @@ impl RuntimeFnId {
             RuntimeFnId::ParseUrlCount => RuntimeFnId::ParseUrl.effects(),
             // The distinct-byte scan keeps count_chars()'s mode validation effects.
             RuntimeFnId::CountCharsDistinct => RuntimeFnId::CountChars.effects(),
+            // The length-only scan keeps strip_tags()'s allow-list coercion and diagnostics.
+            RuntimeFnId::StripTagsLen => RuntimeFnId::StripTags.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
             RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The raw encoder keeps the JSON error state and encoder side effects.
@@ -2563,6 +2568,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::Base64DecodedLen
                 | RuntimeFnId::ParseUrlCount
                 | RuntimeFnId::CountCharsDistinct
+                | RuntimeFnId::StripTagsLen
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
@@ -2978,6 +2984,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::Decoct
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
+                // Both network conversions build a fresh boxed string or false; the packed
+                // address or textual address is only read. The default MayAlias bucket kept
+                // an owned `inet_pton()`/Mixed-to-string temporary alive for the result's
+                // whole lifetime, leaking one allocation per `inet_ntop(inet_pton($s))`.
+                | RuntimeFnId::InetNtop
+                | RuntimeFnId::InetPton
                 // Replacement always writes into a separate concat reservation, even
                 // for an empty search or no match. It never returns an argument view,
                 // but scratch-backed results still need ordinary string persistence.
@@ -3610,6 +3622,7 @@ impl RuntimeFnId {
             RuntimeFnId::Base64DecodedLen => "base64_decoded_len",
             RuntimeFnId::ParseUrlCount => "parse_url_count",
             RuntimeFnId::CountCharsDistinct => "count_chars_distinct",
+            RuntimeFnId::StripTagsLen => "strip_tags_len",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",

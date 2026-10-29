@@ -143,3 +143,37 @@ echo $n, "\n";
         Duration::from_millis(120),
     );
 }
+
+/// `strlen(strip_tags())` keeps the count-only scanner instead of publishing and
+/// persisting a temporary string per iteration.
+#[test]
+#[ignore = "wall-clock performance guard; run explicitly"]
+fn perf_strip_tags_len_loop() {
+    assert_under(
+        "strip_tags_len",
+        r#"<?php
+$s = '<p>Hello <b>world</b> <a href="x">link</a></p>';
+$n = 0;
+for ($i = 0; $i < 50000; $i++) { $n ^= (strlen(strip_tags($s)) + $i); }
+echo $n, "\n";
+"#,
+        Duration::from_millis(100),
+    );
+}
+
+/// `vsprintf()` keeps the direct scalar record fast path and the unadorned-decimal
+/// formatter instead of reintroducing a libc `snprintf` per `%d`.
+#[test]
+#[ignore = "wall-clock performance guard; run explicitly"]
+fn perf_vsprintf_plain_decimal_loop() {
+    assert_under(
+        "vsprintf_decimal",
+        r#"<?php
+$v = [42, 'x'];
+$n = 0;
+for ($i = 0; $i < 50000; $i++) { $n ^= (strlen(vsprintf('%d-%s', $v)) + $i); }
+echo $n, "\n";
+"#,
+        Duration::from_millis(100),
+    );
+}

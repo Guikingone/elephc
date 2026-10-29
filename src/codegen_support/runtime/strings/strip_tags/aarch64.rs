@@ -25,6 +25,7 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #224");                                    // reserve spill space for the scanner state and caller registers
     emitter.instruction("stp x29, x30, [sp, #208]");                            // preserve the caller frame and return linkage
     emitter.instruction("add x29, sp, #208");                                   // establish a stable base for scanner state slots
+    emitter.instruction("str x5, [x29, #-152]");                                // preserve the requested result mode
     emitter.instruction("stp x19, x20, [x29, #-200]");                          // preserve the caller's callee-saved subject registers
     emitter.instruction("stp x21, x22, [x29, #-184]");                          // preserve the caller's callee-saved cursor registers
     emitter.instruction("str x23, [x29, #-168]");                               // preserve the remaining callee-saved scanner register
@@ -50,7 +51,7 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_reserve");                              // reserve bounded output and allow-list workspace
     super::emit_mark_reserved_result_temporary(emitter);
     emitter.instruction("str x0, [x29, #-40]");                                 // preserve the output reservation start
-    emitter.instruction("str x0, [x29, #-48]");                                 // preserve the output write cursor
+    emitter.instruction("mov x23, x0");                                         // keep the output write cursor in a callee-saved register
     emitter.instruction("str xzr, [x29, #-56]");                                // clear the collected-tag buffer
     emitter.instruction("str xzr, [x29, #-64]");                                // clear the collected-tag length
     emitter.instruction("str xzr, [x29, #-72]");                                // clear the lowercased allow-list buffer
@@ -128,10 +129,25 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     // -- publish the retained output and restore the caller --
     emitter.label("__rt_strip_tags_done");
     emitter.instruction("ldr x1, [x29, #-40]");                                 // reload the output reservation start for this scan step
-    emitter.instruction("ldr x2, [x29, #-48]");                                 // reload the output write cursor for this scan step
+    emitter.instruction("mov x2, x23");                                         // take the live output write cursor
     emitter.instruction("sub x2, x2, x1");                                      // derive retained output length from the final write cursor
+    emitter.instruction("ldr x9, [x29, #-152]");                                // reload the requested result mode
+    emitter.instruction("cbz x9, __rt_strip_tags_publish");                     // full string results publish and persist the reservation
+    emitter.instruction("str x2, [x29, #-160]");                                // preserve the counted length across an optional heap release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    emitter.instruction("sub x10, x1, x9");                                     // classify the reservation by its offset from concat scratch
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64);
+    emitter.instruction("cmp x10, x11");                                        // did this call fall back to owned heap storage?
+    emitter.instruction("b.lo __rt_strip_tags_count_return");                   // scratch reservations need no deallocation
+    emitter.instruction("mov x0, x1");                                          // pass the heap-backed reservation to the allocator
+    emitter.instruction("bl __rt_heap_free_safe");                              // discard output bytes the length-only caller never observes
+    emitter.label("__rt_strip_tags_count_return");
+    emitter.instruction("ldr x0, [x29, #-160]");                                // return the counted output length
+    emitter.instruction("b __rt_strip_tags_restore");                           // skip string publication
+    emitter.label("__rt_strip_tags_publish");
     emitter.instruction("bl __rt_concat_publish");                              // publish only the retained output bytes
     emitter.instruction("bl __rt_str_persist");                                 // return independent storage while adopting a sole heap reservation in place
+    emitter.label("__rt_strip_tags_restore");
     emitter.instruction("ldp x19, x20, [x29, #-200]");                          // restore the caller's preserved subject registers
     emitter.instruction("ldp x21, x22, [x29, #-184]");                          // restore the caller's preserved cursor registers
     emitter.instruction("ldr x23, [x29, #-168]");                               // restore the remaining callee-saved scanner register
@@ -157,8 +173,8 @@ fn emit_state0_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_strip_tags_next");                             // peek ahead without reading beyond the subject
     emitter.instruction("bl __rt_strip_tags_isspace");                          // classify the lookahead using PHP's C-locale whitespace rules
     emitter.instruction("cbz w0, __rt_strip_tags_s0_open");                     // recognize markup only when the opener is not followed by whitespace
-    emitter.instruction("mov w0, #60");                                         // prepare the opening tag delimiter for the scanner
-    emitter.instruction("bl __rt_strip_tags_putc");                             // append one retained byte to the output
+    emitter.instruction("mov w9, #60");                                         // the literal opening delimiter
+    emitter.instruction("strb w9, [x23], #1");                                  // append one retained byte to the output
     emitter.instruction("b __rt_strip_tags_advance");                           // consume this byte and continue scanning
     emitter.label("__rt_strip_tags_s0_open");
     emitter.instruction("mov x9, #60");                                         // prepare the opening tag delimiter for the scanner
@@ -187,8 +203,7 @@ fn emit_state0_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x29, #-112]");                                // reload the active quote delimiter for this scan step
     emitter.instruction("cbnz x9, __rt_strip_tags_advance");                    // consume this byte and continue scanning
     emitter.label("__rt_strip_tags_s0_copy");
-    emitter.instruction("mov w0, w22");                                         // forward the current subject byte to output or tag collection
-    emitter.instruction("bl __rt_strip_tags_putc");                             // append one retained byte to the output
+    emitter.instruction("strb w22, [x23], #1");                                 // append one retained byte to the output
     emitter.instruction("b __rt_strip_tags_advance");                           // consume this byte and continue scanning
 }
 
@@ -260,6 +275,8 @@ fn emit_state1_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_strip_tags_s1_bang");                        // recognize a markup declaration after the tag opener
     emitter.instruction("cmp w22, #63");                                        // recognize a PHP-tag question mark
     emitter.instruction("b.eq __rt_strip_tags_s1_quest");                       // recognize PHP markup after the tag opener
+    emitter.instruction("ldr x9, [x29, #-80]");                                 // reload the effective allow-list length
+    emitter.instruction("cbz x9, __rt_strip_tags_advance");                     // skip tag collection when no allow-list is active
     emitter.instruction("mov w0, w22");                                         // forward the current subject byte to output or tag collection
     emitter.instruction("bl __rt_strip_tags_collect");                          // retain this raw tag byte for possible allow-list matching
     emitter.instruction("b __rt_strip_tags_advance");                           // consume this byte and continue scanning
@@ -574,14 +591,6 @@ fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x21, [x29, #-96]");                                // preserve the subject scan cursor
     emitter.instruction("b __rt_strip_tags_loop");                              // resume state dispatch at the saved subject cursor
 
-    // -- write one kept output byte --
-    emitter.comment("-- write one kept output byte --");
-    emitter.label("__rt_strip_tags_putc");
-    emitter.instruction("ldr x9, [x29, #-48]");                                 // reload the output write cursor for this scan step
-    emitter.instruction("strb w0, [x9], #1");                                   // append one retained byte and advance the output cursor
-    emitter.instruction("str x9, [x29, #-48]");                                 // preserve the output write cursor
-    emitter.instruction("ret");                                                 // return after advancing the output write cursor
-
     // -- append one collected tag byte when an allow-list is active --
     emitter.comment("-- append one collected tag byte when an allow-list is active --");
     emitter.label("__rt_strip_tags_collect");
@@ -600,7 +609,7 @@ fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_strip_tags_emit_tag");
     emitter.instruction("ldr x1, [x29, #-56]");                                 // reload the collected-tag buffer for this scan step
     emitter.instruction("ldr x2, [x29, #-64]");                                 // reload the collected-tag length for this scan step
-    emitter.instruction("ldr x3, [x29, #-48]");                                 // reload the output write cursor for this scan step
+    emitter.instruction("mov x3, x23");                                         // take the live output write cursor
     emitter.instruction("mov x4, xzr");                                         // start copying the complete allowed raw tag
     emitter.label("__rt_strip_tags_emit_tag_loop");
     emitter.instruction("cmp x4, x2");                                          // stop after copying every byte of the allowed raw tag
@@ -610,8 +619,7 @@ fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x4, x4, #1");                                      // advance the collected-tag traversal cursor
     emitter.instruction("b __rt_strip_tags_emit_tag_loop");                     // copy the next byte of an allowed tag
     emitter.label("__rt_strip_tags_emit_tag_done");
-    emitter.instruction("add x3, x3, x2");                                      // advance the output cursor past the complete retained tag
-    emitter.instruction("str x3, [x29, #-48]");                                 // preserve the output write cursor
+    emitter.instruction("add x23, x23, x2");                                    // advance the output cursor past the complete retained tag
     emitter.instruction("ret");                                                 // return after committing the retained tag bytes
 
     // -- load the next subject byte, or 0 at EOF, into w0 --

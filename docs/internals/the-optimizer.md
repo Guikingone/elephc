@@ -763,6 +763,12 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
+`src/ir_passes/strip_tags_len_sink.rs` folds `strlen(strip_tags(...))` into the
+count mode of `__rt_strip_tags`. The scanner still evaluates the subject and the
+allow-list exactly once, including array/Mixed coercion and strict `TypeError`s,
+but returns the retained byte count instead of publishing and persisting the
+output. Any non-length observer keeps the allocating helper.
+
 `src/ir_passes/count_chars_count_sink.rs` folds `count(count_chars($s, 1))` into
 `CountCharsDistinct`, which scans the subject into a 256-bit presence map and
 returns the distinct byte count without building the tally hash.

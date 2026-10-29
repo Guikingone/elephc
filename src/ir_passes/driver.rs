@@ -39,6 +39,7 @@ use super::sqrt_add_int_sink::SqrtAddIntSink;
 use super::count_chars_count_sink::CountCharsCountSink;
 use super::str_split_count_sink::StrSplitCountSink;
 use super::parse_url_count_sink::ParseUrlCountSink;
+use super::strip_tags_len_sink::StripTagsLenSink;
 use super::strpos_int_sink::StrposIntSink;
 use super::base64_decode_len_sink::Base64DecodeLenSink;
 use super::strstr_len_sink::StrstrLenSink;
@@ -163,6 +164,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(AbsIntSink),
         Box::new(StringLenSink),
         Box::new(StrposIntSink),
+        Box::new(StripTagsLenSink),
         Box::new(ParseUrlCountSink),
         Box::new(StrSplitCountSink),
         Box::new(CountCharsCountSink),

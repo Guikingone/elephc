@@ -61,6 +61,7 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "Base64DecodedLen",
     "ParseUrlCount",
     "CountCharsDistinct",
+    "StripTagsLen",
     "StriposInt",
     "StrrposInt",
     "StrriposInt",

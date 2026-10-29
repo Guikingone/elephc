@@ -409,7 +409,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hex2bin` | Hex → binary | `x1`/`x2` | `x1`/`x2` |
 | `__rt_md5` | MD5 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sha1` | SHA1 hash | `x1`/`x2` | `x1`/`x2` |
-| `__rt_sprintf` | Format string, including deferred static/Mixed coercion and eval-aware object stringification | format + tagged args on stack + optional eval context | `x1`/`x2` |
+| `__rt_sprintf` | Format string, including deferred static/Mixed coercion and eval-aware object stringification. An unadorned `%d` formats decimal digits directly with `__rt_itoa_into` after proving no flag, width, or precision needs libc field rules | format + tagged args on stack + optional eval context | `x1`/`x2` |
 | `__rt_sprintf_pack_mixed` | Pack a boxed scalar or preserve a boxed non-scalar for deferred formatting | boxed `Mixed` in `x0` | record payload/tag in `x0`/`x1` |
 | `__rt_sprintf_mixed_to_int` | Apply PHP numeric formatting rules and warnings to a boxed or raw-tagged array, object, callable, iterable, or resource | record tag/payload + conversion kind + optional eval context in `x0`-`x3` | `x0` |
 | `__rt_sprintf_mixed_to_string` | Render a boxed or raw-tagged array/resource, dispatch native/eval `__toString()`, or throw a catchable `Error` for a non-stringable value | record tag/payload + optional eval context in `x0`/`x1`/`x2` | owner + `x1`/`x2` |
@@ -420,7 +420,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_urldecode` | URL decode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_htmlspecialchars` | HTML escape honouring the `ENT_*` quote and document-type flags | `x1`/`x2` + flags in `x3` | `x1`/`x2` |
 | `__rt_html_entity_decode` | Decode HTML entities | `x1`/`x2` | `x1`/`x2` |
-| `__rt_strip_tags` | Strip HTML and PHP tags, preserving allowed HTML tags while always removing comments and PHP tags | `x1`/`x2` = subject pointer/length, `x3`/`x4` = allow-list pointer/length | `x1`/`x2` = stripped string |
+| `__rt_strip_tags` | Strip HTML and PHP tags, preserving allowed HTML tags while always removing comments and PHP tags. Mode `0` publishes and persists the stripped string; mode `1` (`x5`/`r8`) returns the retained byte count without publishing or persisting it | `x1`/`x2` = subject pointer/length, `x3`/`x4` = allow-list pointer/length, `x5`/`r8` = result mode | `x1`/`x2` = stripped string, or `x0`/`rax` = count |
 | `__rt_rawurlencode` | URL encode (RFC 3986) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_parse_url` | Parse URL bytes and select an array/string/int/null/false result | `x1`/`x2` + component in `x3` | `x0` (Mixed ptr) |
 | `__rt_stripslashes` | Remove escape backslashes | `x1`/`x2` | `x1`/`x2` |

@@ -277,6 +277,32 @@ fclose($f);
     assert_eq!(out, "age is 42 (3.5)|1-2-3|a/b|[x=7]|n=6|f=9:z|m=3");
 }
 
+/// Unadorned decimal conversions use the direct digit formatter, while flags, width,
+/// precision, unsigned and hexadecimal spellings keep libc's exact field rules.
+#[test]
+fn test_vsprintf_plain_decimal_fast_path() {
+    let out = compile_and_run(
+        r#"<?php
+function runtime_format(string $format, mixed $value): string {
+    return sprintf($format, $value);
+}
+$values = [PHP_INT_MIN, -42, 0, 7];
+echo vsprintf("%d,%d,%d,%d", $values), "|";
+echo runtime_format("%d", PHP_INT_MIN), "|";
+echo runtime_format("%05d", 42), "|";
+echo runtime_format("%+d", 42), "|";
+echo runtime_format("%.3d", 42), "|";
+echo runtime_format("%u", -1), "|";
+echo runtime_format("%x", 255), "|";
+echo runtime_format("%5d", 42), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "-9223372036854775808,-42,0,7|-9223372036854775808|00042|+42|42|18446744073709551615|ff|   42\n"
+    );
+}
+
 /// `printf()` returns the number of bytes written, matching PHP. Regression for
 /// an x86_64-specific bug where the byte count was parked in `rcx` across the
 /// `write` syscall — which the `syscall` instruction clobbers — so the return

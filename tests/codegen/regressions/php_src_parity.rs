@@ -284,3 +284,171 @@ echo "\n";
         out.stderr
     );
 }
+
+/// Ports php-src URL, Base64, count_chars, CRC32 and str_split edge cases.
+///
+/// Covers `ext/standard/tests/url/urls.inc` selected `parse_url_basic_*` rows plus
+/// `parse_url_relative_scheme`, `base64_decode_basic_001/002`, `count_chars.phpt`,
+/// `count_chars_basic.phpt`, `crc32_basic.phpt`, `crc32_variation2/3/4.phpt`, and
+/// `str_split_basic.phpt` with `str_split_variation3..7`. The URL loop also exercises the
+/// `count(parse_url())` sink; the Base64 loop exercises strict/lax decoding and its length
+/// sink; `count_chars($s, 1)` and `count(str_split())` cover their count sinks.
+#[test]
+fn php_src_url_base64_count_chars_crc32_split_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$urls = [
+    '64.246.30.37',
+    'http://64.246.30.37',
+    'php.net:80/',
+    'http://www.php.net:80/index.php?foo&',
+    'http://secret:hideout@www.php.net:80/index.php?test=1&test2=char#ref',
+    'zlib:http://foo@bar',
+    'mailto:me@mydomain.com',
+    '/foo.php?a=b&c=d',
+    'file:///path/to/file',
+    'http://x:?',
+    'http://[x:80]/',
+    'http:///blah.com',
+    'http://blah.com:123456',
+];
+foreach ($urls as $u) { echo json_encode(parse_url($u), JSON_UNESCAPED_SLASHES), '|'; }
+echo "\n";
+echo json_encode(parse_url('http://secret:hideout@www.php.net:80/index.php?x=1#f', PHP_URL_HOST), JSON_UNESCAPED_SLASHES), '|';
+echo json_encode(parse_url('//example.org'), JSON_UNESCAPED_SLASHES), '|';
+echo count(parse_url('https://user:pass@example.com:8080/path?q=1#frag')), '|';
+echo count(parse_url('http://example.com')), "\n";
+
+$b64 = [
+    'aGVsbG8gd29ybGQh',
+    "a GVs   bG8gd2\n 9ybGQh",
+    'aGVsbG8gd29ybGQh*',
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/VV==',
+    'UEhQIGlzIGEgcG9wdWxhciBnZW5lcmFsLXB1cnBvc2Ugc2NyaXB0aW5nIGxhbmd1YWdlIHRoYXQgaXMgZXNwZWNpYWxseSBzdWl0ZWQgdG8gd2ViIGRldmVsb3BtZW50',
+];
+foreach ($b64 as $c) { echo bin2hex(base64_decode($c)), '|'; }
+foreach ($b64 as $c) { $r = base64_decode($c, true); echo $r === false ? 'F' : bin2hex($r), '|'; }
+echo strlen(base64_decode($b64[4])), "\n";
+
+$s = 'het leven is net erwtensoep - je kunt er geen touw aan vastknopen';
+echo implode(',', count_chars($s, 1)), '|';
+echo count(count_chars($s, 1)), '|';
+echo count_chars($s, 3), '|';
+echo strlen(count_chars($s, 4)), '|';
+$bin = "\x00\x00\xff\xffabc";
+echo count(count_chars($bin, 1)), '|';
+echo implode(',', count_chars($bin, 1)), "\n";
+
+foreach (['', ' ', 'hello world', 'HELLO WORLD', 'string_val1234', "abc\0def"] as $c) { echo crc32($c), '|'; }
+echo "\n";
+
+$vals = ['', ' ', '1234', 'simple string', "string\twith\rws\nchars", "a\0b"];
+foreach ($vals as $v) { echo json_encode(str_split($v, 3)), '|'; }
+echo json_encode(str_split('This is basic testcase', 5)), '|';
+echo count(str_split(str_repeat('a', 26), 5)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        r#"{"path":"64.246.30.37"}|{"scheme":"http","host":"64.246.30.37"}|{"host":"php.net","port":80,"path":"/"}|{"scheme":"http","host":"www.php.net","port":80,"path":"/index.php","query":"foo&"}|{"scheme":"http","host":"www.php.net","port":80,"user":"secret","pass":"hideout","path":"/index.php","query":"test=1&test2=char","fragment":"ref"}|{"scheme":"zlib","path":"http://foo@bar"}|{"scheme":"mailto","path":"me@mydomain.com"}|{"path":"/foo.php","query":"a=b&c=d"}|{"scheme":"file","path":"/path/to/file"}|{"scheme":"http","host":"x","query":""}|{"scheme":"http","host":"[x:80]","path":"/"}|false|false|
+"www.php.net"|{"host":"example.org"}|8|2
+68656c6c6f20776f726c6421|68656c6c6f20776f726c6421|68656c6c6f20776f726c6421|00108310518720928b30d38f41149351559761969b71d79f8218a39259a7a29aabb2dbafc31cb3d35db7e39ebbf3dfbf55|504850206973206120706f70756c61722067656e6572616c2d707572706f736520736372697074696e67206c616e6775616765207468617420697320657370656369616c6c792073756974656420746f2077656220646576656c6f706d656e74|68656c6c6f20776f726c6421|68656c6c6f20776f726c6421|F|00108310518720928b30d38f41149351559761969b71d79f8218a39259a7a29aabb2dbafc31cb3d35db7e39ebbf3dfbf55|504850206973206120706f70756c61722067656e6572616c2d707572706f736520736372697074696e67206c616e6775616765207468617420697320657370656369616c6c792073756974656420746f2077656220646576656c6f706d656e74|96
+12,1,3,12,1,1,1,1,2,1,8,3,2,2,3,6,2,2,2|19| -aeghijklnoprstuvw|237|5|2,1,1,1,2
+0|3916222277|222957957|2279966299|256895812|3632661392|
+[]|[" "]|["123","4"]|["sim","ple"," st","rin","g"]|["str","ing","\twi","th\r","ws\n","cha","rs"]|["a\u0000b"]|["This ","is ba","sic t","estca","se"]|6
+"#,
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Ports php-src `strip_tags_array.phpt` and the allow-list rows from `strip_tags_basic2.phpt`.
+///
+/// The array form joins keys/values into `<...>` and ignores value truthiness, matching PHP
+/// 8.5: `['p' => true, 'a' => false]` keeps both `p` and `a`, and `['p' => 'a']` keeps the
+/// key name rather than its value. The length-only sink is covered separately by the
+/// optimizer suite, so these calls keep asserting the emitted tag bytes.
+#[test]
+fn php_src_strip_tags_array_and_allow_list_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r##"<?php
+$string = '<p>foo <b>bar</b> <a href="#">foobar</a></p>';
+var_dump(strip_tags($string));
+var_dump(strip_tags($string, ['a']));
+var_dump(strip_tags($string, ['p', 'a']));
+var_dump(strip_tags($string, []));
+var_dump(strip_tags($string, ['p' => true, 'a' => false]));
+var_dump(strip_tags($string, ['p' => 'a']));
+var_dump(strip_tags($string, [0]));
+var_dump(strip_tags($string, [1]));
+var_dump(strip_tags($string, [1, 2]));
+var_dump(strip_tags($string, ['color' => 'red', 'item' => 'pen']));
+$s2 = "<html><p>hello</p><b>world</b><a href=\"#fragment\">Other text</a></html><?php echo hello ?>";
+foreach (["<html>", "<p>", "<a>", "<?php", "<html><p><a><?php"] as $tags) {
+    var_dump(strip_tags($s2, $tags));
+}
+"##,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "string(14) \"foo bar foobar\"\n\
+string(30) \"foo bar <a href=\"#\">foobar</a>\"\n\
+string(37) \"<p>foo bar <a href=\"#\">foobar</a></p>\"\n\
+string(14) \"foo bar foobar\"\n\
+string(14) \"foo bar foobar\"\n\
+string(30) \"foo bar <a href=\"#\">foobar</a>\"\n\
+string(14) \"foo bar foobar\"\n\
+string(14) \"foo bar foobar\"\n\
+string(14) \"foo bar foobar\"\n\
+string(14) \"foo bar foobar\"\n\
+string(33) \"<html>helloworldOther text</html>\"\n\
+string(27) \"<p>hello</p>worldOther text\"\n\
+string(44) \"helloworld<a href=\"#fragment\">Other text</a>\"\n\
+string(20) \"helloworldOther text\"\n\
+string(64) \"<html><p>hello</p>world<a href=\"#fragment\">Other text</a></html>\"\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Covers the network address families used by the direct IPv4 parser and the libc IPv6 path.
+///
+/// php-src has no dedicated `inet_pton.phpt`/`inet_ntop.phpt` at this revision, so the rows
+/// follow `ext/standard/network.c` and the manual: canonical and zero-padded IPv4, invalid
+/// octet counts/ranges/trailing bytes, compressed IPv6, embedded IPv4, and the `false`
+/// result for a three-byte address.
+#[test]
+fn php_src_inet_pton_and_ntop_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+foreach (['127.0.0.1','01.2.3.4','255.255.255.255','1.2.3','256.1.1.1','1.2.3.4.','1.2.3.4 ','::1','2001:db8::1','::ffff:192.0.2.128'] as $s) {
+    $p = inet_pton($s);
+    echo $s, '=', $p === false ? 'F' : bin2hex($p), ';';
+}
+echo "\n";
+foreach (['::1','2001:db8::1'] as $s) { echo inet_ntop(inet_pton($s)), ';'; }
+echo "\n";
+var_dump(inet_ntop('abc'));
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "127.0.0.1=7f000001;01.2.3.4=01020304;255.255.255.255=ffffffff;1.2.3=F;256.1.1.1=F;1.2.3.4.=F;1.2.3.4 =F;::1=00000000000000000000000000000001;2001:db8::1=20010db8000000000000000000000001;::ffff:192.0.2.128=00000000000000000000ffffc0000280;\n\
+::1;2001:db8::1;\n\
+bool(false)\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

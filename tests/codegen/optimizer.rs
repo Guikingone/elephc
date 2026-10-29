@@ -25,6 +25,8 @@ mod base64_decode_len_sink;
 mod parse_url_count_sink;
 #[path = "optimizer/count_chars_count_sink.rs"]
 mod count_chars_count_sink;
+#[path = "optimizer/strip_tags_len_sink.rs"]
+mod strip_tags_len_sink;
 #[path = "optimizer/string_len_sink.rs"]
 mod string_len_sink;
 #[path = "optimizer/str_split_count_sink.rs"]

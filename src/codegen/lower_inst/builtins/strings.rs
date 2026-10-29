@@ -90,7 +90,7 @@ pub(crate) use simple::{
     lower_binary_string_runtime, lower_bin2hex_len, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
     lower_trim_like, lower_ucfirst,
 };
-pub(crate) use strip_tags::lower_strip_tags;
+pub(crate) use strip_tags::{lower_strip_tags, lower_strip_tags_len};
 pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split, lower_str_split_count};
 
 #[allow(unused_imports)]
