@@ -90,7 +90,6 @@ static void run_abandoned_requests(void)
         "elephc_late_hold($GLOBALS['fatal_fiber'], $resumed);"
         "set_error_handler(static function () { return false; });";
     php_request_shutdown(NULL);
-    run_late_userland_fiber_request();
     size_t baseline = live_malloc_bytes();
     for (unsigned request = 0; request < 8; request++) {
         if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); break; }
@@ -205,11 +204,13 @@ int main(int argc, char **argv)
         }
         for (unsigned i = 0; i < started; i++) { pthread_join(threads[i], NULL); }
         pthread_attr_destroy(&attributes);
+        php_request_shutdown(NULL);
 #else
         php_request_shutdown(NULL);
         run_requests(NULL);
-        if (php_request_startup() == FAILURE) { return 4; }
 #endif
+        run_late_userland_fiber_request();
+        if (php_request_startup() == FAILURE) { return 4; }
     }
     php_embed_shutdown();
     if (atomic_load(&failures)) {
