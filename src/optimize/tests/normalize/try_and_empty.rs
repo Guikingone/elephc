@@ -359,7 +359,10 @@ fn test_normalize_control_flow_keeps_output_inside_try() {
             Span::dummy(),
         )];
 
-        let pruned = normalize_control_flow(program);
+        let native = normalize_control_flow(program.clone());
+        assert_eq!(native.len(), 2, "ordinary output can still leave a non-throwing prefix");
+        assert_eq!(native[0], output);
+        let pruned = with_hosted_output(true, || normalize_control_flow(program));
 
         assert_eq!(pruned.len(), 1);
         let StmtKind::Try { try_body, .. } = &pruned[0].kind else {

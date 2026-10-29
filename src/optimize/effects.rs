@@ -86,9 +86,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
         StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(),
         StmtKind::IncludeOnceGuard { body, .. } => block_effect(body).with_side_effects(),
-        // Hosted output handlers can throw. Keep output inside its source try region even for
-        // standalone builds, where the extra conservatism only forgoes an optimization.
-        StmtKind::Echo(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
+        StmtKind::Echo(expr) => output_effect(expr_effect(expr)),
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
@@ -292,7 +290,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 evaluated.with_side_effects().with_may_throw().with_writes_globals()
             }
         }
-        ExprKind::Print(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
+        ExprKind::Print(inner) => output_effect(expr_effect(inner)),
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
@@ -548,4 +546,10 @@ pub(super) fn combine_effects(effects: impl IntoIterator<Item = Effect>) -> Effe
     effects
         .into_iter()
         .fold(Effect::PURE, |acc, effect| acc.combine(effect))
+}
+
+/// Adds output side effects and only the callbacks available in the current host profile.
+fn output_effect(effect: Effect) -> Effect {
+    let effect = effect.with_side_effects();
+    if output::output_may_throw() { effect.with_may_throw() } else { effect }
 }

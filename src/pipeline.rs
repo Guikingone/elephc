@@ -124,6 +124,11 @@ impl<'a> EntryKind<'a> {
 
 /// Shares every compiler pass while separating generated host storage from project discovery.
 fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
+    optimize::with_hosted_output(config.emit == Emit::Phpext, || compile_config(config, entry));
+}
+
+/// Runs compiler passes with the output kind's host-callback profile installed.
+fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let CliConfig {
         filename,
         heap_size,

@@ -427,6 +427,12 @@ calls, and unaudited dynamic execution unavailable. Extend the checker for new
 conversion and host-callback paths instead of bypassing it to accept arrays.
 Apply validation under normal compile, `--check`, and `--emit-ir`.
 
+AST output effects and exception routing use a scoped host-output profile during
+PHP extension compilation. Standalone executables retain their closed-world
+output analysis. The scope restores its previous setting across nested calls
+and unwinding. Scratch persistence retires a cast's detached string after making
+the stable copy, while numeric formatter views remain protected across reentry.
+
 Route terminal native output from `__rt_stdout_write` to a guarded C adapter
 that uses PHP's output API, so host `ob_start()` and the SAPI see the bytes.
 Do not use raw fd 1 writes or globally redirect the host stdout descriptor.
