@@ -20,6 +20,7 @@ pub(crate) fn emit_phpext_exports(
     reserve_boundary_data(data);
     data.add_comm("_elephc_phpext_pack_depth".into(), 8);
     data.add_comm(PHPEXT_REPLACEMENT_OWNER_COUNT.into(), 8);
+    data.add_comm(PHPEXT_REPLACEMENT_OWNER_BASE.into(), 8);
     data.add_comm(
         PHPEXT_REPLACEMENT_OWNERS.into(),
         PHPEXT_REPLACEMENT_OWNER_LIMIT * 8,
@@ -50,6 +51,8 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     let exception_cursor = used;
     used += 8;
     let replacement_owner_base = used;
+    used += 8;
+    let saved_replacement_owner_base = used;
     let mut params = Vec::new();
     for (_, ty) in &export.source_sig.params {
         let mut slots = Vec::new();
@@ -76,6 +79,10 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     abi::store_at_offset(emitter, result, saved_boundary_status);
     abi::emit_load_symbol_to_reg(emitter, result, PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
     abi::store_at_offset(emitter, result, replacement_owner_base);
+    abi::emit_load_symbol_to_reg(emitter, result, PHPEXT_REPLACEMENT_OWNER_BASE, 0);
+    abi::store_at_offset(emitter, result, saved_replacement_owner_base);
+    abi::load_at_offset(emitter, result, replacement_owner_base);
+    abi::emit_store_reg_to_symbol(emitter, result, PHPEXT_REPLACEMENT_OWNER_BASE, 0);
     boundary::emit_initialize_hidden_collector_owner(emitter, hidden);
     emitter.bl_c("elephc_php_stack_floor");                                      // use the current PHP thread or Fiber boundary instead of process stack limits
     abi::emit_store_reg_to_symbol(emitter, result, "_stack_limit", 0);
@@ -193,6 +200,8 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
         abi::emit_call_label(emitter, "__rt_decref_mixed");
     }
     emit_release_replacement_owners(emitter, replacement_owner_base, &name);
+    abi::load_at_offset(emitter, result, saved_replacement_owner_base);
+    abi::emit_store_reg_to_symbol(emitter, result, PHPEXT_REPLACEMENT_OWNER_BASE, 0);
     boundary::emit_leave_boundary(emitter, concat);
     abi::load_at_offset(emitter, result, saved_boundary_status);
     abi::emit_store_reg_to_symbol(emitter, result, BOUNDARY_STATUS, 0);

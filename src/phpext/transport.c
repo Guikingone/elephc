@@ -15,9 +15,15 @@ typedef struct ep_allocation {
 typedef struct ep_host_predecessor {
     const uintptr_t *root;
     const uintptr_t *tail;
+    uint64_t sequence;
     bool detach_pending;
     zval exception;
 } ep_host_predecessor;
+
+typedef struct ep_retired_host_exception {
+    struct ep_retired_host_exception *next;
+    zval exception;
+} ep_retired_host_exception;
 
 typedef struct ep_exception_copy {
     struct ep_exception_copy *next;
@@ -28,7 +34,7 @@ typedef struct ep_exception_copy {
     size_t message_len;
     zend_long code;
     zend_object *anchor;
-    ep_host_predecessor *host_predecessor_after;
+    const uintptr_t *host_predecessor_key;
 } ep_exception_copy;
 
 typedef struct ep_call {
@@ -49,8 +55,10 @@ typedef struct ep_call {
     zend_object *previous_exception_anchor;
     ep_host_predecessor host_predecessors[EP_HOST_PREDECESSOR_LIMIT];
     size_t host_predecessor_count;
+    uint64_t host_predecessor_sequence;
     ep_host_predecessor *active_host_predecessor;
-    ep_host_predecessor *exception_host_predecessor_after;
+    const uintptr_t *exception_host_predecessor_key;
+    ep_retired_host_exception *retired_host_exceptions;
     char *output;
     size_t output_len;
     size_t output_capacity;
@@ -108,10 +116,21 @@ static void ep_call_free_storage(ep_call *call)
     free(call);
 }
 
+/* Fatal teardown cannot invoke request-owned Zend destructors. */
+static void ep_retired_host_exceptions_abandon(ep_retired_host_exception *retired)
+{
+    while (retired) {
+        ep_retired_host_exception *next = retired->next;
+        free(retired);
+        retired = next;
+    }
+}
+
 /* Retire every partial input/result copy after normal returns, exceptions and bailouts. */
 static void ep_call_destroy(ep_call *call)
 {
     zval pending = call->pending_exception;
+    ep_retired_host_exception *retired = call->retired_host_exceptions;
     zval host_predecessors[EP_HOST_PREDECESSOR_LIMIT];
     size_t host_predecessor_count = 0;
     for (size_t i = 0; i < call->host_predecessor_count; i++) {
@@ -124,6 +143,13 @@ static void ep_call_destroy(ep_call *call)
     for (size_t i = 0; i < host_predecessor_count; i++) {
         zval_ptr_dtor(&host_predecessors[i]);
     }
+    while (retired) {
+        ep_retired_host_exception *next = retired->next;
+        zval exception = retired->exception;
+        free(retired);
+        zval_ptr_dtor(&exception);
+        retired = next;
+    }
 }
 
 /* Fatal request termination can skip Fiber destructors, leaving parked calls in this chain. */
@@ -131,6 +157,7 @@ static void ep_call_abandon_chain(ep_call *call)
 {
     while (call) {
         ep_call *parent = call->parent;
+        ep_retired_host_exceptions_abandon(call->retired_host_exceptions);
         ep_call_free_storage(call);
         call = parent;
     }

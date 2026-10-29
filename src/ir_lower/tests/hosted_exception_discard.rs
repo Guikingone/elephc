@@ -115,8 +115,16 @@ function catch_replacement(array $value): void {
             .unwrap()
             .asm
         };
+        let hosted = emit(Emit::Phpext);
+        let callback = hosted
+            .find("elephc_php_catch_host_replacement")
+            .expect("the hosted catch notification is missing");
         assert!(
-            emit(Emit::Phpext).contains("elephc_php_catch_host_replacement"),
+            hosted[callback..].contains("__rt_throwable_previous"),
+            "{target}: caught wrappers must traverse their complete native previous chain"
+        );
+        assert!(
+            hosted.contains("elephc_php_catch_host_replacement"),
             "{target}: the hosted catch notification is missing"
         );
         assert!(

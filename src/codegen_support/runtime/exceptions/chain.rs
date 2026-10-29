@@ -11,8 +11,8 @@
 use crate::codegen_support::{
     abi,
     cdylib::{
-        BOUNDARY_STATUS, PHPEXT_REPLACEMENT_OWNER_COUNT, PHPEXT_REPLACEMENT_OWNER_LIMIT,
-        PHPEXT_REPLACEMENT_OWNERS,
+        BOUNDARY_STATUS, PHPEXT_REPLACEMENT_OWNER_BASE, PHPEXT_REPLACEMENT_OWNER_COUNT,
+        PHPEXT_REPLACEMENT_OWNER_LIMIT, PHPEXT_REPLACEMENT_OWNERS,
     },
     emit::Emitter,
     platform::Arch,
@@ -38,8 +38,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     if emitter.phpext_output {
         emitter.instruction("cbnz x1, __rt_exception_chain_has_pending");       // ordinary native pending owners use the normal chain path
         emitter.instruction("cbz x0, __rt_exception_chain_return");             // only a native replacement can own a displaced host escape
+        emit_aarch64_replacement_sweep(emitter);
         abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-        emitter.instruction(&format!("cmp x9, #{}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound pins by the adapter's exception nesting contract
+        emitter.instruction(&format!("cmp x9, #{}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound simultaneously live replacement pins
         emitter.instruction("b.hs __rt_exception_chain_replacement_overflow");
         emitter.instruction("str x0, [sp, #40]");                               // seed the replacement's intrinsic previous-chain tail
         emitter.label("__rt_exception_chain_replacement_tail");
@@ -143,8 +144,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
         emitter.instruction("jnz __rt_exception_chain_has_pending");
         emitter.instruction("test rax, rax");                                   // only a real native replacement needs retained identity
         emitter.instruction("jz __rt_exception_chain_return");
+        emit_x86_64_replacement_sweep(emitter);
         abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-        emitter.instruction(&format!("cmp r10, {}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound pins by the adapter's exception nesting contract
+        emitter.instruction(&format!("cmp r10, {}", PHPEXT_REPLACEMENT_OWNER_LIMIT)); // bound simultaneously live replacement pins
         emitter.instruction("jae __rt_exception_chain_replacement_overflow");
         emitter.instruction("mov QWORD PTR [rbp - 48], rax");                  // seed the intrinsic previous-chain tail
         emitter.label("__rt_exception_chain_replacement_tail");
@@ -239,6 +241,104 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_decref_any");                                 // consume the raw owner under the caller's exception boundary
 }
 
+/// Reclaims AArch64 replacement pins whose objects have no owner besides equivalent pins.
+fn emit_aarch64_replacement_sweep(emitter: &mut Emitter) {
+    emitter.label("__rt_exception_chain_replacement_sweep");
+    abi::emit_extern_symbol_address(emitter, "x0", PHPEXT_REPLACEMENT_OWNERS);
+    abi::emit_load_symbol_to_reg(emitter, "x1", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
+    abi::emit_load_symbol_to_reg(emitter, "x2", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    emitter.bl_c("elephc_php_stale_finally_replacement");
+    emitter.instruction("cbz x0, __rt_exception_chain_replacement_swept");
+    emitter.instruction("str x0, [sp, #16]");                                  // keep the stale root across compaction and releases
+    abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
+    abi::emit_load_symbol_to_reg(emitter, "x10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    abi::emit_extern_symbol_address(emitter, "x11", PHPEXT_REPLACEMENT_OWNERS);
+    emitter.instruction("mov x12, x9");                                        // read cursor starts at this export's first owner
+    emitter.instruction("mov x13, x9");                                        // write cursor compacts retained owners in place
+    emitter.instruction("mov x14, #0");                                        // number of identical pins to consume
+    emitter.label("__rt_exception_chain_replacement_compact");
+    emitter.instruction("cmp x12, x10");
+    emitter.instruction("b.hs __rt_exception_chain_replacement_compacted");
+    emitter.instruction("ldr x15, [x11, x12, lsl #3]");
+    emitter.instruction("add x12, x12, #1");
+    emitter.instruction("ldr x16, [sp, #16]");
+    emitter.instruction("cmp x15, x16");
+    emitter.instruction("b.eq __rt_exception_chain_replacement_remove");
+    emitter.instruction("str x15, [x11, x13, lsl #3]");
+    emitter.instruction("add x13, x13, #1");
+    emitter.instruction("b __rt_exception_chain_replacement_compact");
+    emitter.label("__rt_exception_chain_replacement_remove");
+    emitter.instruction("add x14, x14, #1");
+    emitter.instruction("b __rt_exception_chain_replacement_compact");
+    emitter.label("__rt_exception_chain_replacement_compacted");
+    emitter.instruction("str x14, [sp, #32]");                                 // releases left after publishing compaction
+    abi::emit_store_reg_to_symbol(emitter, "x13", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    emitter.label("__rt_exception_chain_replacement_zero_tail");
+    emitter.instruction("cmp x13, x10");
+    emitter.instruction("b.hs __rt_exception_chain_replacement_release");
+    emitter.instruction("str xzr, [x11, x13, lsl #3]");
+    emitter.instruction("add x13, x13, #1");
+    emitter.instruction("b __rt_exception_chain_replacement_zero_tail");
+    emitter.label("__rt_exception_chain_replacement_release");
+    emitter.instruction("ldr x14, [sp, #32]");
+    emitter.instruction("cbz x14, __rt_exception_chain_replacement_sweep");
+    emitter.instruction("sub x14, x14, #1");
+    emitter.instruction("str x14, [sp, #32]");                                 // make a throwing final decref idempotent
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("bl __rt_decref_any");
+    emitter.instruction("b __rt_exception_chain_replacement_release");
+    emitter.label("__rt_exception_chain_replacement_swept");
+}
+
+/// Reclaims System V replacement pins whose objects have no owner besides equivalent pins.
+fn emit_x86_64_replacement_sweep(emitter: &mut Emitter) {
+    emitter.label("__rt_exception_chain_replacement_sweep");
+    abi::emit_extern_symbol_address(emitter, "rdi", PHPEXT_REPLACEMENT_OWNERS);
+    abi::emit_load_symbol_to_reg(emitter, "rsi", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
+    abi::emit_load_symbol_to_reg(emitter, "rdx", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    emitter.bl_c("elephc_php_stale_finally_replacement");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_exception_chain_replacement_swept");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                      // preserve the stale root across compaction
+    abi::emit_load_symbol_to_reg(emitter, "r8", PHPEXT_REPLACEMENT_OWNER_BASE, 0);
+    abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    abi::emit_extern_symbol_address(emitter, "r11", PHPEXT_REPLACEMENT_OWNERS);
+    emitter.instruction("mov r9, r8");                                         // write cursor starts at this export's first owner
+    emitter.instruction("xor edx, edx");                                       // number of identical pins to consume
+    emitter.label("__rt_exception_chain_replacement_compact");
+    emitter.instruction("cmp r8, r10");
+    emitter.instruction("jae __rt_exception_chain_replacement_compacted");
+    emitter.instruction("mov rcx, QWORD PTR [r11 + r8*8]");
+    emitter.instruction("add r8, 1");
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");
+    emitter.instruction("je __rt_exception_chain_replacement_remove");
+    emitter.instruction("mov QWORD PTR [r11 + r9*8], rcx");
+    emitter.instruction("add r9, 1");
+    emitter.instruction("jmp __rt_exception_chain_replacement_compact");
+    emitter.label("__rt_exception_chain_replacement_remove");
+    emitter.instruction("add rdx, 1");
+    emitter.instruction("jmp __rt_exception_chain_replacement_compact");
+    emitter.label("__rt_exception_chain_replacement_compacted");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                      // releases left after publishing compaction
+    abi::emit_store_reg_to_symbol(emitter, "r9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
+    emitter.label("__rt_exception_chain_replacement_zero_tail");
+    emitter.instruction("cmp r9, r10");
+    emitter.instruction("jae __rt_exception_chain_replacement_release");
+    emitter.instruction("mov QWORD PTR [r11 + r9*8], 0");
+    emitter.instruction("add r9, 1");
+    emitter.instruction("jmp __rt_exception_chain_replacement_zero_tail");
+    emitter.label("__rt_exception_chain_replacement_release");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_exception_chain_replacement_sweep");
+    emitter.instruction("sub r10, 1");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                      // make a throwing final decref idempotent
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_decref_any");
+    emitter.instruction("jmp __rt_exception_chain_replacement_release");
+    emitter.label("__rt_exception_chain_replacement_swept");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,10 +369,13 @@ mod tests {
             let callback = emitter.target.extern_symbol("elephc_php_previous_exception");
             let continuation = emitter.target.extern_symbol("elephc_php_exception_previous");
             let replacement = emitter.target.extern_symbol("elephc_php_finally_replacement");
+            let sweep = emitter.target.extern_symbol("elephc_php_stale_finally_replacement");
             let asm = emitter.output();
             assert!(asm.contains(&callback), "{name}: {asm}");
             assert!(asm.contains(&continuation), "{name}: {asm}");
             assert!(asm.contains(&replacement), "{name}: {asm}");
+            assert!(asm.contains(&sweep), "{name}: {asm}");
+            assert!(asm.contains(PHPEXT_REPLACEMENT_OWNER_BASE), "{name}: {asm}");
             assert!(asm.contains(PHPEXT_REPLACEMENT_OWNER_COUNT), "{name}: {asm}");
             assert!(asm.contains(PHPEXT_REPLACEMENT_OWNERS), "{name}: {asm}");
             assert_eq!(asm.matches("__rt_throwable_previous\n").count(), 4, "{name}: {asm}");

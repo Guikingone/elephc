@@ -507,6 +507,35 @@ function compare_warning(array $items, int $prefix, string $fill): bool {
     );
 }
 
+/// A throwing comparison RHS publishes one owner for an already captured byte view.
+#[test]
+fn comparison_byte_view_has_one_unwind_owner_on_all_targets() {
+    use crate::ir::Op;
+    let source = r#"<?php
+function comparison_throwing_rhs(): string { throw new Exception('rhs'); }
+function comparison_byte_view(string $bytes): bool {
+    return $bytes[0] === comparison_throwing_rhs();
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name == "comparison_byte_view")
+            .expect("expected comparison_byte_view EIR function");
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == Op::PushCallOperandOwner
+        }).count(), 2, "{target}: the captured byte and call result each need one unwind owner");
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == Op::PopCallOperandOwner
+        }).count(), 2, "{target}: both distinct unwind owners must retire once");
+    }
+}
+
 /// A nested index call sees the persisted byte receiver published until the outer read completes.
 #[test]
 fn string_offset_nested_index_owner_on_all_targets() {

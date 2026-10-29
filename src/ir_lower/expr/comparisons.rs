@@ -20,9 +20,13 @@ pub(super) fn lower_compare(
     let lhs = lower_expr(ctx, left);
     let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
     let mut pending = [lhs];
-    let (rhs, pending_pins) = lower_with_pending_owners(ctx, &mut pending, expr.span, |ctx| {
-        lower_expr(ctx, right)
-    });
+    let (rhs, pending_pins) = if left_pins.is_empty() {
+        lower_with_pending_owners(ctx, &mut pending, expr.span, |ctx| {
+            lower_expr(ctx, right)
+        })
+    } else {
+        (lower_expr(ctx, right), Vec::new())
+    };
     let lhs = pending[0];
     unpin_in_flight_owners(ctx, pending_pins, left.span);
     unpin_in_flight_owners(ctx, left_pins, left.span);

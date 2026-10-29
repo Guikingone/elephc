@@ -425,6 +425,74 @@ foreach ([
 "#);
 }
 
+/// Replacement records track live native chains instead of total catch history.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn replacement_records_follow_live_native_chains() {
+    compare(r#"<?php
+#[Export] function php_many_absorbed_replacements(array $value): int {
+    for ($i = 0; $i < 65; $i++) {
+        try { try { echo $value['missing']; } finally { throw new RuntimeException('native'); } }
+        catch (RuntimeException $error) {}
+    }
+    return 1;
+}
+#[Export] function php_catch_wrapped_replacement(array $value): mixed {
+    try {
+        try { try { echo $value['first']; } finally { throw new RuntimeException('native'); } }
+        finally { throw new Exception('wrapper'); }
+    } catch (Exception $error) {}
+    return $value['second'];
+}
+#[Export] function php_reuse_replacement_tail(array $value): void {
+    $saved = new RuntimeException('native');
+    try { try { echo $value['first']; } finally { throw $saved; } }
+    catch (RuntimeException $error) {}
+    try { echo $value['second']; } finally { throw $saved; }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+$host = 0;
+set_error_handler(function () use (&$host) { throw new DomainException('host' . ++$host); });
+echo php_many_absorbed_replacements([]), "\n";
+$host = 0;
+try { php_catch_wrapped_replacement([]); }
+catch (Throwable $error) { $dump($error); }
+$host = 0;
+try { php_reuse_replacement_tail([]); }
+catch (Throwable $error) { $dump($error); }
+"#);
+}
+
+/// Fiber graceful exit never becomes a reusable host predecessor splice tail.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn graceful_exit_replacement_splices_do_not_reuse_released_objects() {
+    compare(r#"<?php
+#[Export] function php_graceful_splice(array $value): void {
+    try { try { echo $value['missing']; } finally { throw new RuntimeException('native'); } }
+    catch (RuntimeException $error) { $saved = $error; }
+    try { throw new TypeError('pending'); }
+    finally { throw new Exception('outer', 0, $saved); }
+}
+"#, r#"
+$fiber = new Fiber(function (): void {
+    set_error_handler(function () { Fiber::suspend('parked'); });
+    php_graceful_splice([]);
+});
+echo $fiber->start(), ':';
+try { unset($fiber); }
+catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+echo ':after';
+"#);
+}
+
 /// A host callback exception in finally adopts the older native exception as previous.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

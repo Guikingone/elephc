@@ -114,7 +114,7 @@ fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     Ok(())
 }
 
-/// Tells the PHP adapter that a user catch consumed a native replacement exception.
+/// Tells the PHP adapter when a caught native chain contains a replacement exception.
 fn lower_exception_catch_host_replacement(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -128,12 +128,18 @@ fn lower_exception_catch_host_replacement(
         let caught = expect_operand(inst, 0)?;
         let result = abi::int_result_reg(ctx.emitter);
         ctx.load_value_to_result(caught)?;
+        let visit = ctx.next_label("catch_host_replacement_visit");
+        ctx.emitter.label(&visit);
+        abi::emit_push_reg(ctx.emitter, result);
         abi::emit_reg_move(
             ctx.emitter,
             abi::int_arg_reg_name(ctx.emitter.target, 0),
             result,
         );
         ctx.emitter.bl_c("elephc_php_catch_host_replacement");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
     }
     Ok(())
 }
