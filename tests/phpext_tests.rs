@@ -107,6 +107,34 @@ impl Drop for Project {
     }
 }
 
+/// PHP extension timing output includes SDK discovery, adapter compilation and module linking.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn phpext_timings_include_host_link_phase() {
+    let project = Project::new();
+    let _sdk = project.sdk();
+    let source = project.0.join("timed.php");
+    fs::write(&source, "<?php #[Export] function php_timed(): int { return 42; }").unwrap();
+    let output = Command::new(compiler_binary())
+        .args(["--emit", "phpext", "--heap-size=524288", "--timings"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "compiler failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Linking PHP extension"),
+        "missing PHP extension link timing: {stderr}"
+    );
+    assert!(project.0.join("timed.so").is_file());
+    project.assert_clean();
+}
+
 /// Checks the shared neutral Rust value types against real PHP headers rather than generated headers.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

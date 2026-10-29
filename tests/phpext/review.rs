@@ -192,7 +192,7 @@ echo 'ok';
 
 /// Compares independently executed source and native functions, preserving status and diagnostics.
 fn compare(source: &str, driver: &str) {
-    compare_with_options(source, driver, &[]);
+    compare_with_options(source, driver, &["--heap-size=524288"]);
 }
 
 /// Compares source and extension execution with extra compiler options.
@@ -1456,7 +1456,7 @@ catch (ArgumentCountError $error) { echo get_class($error), ':', $error->getMess
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
 fn nested_reentry_preserves_concat_spill_views() {
-    compare_with_options(
+    compare(
         r#"<?php
 #[Export] function php_cast_int_spill(array $value, int $prefix, string $fill): string {
     return (string)(strlen($fill . $fill) + $prefix) . $value['missing'];
@@ -1486,7 +1486,6 @@ var_dump(php_cast_int_spill([], 12345, $fill));
 $nested = 'php_wrap_float_spills';
 var_dump(php_cast_float_spill([], 12345.5, $fill));
 "#,
-        &["--heap-size=524288"],
     );
 }
 
@@ -1494,7 +1493,7 @@ var_dump(php_cast_float_spill([], 12345.5, $fill));
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
 fn nested_reentry_preserves_comparison_spill_views() {
-    compare_with_options(
+    compare(
         r#"<?php
 #[Export] function php_compare_int_spill(array $value, int $prefix, string $fill): bool {
     return (string)(strlen($fill . $fill) + $prefix) ===
@@ -1514,7 +1513,6 @@ set_error_handler(function () {
 $fill = str_repeat('x', 262140);
 var_dump(php_compare_int_spill([], 12345, $fill));
 "#,
-        &["--heap-size=524288"],
     );
 }
 

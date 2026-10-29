@@ -303,11 +303,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     if emit == Emit::Phpext {
         crate::progress::phase("php-extension-link");
+        let phase_started = Instant::now();
         if let Err(error) = crate::phpext::build::link(&user_asm, exported_functions, target, &output_paths.bin) {
             crate::progress::clear();
             eprintln!("PHP extension error: {error}");
             process::exit(1);
         }
+        timings.record_since("php-extension-link", phase_started);
         crate::progress::clear();
         timings.report();
         crate::progress::finish_ok(&format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()), timings.elapsed());
