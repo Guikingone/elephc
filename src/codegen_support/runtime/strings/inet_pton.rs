@@ -266,8 +266,8 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
 
     // -- generic path: copy into a NUL-terminated buffer `inet_pton(3)` can read --
     emitter.label("__rt_inet_pton_generic_x86");
-    emitter.instruction("mov r8, rdi");                                         // source cursor
-    emitter.instruction("mov r9, rsi");                                         // remaining byte count
+    emitter.instruction("mov r8, rax");                                         // restore the source pointer after the fast parser clobbered rdi
+    emitter.instruction("mov r9, rdx");                                         // restore the remaining byte count after the fast parser clobbered rsi
     emitter.instruction("lea r10, [rbp - 304]");                                // destination cursor
     emitter.instruction("xor r11d, r11d");                                      // saw a ':' -> the address is IPv6
     emitter.label("__rt_inet_pton_copy_x86");
