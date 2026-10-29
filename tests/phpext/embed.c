@@ -210,7 +210,8 @@ static void check_malloc_accounting(void)
         malloc_probe_roots[i] = NULL;
     }
     size_t released = live_malloc_bytes();
-    if (released > baseline && released - baseline > 4 * 1024 * 1024) {
+    /* Even one cached probe block must stop counting as live after free. */
+    if (released > baseline && released - baseline >= bytes) {
         fprintf(stderr, "live malloc counter retained %zu already freed bytes\n", released - baseline);
         atomic_fetch_add(&failures, 1);
     }
