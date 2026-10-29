@@ -341,7 +341,9 @@ fn lower_finally_with_pending_exception(
     ctx.emit_void(
         Op::RuntimeCall,
         vec![escaped.value, pending.value],
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionChain)),
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ExceptionFinallyChain,
+        )),
         crate::ir::Effects::all(),
         Some(span),
     );

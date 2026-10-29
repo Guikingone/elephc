@@ -49,6 +49,7 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
+        RuntimeCallTarget::ExceptionFinallyChain => lower_exception_finally_chain(ctx, inst),
         RuntimeCallTarget::ExceptionDiscard => lower_exception_discard(ctx, inst),
         RuntimeCallTarget::ExceptionCatchHostReplacement => {
             lower_exception_catch_host_replacement(ctx, inst)
@@ -91,6 +92,32 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Notifies the PHP adapter before performing ordinary native exception chaining.
+fn lower_exception_finally_chain(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module(
+            "finally exception chaining requires two operands",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let replacement = expect_operand(inst, 0)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(replacement)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_finally_chain");
+        abi::emit_pop_reg(ctx.emitter, result);
+    }
+    lower_exception_chain(ctx, inst)
 }
 
 /// Tells the PHP adapter when a native `finally` jump discarded a host escape or replacement.

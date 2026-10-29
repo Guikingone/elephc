@@ -921,6 +921,145 @@ catch (Throwable $error) { $dump($error); }
 "#);
 }
 
+/// Host escapes that crossed a parked finally level are consumed instead of restored later.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn crossed_host_finally_levels_settle_once() {
+    compare(r#"<?php
+function php_cross_settle(array $value): int {
+    try { try { echo $value['outer']; } finally { echo $value['inner']; } }
+    finally { return 1; }
+}
+#[Export] function php_cross_then_throw(array $value): void {
+    php_cross_settle($value);
+    throw new RuntimeException('after');
+}
+#[Export] function php_cross_then_host(array $value): void {
+    php_cross_settle($value);
+    echo $value['third'];
+}
+#[Export] function php_cross_catch(array $value): void {
+    try {
+        try { echo $value['outer']; }
+        finally {
+            try { echo $value['inner']; }
+            finally { throw new RuntimeException('R'); }
+        }
+    } catch (RuntimeException $error) { echo 'caught|'; }
+    throw new RuntimeException('Z');
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+foreach (['php_cross_then_throw', 'php_cross_then_host', 'php_cross_catch'] as $function) {
+    $host = 0;
+    set_error_handler(function () use (&$host) {
+        throw new LogicException('host' . ++$host);
+    });
+    try { $function([]); }
+    catch (Throwable $error) { $dump($error); }
+    restore_error_handler();
+}
+"#);
+}
+
+/// Settling a nested host escape restores the native-copy state of its outer host level.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn parked_host_levels_restore_native_copy_state() {
+    compare(r#"<?php
+function php_settle_leaf(array $value): int {
+    try { echo $value['h2']; } finally { return 1; }
+}
+#[Export] function php_level_lost(array $value): void {
+    try { echo $value['h0']; }
+    finally {
+        try { throw new RuntimeException('Y'); }
+        finally {
+            try { echo $value['h1']; }
+            finally { php_settle_leaf($value); }
+        }
+    }
+}
+#[Export] function php_level_order(array $value): void {
+    try { echo $value['h0']; }
+    finally {
+        try { throw new RuntimeException('Y'); }
+        finally {
+            try { echo $value['h1']; }
+            finally { php_settle_leaf($value); echo 'x|'; }
+        }
+    }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+foreach (['php_level_lost', 'php_level_order'] as $function) {
+    $host = 0;
+    set_error_handler(function () use (&$host) {
+        throw new LogicException('host' . ++$host);
+    });
+    try { $function([]); }
+    catch (Throwable $error) { $dump($error); }
+    restore_error_handler();
+}
+"#);
+}
+
+/// Nested exports cannot adopt an outer adapter activation's saved Zend exception.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn nested_exports_isolate_saved_zend_exceptions() {
+    compare(r#"<?php
+#[Export] function php_nested_b2(): void {
+    try { echo 'b'; } finally { echo 'x|'; }
+}
+#[Export] function php_nested_a(array $value): void {
+    try { echo $value['a1']; } finally { echo $value['a2']; }
+}
+"#, r#"
+$dump = function (Throwable $error): void {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+    echo "\n";
+};
+$host = 0;
+$obThrown = false;
+set_error_handler(function () use (&$host, &$obThrown, $dump) {
+    if (++$host === 1) { throw new LogicException('host1'); }
+    ob_start(function ($bytes) use (&$obThrown) {
+        if (!$obThrown && $bytes !== '') {
+            $obThrown = true;
+            throw new LogicException('ob');
+        }
+        return $bytes;
+    }, 1);
+    $inner = null;
+    try { php_nested_b2(); }
+    catch (Throwable $error) { $inner = $error; }
+    try { ob_end_flush(); }
+    catch (Throwable $error) { $inner ??= $error; }
+    echo 'inner:';
+    $dump($inner);
+    return true;
+});
+try { php_nested_a([]); }
+catch (Throwable $error) { $dump($error); }
+"#);
+}
+
 /// An outer native finally return discards both the host exception and its stored native tail.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

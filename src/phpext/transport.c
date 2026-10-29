@@ -29,11 +29,6 @@ typedef struct ep_retired_host_exception {
     zval exception;
 } ep_retired_host_exception;
 
-typedef struct ep_parked_host_exception {
-    struct ep_parked_host_exception *next;
-    zval exception;
-} ep_parked_host_exception;
-
 typedef struct ep_exception_copy {
     struct ep_exception_copy *next;
     struct ep_exception_copy *previous;
@@ -46,6 +41,17 @@ typedef struct ep_exception_copy {
     const uintptr_t *host_predecessor_key;
     uint64_t root_identity;
 } ep_exception_copy;
+
+typedef struct ep_parked_host_exception {
+    struct ep_parked_host_exception *next;
+    zval exception;
+    ep_exception_copy *previous_exceptions;
+    ep_exception_copy *previous_exceptions_tail;
+    zend_object *previous_exception_anchor;
+    ep_host_predecessor *active_host_predecessor;
+    bool crossed_finally;
+    bool state_activated;
+} ep_parked_host_exception;
 
 typedef struct ep_call {
     struct ep_call *parent;
@@ -71,6 +77,8 @@ typedef struct ep_call {
     const uintptr_t *exception_host_predecessor_key;
     ep_retired_host_exception *retired_host_exceptions;
     ep_parked_host_exception *parked_host_exceptions;
+    zend_object *ambient_prev_exception;
+    zend_object *nested_prev_exception;
     char *output;
     size_t output_len;
     size_t output_capacity;
@@ -80,7 +88,8 @@ typedef struct ep_call {
     unsigned char *checkpoint;
     bool host_exception;
     bool host_bailout;
-    bool discarded_host_exception;
+    bool ambient_prev_exception_stashed;
+    size_t discarded_host_exception_depth;
     bool discard_chain_transient;
     zend_string *warning;
     char *parked_warning_buffer;

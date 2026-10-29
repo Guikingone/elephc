@@ -81,6 +81,9 @@ pub enum RuntimeCallTarget {
     /// (operand 1); an overlap between the two chains drops the pending owner instead of
     /// creating a cycle.
     ExceptionChain,
+    /// Chains exceptions emitted by a `finally` escape and notifies hosted runtimes that the
+    /// current escape crossed one older parked host-exception level.
+    ExceptionFinallyChain,
     /// Notifies a hosted runtime that a `finally` jump discarded its pending exception.
     /// Standalone outputs have no host exception to retire, so their backend emits no code.
     ExceptionDiscard,
@@ -183,7 +186,7 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Void,
             }),
-            RuntimeCallTarget::ExceptionChain => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::ExceptionChain | RuntimeCallTarget::ExceptionFinallyChain => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
@@ -283,6 +286,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ExecutablePath => "process.executable_path",
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
+            RuntimeCallTarget::ExceptionFinallyChain => "object.exception_finally_chain",
             RuntimeCallTarget::ExceptionDiscard => "object.exception_discard",
             RuntimeCallTarget::ExceptionCatchHostReplacement => {
                 "object.exception_catch_host_replacement"

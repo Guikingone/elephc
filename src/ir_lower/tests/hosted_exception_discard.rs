@@ -150,3 +150,69 @@ function catch_replacement(array $value): void {
         );
     }
 }
+
+/// Finally escapes notify the hosted adapter before chaining on every supported target.
+#[test]
+fn finally_escapes_notify_only_php_extensions_on_all_targets() {
+    let source = r#"<?php
+function chain_pending(array $value): void {
+    try { echo $value['outer']; } finally { echo $value['inner']; }
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "chain_pending")
+            .expect("expected chain_pending EIR function");
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == Op::RuntimeCall
+                && inst.immediate
+                    == Some(Immediate::RuntimeCall(
+                        RuntimeCallTarget::ExceptionFinallyChain,
+                    ))
+        }));
+        let emit = |kind| {
+            crate::codegen::generate_user_asm_from_ir_with_options_and_features(
+                &module,
+                false,
+                false,
+                Instrumentation::Off,
+                false,
+                false,
+                false,
+                kind,
+                &HashMap::new(),
+                true,
+                false,
+                WebIsolation::Worker,
+            )
+            .unwrap()
+            .asm
+        };
+        let hosted = emit(Emit::Phpext);
+        let callback = hosted
+            .find("elephc_php_finally_chain")
+            .expect("the hosted finally-chain notification is missing");
+        let chain = hosted[callback..]
+            .find("__rt_exception_chain")
+            .expect("the native exception chain call is missing");
+        assert!(chain > 0, "{target}: the hosted callback must precede native chaining");
+        assert!(
+            !emit(Emit::Cdylib).contains("elephc_php_finally_chain"),
+            "{target}: an ordinary cdylib references the PHP adapter"
+        );
+    }
+}
