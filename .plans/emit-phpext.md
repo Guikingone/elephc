@@ -299,6 +299,11 @@ Immutable code, literals, and metadata can remain shared.
 The initial producer uses complete request snapshots and a module-local mutex.
 All native writable `.data`, `.bss`, and `.comm` storage is emitted into two
 explicitly bounded ranges: initialized data and sparse zero-filled storage.
+Before assigning those ranges, the producer follows runtime symbol dependencies
+from user code, initialized data and the C adapter. Unreachable runtime function
+atoms and commons are omitted, so unused platform buffers do not impose a large
+fixed snapshot cost. Address tables and cross-atom local entries retain their
+defining function. All retained writable storage remains request-isolated.
 MINIT retains only initialized bytes. RINIT activates an empty request context;
 the first exported call allocates its snapshot lazily. Before each native call,
 the adapter acquires the mutex and restores both ranges at stable addresses;

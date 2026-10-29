@@ -14,6 +14,7 @@ use crate::{codegen_support::{self, platform::Target, RuntimeFeatures}, exports:
 /// Emits the combined user/runtime assembly with a bounded, request-owned state region.
 pub fn assembly(user: &str, heap_size: usize, target: Target, features: RuntimeFeatures) -> Result<String, String> {
     let runtime = codegen_support::generate_phpext_runtime(heap_size, target, features);
+    let runtime = super::prune::runtime(user, &runtime, target)?;
     super::state::combine(&[user, &runtime], target)
 }
 

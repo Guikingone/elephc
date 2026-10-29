@@ -106,11 +106,14 @@ request heap.
 A module-local mutex serializes native execution while the adapter exchanges
 complete request images at stable addresses. This supports independent ZTS
 requests; native calls within one module do not execute in parallel. Snapshot
-copies add time and memory proportional to the native state region, including
-the configured heap. This is a correctness-oriented initial implementation.
+copies add time and memory proportional to the retained native state region,
+including the configured heap, reachable scratch buffers and allocator metadata.
+Before laying out that region, the producer removes unreachable runtime helpers
+and their zero-initialized storage. Unused HTTP, stream and serialization buffers
+therefore do not impose a multi-megabyte snapshot floor on small modules.
 Choose `--heap-size` for the module's workload. The examples use 1 MiB. The
-compiler's general 128 MiB default produces a native state image of roughly
-383 MiB because scratch buffers and allocator metadata also scale with the heap.
+compiler's general 128 MiB default still costs several times that budget because
+the string arena and allocator metadata also scale with the heap.
 An unused request does not allocate that image, but each active request owns a
 snapshot and native calls exchange the complete configured image.
 

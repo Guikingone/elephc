@@ -10,6 +10,7 @@
 
 pub mod build;
 mod producer;
+mod prune;
 mod flags;
 mod probe;
 mod registration;

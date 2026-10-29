@@ -143,7 +143,7 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
     ));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
-    if library_boundary {
+    if library_boundary && !phpext {
         output = crate::codegen_support::visibility::append_hidden_directives(
             &output,
             &std::collections::HashSet::new(),
