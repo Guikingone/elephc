@@ -138,6 +138,29 @@ handler through the shared diagnostic dispatcher.
 Boxed float offsets use the same warning before the string fetch.
 Integer-form string offsets remain silent, including when their value is boxed.
 
+String offset writes (`$s[$i] = $v`) go through `__rt_str_offset_set`, which
+never mutates the subject: it builds the updated string in storage reserved
+through `__rt_concat_reserve`, and the ordinary local store takes ownership of
+it, so any other holder of the old string keeps its bytes. The helper owns
+PHP's order of checks — an offset still before the start warns through
+`__rt_warn_illegal_string_offset` and copies the subject unchanged, an empty
+value throws `Error`, a longer value warns that only its first byte is used —
+and pads a write past the end with spaces. Either warning can run a user error
+handler that reassigns the variable and frees the subject, so before warning the
+helper swaps the borrowed subject for a private copy, reads only the copy, and
+frees it once the result is built. A string held in a boxed `Mixed` cell
+reaches the same helper from `__rt_mixed_array_set`, which casts the value to a
+string and swaps the persisted result in as the cell's new payload. That arm
+retains the cell across the helper whenever it can warn; if the retained
+reference is the last one afterwards, a handler replaced the variable, and the
+write is abandoned and the cell released, as PHP does.
+
+EIR checks whether the resolved offset reaches the string before converting the
+RHS. An invalid negative offset passes an empty placeholder to the helper, which
+emits the warning without calling the RHS object's `__toString()`. Raw RHS owners
+and generated assignment captures are retired after the write; converted bytes
+and expression results stay protected if that cleanup invokes a throwing destructor.
+
 ## String routines
 
 **Source:** `src/codegen_support/runtime/strings/`
@@ -397,6 +420,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_ucwords` | Uppercase first letter of each word | `x1`/`x2` | `x1`/`x2` |
 | `__rt_str_ireplace` | Case-insensitive replace | search + replace + subject | `x1`/`x2` |
 | `__rt_substr_replace` | Replace substring at offset | str + replacement + start + len | `x1`/`x2` |
+| `__rt_str_offset_set` | String offset write `$s[$i] = $v` (one byte, space padding, PHP warnings/`Error`) | str in `x1`/`x2` + offset in `x0` + value in `x3`/`x4` | `x1`/`x2` |
 | `__rt_str_pad` | Pad string to length | str + len + pad_str + type | `x1`/`x2` |
 | `__rt_str_split` | Split into chunks | str + chunk_len | `x0` (array ptr) |
 | `__rt_wordwrap` | Wrap text at word boundaries | str + width + break + cut | `x1`/`x2` |
@@ -1345,12 +1369,12 @@ a package.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
-| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
+| `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees. The removed `/e` modifier and a failed compile return the failure sentinel before a match result is produced | pattern + subject strings | `x0`/`rax` = 1 (match), 0 (no match), or -1 (PHP `false`) |
+| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings. `/e` is rejected before compilation. The -1 path still returns a fresh empty array so the caller can release it without storing it | pattern + subject strings | `x0`/`rax` = 1, 0, or -1; `x1`/`rdx` = matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
 | `__rt_preg_match_all_capture` | Fill `preg_match_all()`'s by-reference `$matches` for numbered groups. `PREG_PATTERN_ORDER` uses `$matches[group][match]`, `PREG_SET_ORDER` uses `$matches[match][group]`, `PREG_OFFSET_CAPTURE` boxes `[value, offset]`, and `PREG_UNMATCHED_AS_NULL` uses null (offset `-1` with offset capture). Unsupported extra flag bits, or both order bits at once, return count 0 and `[]` | pattern + subject strings + flags | `x0`/`rax` = match count, `x1`/`rdx` = matches array |
 | `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
-| `__rt_preg_replace_callback` | Replace all regex matches using shim-sized fixed-pair capture storage, building an indexed `$matches` string array, invoking the callback, and appending its string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
+| `__rt_preg_replace_callback` | Replace all regex matches in a dedicated output buffer, building an indexed `$matches` string array and appending the callback result. A successful replacement is a Mixed string and the output buffer is released after that cell copies it. An invalid pattern boxes PHP null: unknown modifiers, a missing ending delimiter, a compile failure, and the removed `/e` modifier (bit 30 from `__rt_preg_strip`). Space, LF, and CR in the modifier suffix are ignored. `/x` sets bit 13 and the PCRE2 shim compiles with `PCRE2_EXTENDED`, so leading `(*UTF)` and `(*ANYCRLF)` verbs stay at the start of the pattern. Other valid modifiers the runtime does not map are not null | pattern + callback + subject | `x0`/`rax` = Mixed cell (string, or null) |
 | `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
 
 ## I/O routines

@@ -1967,6 +1967,34 @@ echo $ok . "|" . count($matches);
     assert_eq!(out, "0|0");
 }
 
+/// Verifies `preg_match()` returns PHP `false` for the removed `/e` modifier and for an
+/// invalid pattern, with and without a capture destination, and that a real match still fills `$matches`.
+///
+/// PHP leaves a supplied destination unchanged on those failures. The ARM64 capture helper
+/// must reject `/e` before compilation; the same sentinel keeps x86_64 behavior aligned.
+#[test]
+fn test_preg_match_e_modifier_preserves_capture_destination() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+$result = @preg_match("/a/e", "a", $matches);
+var_dump($result, $matches);
+$none = @preg_match("/a/e", "a");
+var_dump($none);
+$bad = ["stale"];
+$invalid = @preg_match("/[/", "a", $bad);
+var_dump($invalid, $bad);
+$ok = [];
+$hit = preg_match("/(a)/", "a", $ok);
+var_dump($hit, $ok);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\narray(1) {\n  [0]=>\n  string(5) \"stale\"\n}\nbool(false)\nbool(false)\narray(1) {\n  [0]=>\n  string(5) \"stale\"\n}\nint(1)\narray(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"a\"\n}\n"
+    );
+}
+
 /// Verifies unmatched optional captures before later captures materialize as empty strings.
 #[test]
 fn test_preg_match_unmatched_interior_capture_is_empty() {
@@ -2162,6 +2190,10 @@ echo preg_match_all("/(/", "subject", $matches) . ":" . count($matches);
 
 /// Verifies every shim-backed regex family handles an invalid pattern without exposing a
 /// partial handle, invoking callbacks, or returning partially initialized capture data.
+///
+/// `preg_match()` returns PHP `false` and leaves the supplied `$matches` array in place.
+/// `preg_replace_callback()` returns real PHP null. Concatenation renders that null
+/// as empty, and `??` selects the default, so the callback sections are `:0` and `null:0`.
 #[test]
 fn test_regex_families_reject_invalid_patterns_safely() {
     let out = compile_and_run(
@@ -2184,6 +2216,131 @@ var_dump(preg_split("/(/", "subject"));
 "#,
     );
     assert_eq!(out, "0|:1|||:0|null:0|bool(false)\n");
+}
+
+/// Verifies `preg_replace_callback()` returns real PHP null for an invalid pattern and `/e`.
+///
+/// The null is distinct from a string: `is_string` is false, `=== null` and `is_null`
+/// are true, and `gettype` reports `NULL`. A valid empty subject stays an empty string,
+/// and a normal replacement still runs. Direct calls and the first-class callable share
+/// that result.
+#[test]
+fn test_preg_replace_callback_invalid_pattern_returns_real_null() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "x";
+};
+$invalid = @preg_replace_callback("/[/", $callback, "a");
+var_dump($invalid, is_string($invalid), $invalid === null, is_null($invalid), gettype($invalid));
+echo $calls, "|";
+$calls = 0;
+$eval = @preg_replace_callback("/a/e", $callback, "a");
+var_dump($eval, is_string($eval), $eval === null, is_null($eval), gettype($eval));
+echo $calls, "|";
+$empty = preg_replace_callback("/x/", $callback, "");
+echo ($empty === "" ? "empty" : "other"), (is_string($empty) ? "s" : "n"), strlen($empty), "|";
+echo preg_replace_callback("/a/", $callback, "a"), "|";
+$cb = preg_replace_callback(...);
+$through = @$cb("/[/", $callback, "a");
+echo (is_null($through) ? "null" : "bad"), (is_string($through) ? "s" : "n"), ($through === null ? "eq" : "ne");
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nbool(false)\nbool(true)\nbool(true)\nstring(4) \"NULL\"\n0|NULL\nbool(false)\nbool(true)\nbool(true)\nstring(4) \"NULL\"\n0|emptys0|x|nullneq"
+    );
+}
+
+/// Verifies a declared string return can return `preg_replace_callback()` directly.
+///
+/// The static type is `mixed`, matching `preg_replace()`. A `string|null` return
+/// would reject this program, which compiled before the null result was modeled.
+#[test]
+fn test_preg_replace_callback_string_function_returns_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+function clean(string $s): string {
+    return preg_replace_callback('/a/', fn($m) => strtoupper($m[0]), $s);
+}
+echo clean("banana");
+"#,
+    );
+    assert_eq!(out, "bAnAnA");
+}
+
+/// Verifies every invalid pattern returns PHP null, and an unmapped valid modifier does not.
+///
+/// `/a/z` is an unknown modifier, `"/abc"` has no ending delimiter, and `/a/e`
+/// is the removed eval modifier. elephc does not emit PHP's preg warning text.
+/// `/a b/x` is extended mode: the pattern is `ab`, so subject `"a b"` is unchanged
+/// and subject `"ab"` is replaced. A space inside a character class still matches.
+#[test]
+fn test_preg_replace_callback_invalid_patterns_return_null() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "X";
+};
+$unknown = @preg_replace_callback("/a/z", $callback, "a");
+$missing = @preg_replace_callback("/abc", $callback, "abc");
+$eval = @preg_replace_callback("/a/e", $callback, "a");
+$bare_e = @preg_replace_callback("/abce", $callback, "a");
+$spaced = preg_replace_callback("/a b/x", $callback, "a b");
+$compact = preg_replace_callback("/a b/x", $callback, "ab");
+$class = preg_replace_callback("/[a b]/x", $callback, " ");
+echo (is_null($unknown) ? "n" : "s"), (is_string($unknown) ? "s" : "n"), "|";
+echo (is_null($missing) ? "n" : "s"), (is_string($missing) ? "s" : "n"), "|";
+echo (is_null($eval) ? "n" : "s"), (is_null($bare_e) ? "n" : "s"), "|";
+echo $spaced, "|", $compact, "|", $class, "|", $calls;
+"#,
+    );
+    assert_eq!(out, "nn|nn|nn|a b|X|X|2");
+}
+
+/// Verifies space, LF, and CR in the modifier suffix are ignored, matching PHP.
+///
+/// A tab is not one of those bytes, so PHP treats it as an unknown modifier and
+/// the call returns null. The callback still runs for the ignored whitespace.
+#[test]
+fn test_preg_replace_callback_modifier_whitespace_is_ignored() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "X";
+};
+$nl = preg_replace_callback("/a/\n", $callback, "a");
+$sp = preg_replace_callback("/a/ i", $callback, "A");
+$cr = preg_replace_callback("/a/\r", $callback, "a");
+$tab = @preg_replace_callback("/a/\t", $callback, "a");
+echo $nl, "|", $sp, "|", $cr, "|";
+echo (is_null($tab) ? "n" : "s"), "|", $calls;
+"#,
+    );
+    assert_eq!(out, "X|X|X|n|3");
+}
+
+/// Verifies `/x` keeps leading PCRE2 verbs at the start of the pattern.
+///
+/// `(*UTF)`, `(*ANYCRLF)`, and similar directives are valid only before any other
+/// pattern item. Prefixing `(?x)` makes `preg_match` return false and the replace
+/// calls return null. PHP 8.2–8.5 returns a match and the replacement.
+#[test]
+fn test_preg_extended_leading_verbs_stay_at_pattern_start() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match("/(*UTF)a/x", "a"), "|";
+echo preg_replace("/(*ANYCRLF)a/x", "Y", "ab"), "|";
+echo preg_replace_callback("/(*UTF)a/x", function ($m) { return "X"; }, "ab");
+"#,
+    );
+    assert_eq!(out, "1|Yb|Xb");
 }
 
 /// Verifies a small callback replacement allocates its output block with the

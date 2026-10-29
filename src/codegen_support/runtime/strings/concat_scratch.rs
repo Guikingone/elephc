@@ -678,4 +678,39 @@ mod tests {
             crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)
         )));
     }
+
+    /// Growth must publish the new base into the caller's slot. The throw path frees
+    /// that slot, so a stale pre-growth pointer would either leak the grown block or
+    /// free a block `__rt_concat_grow` already released.
+    #[test]
+    fn preg_cb_ensure_publishes_the_grown_base_before_returning() {
+        let mut arm = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        emit_concat_scratch(&mut arm);
+        let arm_asm = arm.output();
+        let ensure = arm_asm
+            .find("__rt_preg_cb_ensure:")
+            .expect("ensure helper");
+        let arm_ensure = &arm_asm[ensure..];
+        let grow = arm_ensure.find("bl __rt_concat_grow").expect("grow call");
+        let publish = arm_ensure.find("str x9, [x10]").expect("published base");
+        let retag = arm_ensure.find("mov x9, #1").expect("owned-string kind");
+        assert!(retag < publish && publish > grow, "{arm_ensure}");
+
+        let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_concat_scratch(&mut x86);
+        let x86_asm = x86.output();
+        let ensure = x86_asm
+            .find("__rt_preg_cb_ensure:")
+            .expect("ensure helper");
+        let x86_ensure = &x86_asm[ensure..];
+        let grow = x86_ensure.find("call __rt_concat_grow").expect("grow call");
+        let publish = x86_ensure
+            .find("mov QWORD PTR [r9], r8")
+            .expect("published base");
+        assert!(publish > grow, "{x86_ensure}");
+        assert!(x86_ensure.contains(&format!(
+            "mov r10, 0x{:x}",
+            crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
+        )));
+    }
 }
