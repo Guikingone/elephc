@@ -75,6 +75,8 @@ pub fn emit_base64_decode(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #0");                                         // j: index of the decoded byte currently being assembled
     emitter.instruction("mov x11, #0");                                         // i: count of ACCEPTED characters, the `i % 4` quartet lane
     emitter.instruction("mov x12, #0");                                         // padding: '=' characters seen since the last accepted character
+    emitter.instruction("mov x16, #0");                                         // accumulated sextets not yet written as bytes
+    emitter.instruction("mov x17, #0");                                         // number of pending bits in the accumulator
     abi::emit_symbol_address(emitter, "x15", "_b64_decode_tbl");
 
     // -- one character per iteration: skipped bytes must not rotate the quartet lane --
@@ -95,53 +97,21 @@ pub fn emit_base64_decode(emitter: &mut Emitter) {
     emitter.instruction("cbnz x3, __rt_b64dec_fail");                           // strict mode forbids data after a padding character
     emitter.instruction("mov x12, #0");                                         // the lax mode forgets the padding and keeps decoding
 
-    // -- dispatch on the quartet lane, mirroring php-src's `switch (i % 4)` --
+    // -- append the sextet and flush every complete decoded byte --
     emitter.label("__rt_b64dec_accept");
-    emitter.instruction("and x14, x11, #3");                                    // compute the quartet lane of this accepted character
-    emitter.instruction("cbz x14, __rt_b64dec_case0");                          // lane 0 starts a new decoded byte
-    emitter.instruction("cmp x14, #1");                                         // is this the second character of the quartet?
-    emitter.instruction("b.eq __rt_b64dec_case1");                              // lane 1 finishes byte 0 and opens byte 1
-    emitter.instruction("cmp x14, #2");                                         // is this the third character of the quartet?
-    emitter.instruction("b.eq __rt_b64dec_case2");                              // lane 2 finishes byte 1 and opens byte 2
-
-    // -- lane 3: the low six bits complete the third decoded byte --
-    emitter.instruction("ldrb w16, [x9, x10]");                                 // reload the decoded byte opened by lane 2
-    emitter.instruction("orr w16, w16, w13");                                   // fold in all six bits of this sextet
-    emitter.instruction("strb w16, [x9, x10]");                                 // publish the completed decoded byte
-    emitter.instruction("add x10, x10, #1");                                    // the quartet produced its third and final byte
-    emitter.instruction("b __rt_b64dec_next");                                  // count the accepted character and continue
-
-    // -- lane 0: the sextet becomes the top six bits of a fresh decoded byte --
-    emitter.label("__rt_b64dec_case0");
-    emitter.instruction("lsl w16, w13, #2");                                    // shift the sextet into the high bits of the new byte
-    emitter.instruction("strb w16, [x9, x10]");                                 // open the decoded byte without committing it yet
-    emitter.instruction("b __rt_b64dec_next");                                  // count the accepted character and continue
-
-    // -- lane 1: two bits finish byte 0, four bits open byte 1 --
-    emitter.label("__rt_b64dec_case1");
-    emitter.instruction("ldrb w16, [x9, x10]");                                 // reload the decoded byte opened by lane 0
-    emitter.instruction("lsr w17, w13, #4");                                    // take the top two bits of this sextet
-    emitter.instruction("orr w16, w16, w17");                                   // complete the first decoded byte of the quartet
-    emitter.instruction("strb w16, [x9, x10]");                                 // publish the completed decoded byte
-    emitter.instruction("add x10, x10, #1");                                    // move to the next decoded byte position
-    emitter.instruction("and w17, w13, #0xf");                                  // keep the low four bits of this sextet
-    emitter.instruction("lsl w17, w17, #4");                                    // shift them into the high bits of the next byte
-    emitter.instruction("strb w17, [x9, x10]");                                 // open the second decoded byte of the quartet
-    emitter.instruction("b __rt_b64dec_next");                                  // count the accepted character and continue
-
-    // -- lane 2: four bits finish byte 1, two bits open byte 2 --
-    emitter.label("__rt_b64dec_case2");
-    emitter.instruction("ldrb w16, [x9, x10]");                                 // reload the decoded byte opened by lane 1
-    emitter.instruction("lsr w17, w13, #2");                                    // take the top four bits of this sextet
-    emitter.instruction("orr w16, w16, w17");                                   // complete the second decoded byte of the quartet
-    emitter.instruction("strb w16, [x9, x10]");                                 // publish the completed decoded byte
-    emitter.instruction("add x10, x10, #1");                                    // move to the next decoded byte position
-    emitter.instruction("and w17, w13, #0x3");                                  // keep the low two bits of this sextet
-    emitter.instruction("lsl w17, w17, #6");                                    // shift them into the high bits of the next byte
-    emitter.instruction("strb w17, [x9, x10]");                                 // open the third decoded byte of the quartet
+    emitter.instruction("lsl w16, w16, #6");                                    // make room for the next six input bits
+    emitter.instruction("orr w16, w16, w13");                                   // append this sextet to the pending accumulator
+    emitter.instruction("add w17, w17, #6");                                    // six more bits are pending
+    emitter.instruction("cmp w17, #8");                                         // is a full decoded byte available?
+    emitter.instruction("b.lt __rt_b64dec_next");                               // fewer than eight bits still wait for more input
+    emitter.instruction("sub w17, w17, #8");                                    // consume the eight bits of the next output byte
+    emitter.instruction("lsr w14, w16, w17");                                   // shift the completed byte into the low bits
+    emitter.instruction("strb w14, [x9, x10]");                                 // publish the decoded byte
+    emitter.instruction("add x10, x10, #1");                                    // advance the decoded byte cursor
+    emitter.instruction("and w16, w16, #0x3f");                                 // keep only the bits that still belong to the next byte
 
     emitter.label("__rt_b64dec_next");
-    emitter.instruction("add x11, x11, #1");                                    // one more accepted character advances the quartet lane
+    emitter.instruction("add x11, x11, #1");                                    // one more accepted character advances the strict-mode accounting
     emitter.instruction("b __rt_b64dec_loop");                                  // classify the next encoded byte
 
     // -- '=' only ever increments the padding tally --
