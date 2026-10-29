@@ -74,6 +74,7 @@ fn is_length_observable_call(inst: &crate::ir::Instruction) -> bool {
         )))
         | Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(
             UnaryStringRuntime::Base64Encode
+                | UnaryStringRuntime::BinToHex
                 | UnaryStringRuntime::StrToLower
                 | UnaryStringRuntime::StrToUpper,
         ))) => inst.operands.len() == 1,
@@ -114,6 +115,12 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         call.immediate,
         Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
             RuntimeFnId::Md5
+        )))
+    );
+    let is_bin2hex = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(
+            UnaryStringRuntime::BinToHex
         )))
     );
     let is_case_conversion = matches!(
@@ -189,6 +196,20 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         length.result_php_type = PhpType::Int;
         length.result_ownership = Ownership::NonHeap;
         length.effects = Op::ConstI64.default_effects();
+    } else if is_bin2hex {
+        let source = detach_operand_pin(function, operand, length, candidate).unwrap_or(operand);
+        let Some(length) = function.instruction_mut(length) else {
+            return false;
+        };
+        length.op = Op::RuntimeCall;
+        length.operands = vec![source];
+        length.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::Bin2HexLen,
+        )));
+        length.result_type = IrType::I64;
+        length.result_php_type = PhpType::Int;
+        length.result_ownership = Ownership::NonHeap;
+        length.effects = RuntimeFnId::Bin2HexLen.intrinsic_effects();
     } else if is_chunk_split {
         let Some(mut operands) = chunk_split_operands else {
             return false;

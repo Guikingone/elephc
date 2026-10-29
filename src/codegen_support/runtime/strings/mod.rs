@@ -78,6 +78,7 @@ mod quotemeta;
 mod quoted_printable_encode;
 mod wordwrap;
 mod bin2hex;
+mod bin2hex_len;
 mod base_to_number;
 mod dec_to_base;
 mod hex2bin;
@@ -251,6 +252,7 @@ pub use str_word_count::emit_str_word_count;
 pub use wordwrap::emit_wordwrap;
 /// Emit wordwrap helper.
 pub use bin2hex::emit_bin2hex;
+pub use bin2hex_len::emit_bin2hex_len;
 /// Emit the shared unsigned integer-to-base renderer used by dechex/decbin/decoct.
 pub use dec_to_base::emit_dec_to_base;
 /// Emit the shared base-digit parser used by hexdec/bindec/octdec.
@@ -294,7 +296,7 @@ pub use md5::emit_md5;
 /// Emit MD5 hash helper.
 pub use sha1::emit_sha1;
 /// Emit CRC-32 checksum helper.
-pub use crc32::emit_crc32;
+pub use crc32::{emit_crc32, CRC32_TABLE};
 /// Emits the optional shared mbstring bridge result adapters.
 pub use iconv::emit_iconv;
 pub use mbstring::emit_mbstring;

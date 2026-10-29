@@ -374,6 +374,8 @@ pub enum RuntimeFnId {
     AbsInt,
     /// Length of `base64_encode()` output for a PHP string, without encoding it.
     Base64EncodedLen,
+    /// Length of `bin2hex()` output for a PHP string, without encoding it.
+    Bin2HexLen,
     Acos,
     Asin,
     Atan,
@@ -923,6 +925,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrriposInt => Some((2, Some(3))),
             RuntimeFnId::StrstrLen => Some((2, Some(3))),
             RuntimeFnId::ChunkSplitLen => Some((3, Some(3))),
+            RuntimeFnId::Bin2HexLen => Some((1, Some(1))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
@@ -1796,6 +1799,8 @@ impl RuntimeFnId {
             RuntimeFnId::StrstrLen => RuntimeFnId::Strstr.effects(),
             // The length-only split keeps chunk_split()'s validation and allocation fatal.
             RuntimeFnId::ChunkSplitLen => RuntimeFnId::ChunkSplit.effects(),
+            // The length-only encoder keeps bin2hex()'s coercion and allocation fatal.
+            RuntimeFnId::Bin2HexLen => E::PURE,
             // A negative integer sum has a NAN square root and PHP's cast warning.
             RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The raw encoder keeps the JSON error state and encoder side effects.
@@ -2533,6 +2538,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrriposInt
                 | RuntimeFnId::StrstrLen
                 | RuntimeFnId::ChunkSplitLen
+                | RuntimeFnId::Bin2HexLen
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
@@ -3575,6 +3581,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strstr => "strstr",
             RuntimeFnId::StrstrLen => "strstr_len",
             RuntimeFnId::ChunkSplitLen => "chunk_split_len",
+            RuntimeFnId::Bin2HexLen => "bin2hex_len",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",

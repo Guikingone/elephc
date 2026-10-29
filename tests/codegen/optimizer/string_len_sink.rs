@@ -159,3 +159,48 @@ echo strlen(chunk_split('abcdef', 2, '-')), '|', strlen(chunk_split('abc')), "\n
         assert_eq!(out, "9|5\n");
     });
 }
+
+/// Length-only `bin2hex()` observations match PHP for binary and empty input.
+#[test]
+fn bin2hex_length_sink_matches_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo strlen(bin2hex('abc')), '|';
+echo strlen(bin2hex("\x00\xff")), '|';
+echo strlen(bin2hex('')), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "6|4|0\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The length-only encoder uses the dedicated helper and drops the allocating call.
+#[test]
+fn bin2hex_length_sink_ir_uses_helper() {
+    let ir = emit_main_ir(
+        r#"<?php
+$s = str_repeat('abc', 40);
+echo strlen(bin2hex($s));
+"#,
+    );
+    assert!(ir.contains("runtime.bin2hex_len"), "{ir}");
+    assert!(!ir.contains("runtime.bin2hex "), "{ir}");
+}
+
+/// Disabling EIR optimization keeps the allocating encoder and the same lengths.
+#[test]
+fn bin2hex_length_sink_no_ir_opt_parity() {
+    without_ir_opt(|| {
+        let out = compile_and_run(
+            r#"<?php
+echo strlen(bin2hex('abc')), '|', strlen(bin2hex("\x00\xff")), "\n";
+"#,
+        );
+        assert_eq!(out, "6|4\n");
+    });
+}

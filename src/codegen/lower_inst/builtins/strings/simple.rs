@@ -54,6 +54,13 @@ pub(crate) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instru
     store_if_result(ctx, inst)
 }
 
+/// Lowers the allocation-free `strlen(bin2hex(...))` helper.
+pub(crate) fn lower_bin2hex_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_single_string_arg(ctx, inst, "bin2hex")?;
+    abi::emit_call_label(ctx.emitter, "__rt_bin2hex_len");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte.
 pub(crate) fn lower_ucfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ucfirst")?;

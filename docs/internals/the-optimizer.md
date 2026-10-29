@@ -774,7 +774,8 @@ observer becomes the constant `32` for md5, `4 * ceil(len / 3)` via
 the subject's `str_len` replaces the transform and the transform's argument pin
 and hidden slot are retired. `chunk_split()` uses `ChunkSplitLen`, which computes
 `subject_len + max(1, ceil(subject_len / chunk_len)) * separator_len` and reports
-the same allocation-overflow fatal as the allocating helper. The operand
+the same allocation-overflow fatal as the allocating helper. `bin2hex()` folds to
+`Bin2HexLen`, which returns `2 * subject_len` with the same overflow guard. The operand
 evaluation and its side effects remain; the binary `md5(..., true)` form,
 non-string operands, the replacement-pair `strtr()` form and any other observer
 keep the real call.

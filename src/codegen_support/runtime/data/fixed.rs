@@ -209,6 +209,11 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
     ));
+    out.push_str(".globl _hex_digits\n_hex_digits:\n    .ascii \"0123456789abcdef\"\n");
+    out.push_str(".p2align 8\n.globl _crc32_table\n_crc32_table:\n");
+    for entry in crate::codegen_support::runtime::strings::CRC32_TABLE {
+        out.push_str(&format!("    .long {entry}\n"));
+    }
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
