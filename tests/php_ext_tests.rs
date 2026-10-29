@@ -1082,6 +1082,34 @@ echo "end\n";
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// An assignment to an extension object's property is worth the value the property now holds, as
+/// in PHP: the engine converts it to the property's declared type (`$o->count = "12"` is the int
+/// 12), an undeclared name keeps the assigned value, and a value that does not convert throws.
+#[test]
+fn an_assignment_to_an_engine_property_yields_the_stored_value() {
+    let dir = project("engine-assignment-value");
+    let run = compile_and_run(
+        &dir,
+        r#"<?php
+class Kid extends DemoRecord {
+    public function set(): mixed { return $this->count = "7"; }
+}
+$k = new Kid(1);
+var_dump($k->set());
+$o = new DemoRecord(3);
+$x = $o->count = "12";
+var_dump($x, $o->count = 2.0, $o->extra = "a");
+try { $x = $o->count = "abc"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "int(7)\nint(12)\nint(2)\nstring(1) \"a\"\nCannot assign string to property DemoRecord::$count of type int\n"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// A program subclass cannot reach the wrapper's bookkeeping: `$this->__elephcOwner`, by literal
 /// or run-time name, is an ordinary dynamic property on the object (PHP's deprecation included),
 /// and clearing it leaves the engine object alive.

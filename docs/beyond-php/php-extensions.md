@@ -204,9 +204,9 @@ declared class. So:
   writing the name of an ancestor's private property gets a dynamic property
   of its own, as in PHP, and creating a dynamic property is deprecated unless
   the class allows them. The errors are PHP's; the engine reports its warnings
-  and deprecations on stderr, without a file and line. One difference remains:
-  the value of an assignment expression (`$x = $object->count = "12"`) is the
-  assigned value, not the converted one PHP gives.
+  and deprecations on stderr, without a file and line. An assignment used as
+  an expression (`$x = $object->count = "12"`) is worth the converted value
+  the property now holds, as in PHP.
 - A subclass may declare `__get`, `__set`, `__isset`, `__unset` and `__clone`
   with any signature PHP accepts, as the extension's class has none of them;
   a clone still gets its own copy of the extension's object before your

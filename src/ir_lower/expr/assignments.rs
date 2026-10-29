@@ -181,6 +181,26 @@ pub(super) fn lower_assignment_expr(
 /// (`$x = $o->count = "12"` makes `$x` the int 12), so the assigned value is cast to that type.
 /// Any other target keeps `result_target`.
 fn typed_property_assignment_result(ctx: &LoweringContext<'_, '_>, target: &Expr, result_target: &Expr) -> Expr {
+    // An extension object's property lives in the engine, which converts the value as PHP does
+    // and declares its type there, out of the compiler's sight: the value the property now holds
+    // is read back. Only a variable or `$this` receiver, so the re-read evaluates nothing twice.
+    if let ExprKind::PropertyAccess { object, property } = &target.kind {
+        let class = match &object.kind {
+            ExprKind::Variable(name) => match ctx.local_type(name) {
+                PhpType::Object(class) => Some(class),
+                _ => None,
+            },
+            ExprKind::This => ctx.current_class.clone(),
+            _ => None,
+        };
+        let engine_property = class.and_then(|class| ctx.classes.get(class.trim_start_matches('\\'))).is_some_and(|info| {
+            info.interfaces.iter().any(|name| name.trim_start_matches('\\') == crate::php_ext::prelude::OBJECT_INTERFACE)
+                && !info.visible_property_is_declared(property)
+        });
+        if engine_property {
+            return target.clone();
+        }
+    }
     let declared = match &target.kind {
         ExprKind::PropertyAccess { object, property } => {
             let class = match &object.kind {
