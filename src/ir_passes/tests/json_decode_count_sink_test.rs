@@ -5,8 +5,8 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Hand-built EIR covers the accepted decode/count/slot graph and the conservative
-//!   rejection when the decode source is released before the count call.
+//! - Hand-built EIR covers the accepted decode/count/slot graph and a source released
+//!   after the call, which is safe because the count is folded into the decode call.
 
 use crate::ir::{
     Builder, DataPool, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Op, Ownership,
@@ -151,9 +151,9 @@ fn rewrites_count_of_json_decode() {
         .any(|inst| matches!(inst.op, Op::StoreLocal | Op::PushCallOperandOwner | Op::PopCallOperandOwner | Op::UnsetLocal | Op::ReleaseLocalSlot | Op::Release)));
 }
 
-/// A released temporary source keeps the exact decode/count graph.
+/// A source released after the call is safe: the decode call itself becomes the count.
 #[test]
-fn rejects_a_released_decode_source() {
+fn accepts_a_source_released_after_the_count() {
     let mut function = Function::new("count_decode_temp".to_string(), IrType::I64, PhpType::Int);
     let source = {
         build_fixture(&mut function);
@@ -175,8 +175,16 @@ fn rejects_a_released_decode_source() {
             Ownership::NonHeap,
         );
     }
-    assert!(!sink(&mut function));
+    assert!(sink(&mut function));
     assert!(function.instructions.iter().any(|inst| {
+        matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::JsonDecodeCount
+            )))
+        )
+    }));
+    assert!(!function.instructions.iter().any(|inst| {
         matches!(
             inst.immediate,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
