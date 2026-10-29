@@ -81,6 +81,9 @@ pub enum RuntimeCallTarget {
     /// (operand 1); an overlap between the two chains drops the pending owner instead of
     /// creating a cycle.
     ExceptionChain,
+    /// Notifies a hosted runtime that a `finally` jump discarded its pending exception.
+    /// Standalone outputs have no host exception to retire, so their backend emits no code.
+    ExceptionDiscard,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -181,6 +184,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::ExceptionDiscard => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
             RuntimeCallTarget::ArrayFetchForWrite
             | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
             | RuntimeCallTarget::PendingAppendFetchForWrite
@@ -269,6 +276,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ExecutablePath => "process.executable_path",
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
+            RuntimeCallTarget::ExceptionDiscard => "object.exception_discard",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",

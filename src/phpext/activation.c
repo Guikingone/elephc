@@ -8,6 +8,7 @@ extern const uintptr_t ep_class_name_count __asm__("_class_name_count");
 extern const uintptr_t ep_class_name_entries[] __asm__("_class_name_entries");
 extern uintptr_t ep_native_stack_limit __asm__("_stack_limit");
 extern uintptr_t ep_native_stack_limit_main __asm__("_stack_limit_main");
+extern uintptr_t ep_boundary_status __asm__("_elephc_boundary_status");
 
 typedef void (*ep_native_function)(const zval *const *);
 static pthread_mutex_t ep_native_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -116,6 +117,29 @@ static bool ep_is_host_exit(void)
     return EG(exception) && zend_is_unwind_exit(EG(exception));
 }
 
+/* Infrastructure statuses remain authoritative across native finally return and throw. */
+static const char *ep_infrastructure_error(uintptr_t status)
+{
+    switch (status) {
+        case 1: return "PHP extension result exceeds the maximum nesting depth (64)";
+        case 3: return "elephc heap allocation failed";
+        case 4: return "elephc native runtime failed";
+        default: return NULL;
+    }
+}
+
+/* Retire a host exception only after the native image is parked and Zend is callable. */
+static void ep_clear_discarded_host_exception(ep_call *call)
+{
+    if (!call->discarded_host_exception || ep_is_host_exit()) { return; }
+    if (EG(exception)) { zend_clear_exception(); }
+    call->host_exception = false;
+    call->discarded_host_exception = false;
+    call->previous_exceptions = NULL;
+    call->previous_exceptions_tail = NULL;
+    call->previous_exception_anchor = NULL;
+}
+
 /* Park the native image around a guarded Zend callback, including nested module calls. */
 static int ep_deliver(const char *bytes, size_t length, bool warning)
 {
@@ -141,28 +165,36 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     if (warning) { call->parked_warning_buffer = (char *)bytes; }
     ep_current = NULL;
     pthread_mutex_unlock(&ep_native_lock);
+    zend_try {
+        ep_clear_discarded_host_exception(call);
+    } zend_catch {
+        call->host_bailout = true;
+    } zend_end_try();
     /* Native finally blocks run while the first host callback exception is pending.
      * Temporarily park it so later cleanup output and warnings can invoke PHP just as
      * Zend does, then restore it behind any replacement exception. */
     zend_object *saved_exception_object = EG(exception);
     bool saved_exception = saved_exception_object != NULL;
-    bool saved_exception_can_anchor = saved_exception
+    volatile bool saved_exception_can_anchor = saved_exception
         && !zend_is_unwind_exit(saved_exception_object)
         && !zend_is_graceful_exit(saved_exception_object);
-    if (saved_exception) { zend_exception_save(); }
-    zend_try {
-        if (warning) {
-            ep_issue_warning(call);
-        } else {
-            PHPWRITE(call->output, length);
-        }
-    } zend_catch {
-        call->host_bailout = true;
-    } zend_end_try();
+    volatile bool saved_exception_parked = false;
+    if (!call->host_bailout) {
+        if (saved_exception) { zend_exception_save(); saved_exception_parked = true; }
+        zend_try {
+            if (warning) {
+                ep_issue_warning(call);
+            } else {
+                PHPWRITE(call->output, length);
+            }
+        } zend_catch {
+            call->host_bailout = true;
+        } zend_end_try();
+    }
     if (call->warning) { zend_string_release(call->warning); call->warning = NULL; }
     call->parked_warning_buffer = NULL;
     bool callback_exception = EG(exception) != NULL;
-    if (saved_exception) { zend_exception_restore(); }
+    if (saved_exception_parked) { zend_exception_restore(); }
     if (callback_exception) {
         call->previous_exception_anchor = saved_exception_can_anchor ? saved_exception_object : NULL;
     }
@@ -185,7 +217,17 @@ int elephc_php_warning(const char *bytes, size_t length) { return ep_deliver(byt
 void elephc_php_result(const zval *value)
 {
     if (ep_current && !ep_current->error) {
+        const char *error = ep_infrastructure_error(ep_boundary_status);
+        if (error) { ep_current->error = error; return; }
         ep_current->result = ep_copy(ep_current, value, false, 0);
+    }
+}
+
+/* Native code can only flag the discard while it owns the runtime lock. */
+void elephc_php_discard_exception(const uintptr_t *object)
+{
+    if (!object && ep_current && ep_current->host_exception && !ep_current->host_bailout) {
+        ep_current->discarded_host_exception = true;
     }
 }
 
@@ -229,7 +271,6 @@ void elephc_php_previous_exception(const uintptr_t *object)
         return;
     }
     copy->anchor = call->previous_exception_anchor;
-    call->previous_exception_anchor = NULL;
     if (call->previous_exceptions_tail) {
         call->previous_exceptions_tail->next = copy;
     } else {
@@ -243,11 +284,13 @@ int elephc_php_exception(const uintptr_t *object, uintptr_t status)
 {
     ep_call *call = ep_current;
     if (!call) { return 1; }
-    if (call->host_bailout || (call->host_exception && !object && status == 2)) { return 0; }
+    if (call->host_bailout) { return 0; }
     if (call->error) { return 1; }
+    const char *error = ep_infrastructure_error(status);
+    if (error) { call->error = error; return 1; }
+    if (call->host_exception && !object && status == 2) { return 0; }
     if (!object) {
-        call->error = status == 1 ? "PHP extension result exceeds the maximum nesting depth (64)" :
-            (status == 3 ? "elephc heap allocation failed" : "elephc native runtime failed");
+        call->error = "elephc native runtime failed";
         return 1;
     }
     return ep_copy_exception(call, object, &call->exception_name, &call->exception_name_len,
@@ -375,6 +418,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     /* The call allocation is on the heap: setjmp cannot invalidate its cleanup fields. */
     zend_try {
         if (call->host_bailout) { zend_bailout(); }
+        ep_clear_discarded_host_exception(call);
         bool host_exit = ep_is_host_exit();
         if (!host_exit && call->error && EG(exception)) {
             /* A transport/runtime failure is authoritative over the incomplete host callback. */

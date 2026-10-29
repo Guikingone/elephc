@@ -43,6 +43,7 @@ typedef struct ep_call {
     unsigned char *checkpoint;
     bool host_exception;
     bool host_bailout;
+    bool discarded_host_exception;
     zend_string *warning;
     char *parked_warning_buffer;
     zval pending_exception;

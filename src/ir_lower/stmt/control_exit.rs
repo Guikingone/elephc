@@ -59,6 +59,14 @@ fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth
         let open = ctx.loop_stack.len();
         emit_innermost_loop_cleanups(ctx, open.saturating_sub(loop_depth));
         ctx.exit_cleaned_loops.extend(loop_depth..open);
+        let discarded = ctx.load_local(&temp, None);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![discarded.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionDiscard)),
+            crate::ir::Effects::all(),
+            None,
+        );
         ctx.release_owned_hidden_temp(&temp, None);
     }
 }

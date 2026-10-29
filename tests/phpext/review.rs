@@ -441,6 +441,67 @@ echo json_encode([$caught, php_after_infra()]);
     assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
+/// Native infrastructure failures override finally returns and replacement exceptions.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn infrastructure_status_survives_finally_control_flow() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("infra_control_flow", r#"<?php
+function php_infra_counter_impl(bool $increment): int {
+    static $state = 0;
+    if ($increment) { $state++; }
+    return $state;
+}
+#[Export] function php_infra_counter(): int { return php_infra_counter_impl(false); }
+#[Export] function php_infra_finally_return(): int {
+    php_infra_counter_impl(true);
+    try { array_fill(0, 100000, 0); } finally { return 7; }
+}
+#[Export] function php_infra_finally_throw(): void {
+    php_infra_counter_impl(true);
+    try { array_fill(0, 100000, 0); }
+    finally { throw new RuntimeException('replacement'); }
+}
+"#);
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+foreach (['php_infra_finally_return', 'php_infra_finally_throw'] as $function) {
+    try { $function(); exit(10); }
+    catch (Error $error) {
+        if (!str_contains($error->getMessage(), 'heap allocation failed')) { throw $error; }
+    }
+    if (php_infra_counter() !== 0) { exit(11); }
+}
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// A helper finally return retires its host exception before later output and throws.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn nested_finally_returns_discard_host_exceptions() {
+    compare(r#"<?php
+function php_discard_helper(array $value): int {
+    try { echo $value['missing']; } finally { return 1; }
+}
+#[Export] function php_after_discard(array $value): void {
+    php_discard_helper($value);
+    echo 'after|';
+    throw new RuntimeException('native');
+}
+"#, r#"
+set_error_handler(function () { throw new LogicException('host'); });
+try { php_after_discard([]); }
+catch (Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), ':',
+        $error->getPrevious() ? get_class($error->getPrevious()) : 'none';
+}
+"#);
+}
+
 /// An outer native finally return discards both the host exception and its stored native tail.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
@@ -502,6 +563,34 @@ fn transported_native_exceptions_keep_host_chain_order() {
 $host = 0;
 set_error_handler(function () use (&$host) { throw new LogicException('host' . ++$host); });
 try { php_anchored_chain([]); }
+catch (Throwable $error) {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), '|';
+        $error = $error->getPrevious();
+    }
+}
+"#);
+}
+
+/// One host escape anchors every native replacement created by its nested finalizers.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn one_host_escape_anchors_multiple_native_exceptions() {
+    compare(r#"<?php
+#[Export] function php_shared_anchor(array $value): void {
+    try { echo $value['first']; }
+    finally {
+        try { throw new RuntimeException('native1'); }
+        finally {
+            try { throw new TypeError('native2'); }
+            finally { echo $value['second']; }
+        }
+    }
+}
+"#, r#"
+$host = 0;
+set_error_handler(function () use (&$host) { throw new LogicException('host' . ++$host); });
+try { php_shared_anchor([]); }
 catch (Throwable $error) {
     while ($error) {
         echo get_class($error), ':', $error->getMessage(), '|';

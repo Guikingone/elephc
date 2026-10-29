@@ -355,6 +355,9 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         Emit::Staticlib => Emitter::new_staticlib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
+    // User bodies can contain host-boundary notifications in addition to the separately
+    // generated runtime object, so they need the output profile before EIR lowering begins.
+    emitter.phpext_output = emit == Emit::Phpext;
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }

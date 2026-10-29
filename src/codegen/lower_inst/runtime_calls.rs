@@ -49,6 +49,7 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
+        RuntimeCallTarget::ExceptionDiscard => lower_exception_discard(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite
         | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, false)
@@ -87,6 +88,27 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Tells the PHP adapter when a native `finally` jump discarded its null host escape.
+fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "exception discard notification requires one operand",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let discarded = expect_operand(inst, 0)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(discarded)?;
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_discard_exception");
+    }
+    Ok(())
 }
 
 /// Checks the uniform cell header without adding an owner that would change the answer.
