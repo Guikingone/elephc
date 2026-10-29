@@ -126,8 +126,6 @@ echo $s, "\n";
     );
 }
 
-/// Disabling EIR optimization leaves the boxed call and must produce the same output.
-#[test]
 /// The loop-invariant cache handles small, wide, negative and mutated receivers.
 #[test]
 fn array_sum_loop_cache_matches_php() {
@@ -187,6 +185,8 @@ echo $n, "\n";
     assert!(!mutated.contains("runtime.array_sum_int_cached"), "{mutated}");
 }
 
+/// Disabling EIR optimization leaves the boxed call and must produce the same output.
+#[test]
 fn array_sum_int_sink_no_ir_opt_parity() {
     without_ir_opt(|| {
         let out = compile_and_run(
