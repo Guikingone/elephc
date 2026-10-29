@@ -32,6 +32,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_ensure_unique(emitter);
     arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
+    arrays::emit_array_map_sum_probe_int(emitter);
+    arrays::emit_array_sum_probe_small(emitter);
     arrays::emit_array_sum_int(emitter);
     arrays::emit_keyed_kernels(emitter);
     arrays::emit_array_type_check(emitter);

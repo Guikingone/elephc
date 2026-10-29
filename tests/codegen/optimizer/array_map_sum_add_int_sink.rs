@@ -104,3 +104,67 @@ fn array_map_sum_add_int_sink_removes_the_cast() {
         "{ir}"
     );
 }
+
+/// The loop cache returns exact cached sums and falls back for negative/overflow/mutated cases.
+#[test]
+fn array_map_sum_cache_fallback_matches_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$neg = [1, 2, 3];
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum(array_map(fn($x) => $x - 1000, $neg)); }
+echo $n, '|';
+$ov = range(PHP_INT_MAX, PHP_INT_MAX);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum(array_map(fn($x) => $x + 1, $ov)); }
+echo $n, '|';
+$mut = range(1, 3);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum(array_map(fn($x) => $x + 1, $mut)); $mut[] = 1; }
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "-2994|-9223372036854775808|15\n"
+    );
+    assert!(
+        out.stderr
+            .contains("The float 9.223372036854776E+18 is not representable as an int"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A stable map loop gets the probe/cache; a receiver mutated in the loop does not.
+#[test]
+fn array_map_sum_cache_ir_is_conservative() {
+    let stable = emit_main_ir(
+        r#"<?php
+$a = range(1, 100);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum(array_map(fn($x) => $x + 3, $a)); }
+echo $n, "\n";
+"#,
+        true,
+    );
+    assert!(stable.contains("runtime.array_map_sum_probe_int"), "{stable}");
+    assert!(stable.contains("runtime.array_map_sum_add_int_cached"), "{stable}");
+    let mutated = emit_main_ir(
+        r#"<?php
+$a = range(1, 3);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum(array_map(fn($x) => $x + 1, $a)); $a[] = 1; }
+echo $n, "\n";
+"#,
+        true,
+    );
+    assert!(!mutated.contains("runtime.array_map_sum_probe_int"), "{mutated}");
+    assert!(!mutated.contains("runtime.array_map_sum_add_int_cached"), "{mutated}");
+}

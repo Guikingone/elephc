@@ -74,6 +74,8 @@ mod array_pad;
 mod array_pad_refcounted;
 mod array_product;
 mod array_numeric_aggregate;
+mod array_map_sum_probe;
+mod array_sum_probe_small;
 mod array_sum_int;
 mod array_type_check;
 mod keyed_kernels;
@@ -354,6 +356,8 @@ pub use array_pad::emit_array_pad;
 pub use array_pad_refcounted::emit_array_pad_refcounted;
 /// Emit refcounted array pad helper.
 pub use array_product::emit_array_product;
+pub use array_map_sum_probe::emit_array_map_sum_probe_int;
+pub use array_sum_probe_small::emit_array_sum_probe_small;
 pub use array_sum_int::emit_array_sum_int;
 pub use array_type_check::emit_array_type_check;
 pub use keyed_kernels::emit_keyed_kernels;

@@ -164,7 +164,7 @@ fn specialize(
     let Some((push_id, pop_id, releases)) = temp_scaffold(function, temp_slot, store_id) else {
         return false;
     };
-    if releases.len() != 2 {
+    if releases.is_empty() || releases.len() > 2 {
         return false;
     }
     let Some(positions) = call_positions(
@@ -201,14 +201,9 @@ fn specialize(
         return false;
     };
     call.operands[0] = loaded;
-    for id in [
-        acquire_id,
-        store_id,
-        push_id,
-        pop_id,
-        releases[0],
-        releases[1],
-    ] {
+    let mut removable = vec![acquire_id, store_id, push_id, pop_id];
+    removable.extend(releases);
+    for id in removable {
         if let Some(inst) = function.instruction_mut(id) {
             neutralize_to_nop(inst);
         }
@@ -229,15 +224,23 @@ fn call_positions(
     releases: &[InstId],
 ) -> Option<[(usize, usize); 8]> {
     let positions = instruction_positions(function);
-    let ids = [load, acquire, store, push, call, pop, releases[0], releases[1]];
+    let ids = [load, acquire, store, push, call, pop];
     let mut result = [(0usize, 0usize); 8];
     for (index, id) in ids.into_iter().enumerate() {
         result[index] = *positions.get(&id)?;
     }
-    let mut release_positions = [result[RELEASE_BEFORE], result[RELEASE_AFTER]];
+    let mut release_positions: Vec<_> = releases
+        .iter()
+        .map(|id| positions.get(id).copied())
+        .collect::<Option<Vec<_>>>()?;
     release_positions.sort_by_key(|(_, position)| *position);
-    result[RELEASE_BEFORE] = release_positions[0];
-    result[RELEASE_AFTER] = release_positions[1];
+    let (before, after) = match release_positions.as_slice() {
+        [only] => ((usize::MAX, 0), *only),
+        [first, second] => (*first, *second),
+        _ => return None,
+    };
+    result[RELEASE_BEFORE] = before;
+    result[RELEASE_AFTER] = after;
     let (load_block, load_position) = result[LOAD];
     let (acquire_block, acquire_position) = result[ACQUIRE];
     let (store_block, store_position) = result[STORE];
@@ -246,16 +249,17 @@ fn call_positions(
     let (pop_block, pop_position) = result[POP];
     let (before_block, before_position) = result[RELEASE_BEFORE];
     let (after_block, after_position) = result[RELEASE_AFTER];
+    let before_ok = before_block == usize::MAX
+        || (before_block == call_block && before_position < store_position);
     if load_block != call_block
         || acquire_block != call_block
         || store_block != call_block
         || push_block != call_block
         || pop_block != call_block
-        || before_block != call_block
         || after_block != call_block
+        || !before_ok
         || !(load_position < acquire_position
             && acquire_position < store_position
-            && before_position < store_position
             && store_position < push_position
             && push_position < call_position
             && call_position < pop_position

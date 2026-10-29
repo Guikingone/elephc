@@ -90,6 +90,32 @@ pub(super) fn prepare_call_site(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if matches!(
+        inst.immediate,
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArraySumIntCached
+            )
+        ))
+    ) {
+        return Ok(());
+    }
+    publish_call_site(ctx, inst)
+}
+
+/// Publishes the call site on the warning branch of a deferred cached dispatch.
+pub(super) fn prepare_deferred_call_site(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_call_site(ctx, inst)
+}
+
+/// Publishes the diagnostic and backtrace metadata for one instruction.
+fn publish_call_site(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     // Local retirement cannot emit its own PHP warning. A nested destructor publishes its
     // source location from its own frame, so eagerly updating diagnostics here only burdens
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.

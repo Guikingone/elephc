@@ -177,8 +177,13 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::Round
             | crate::ir::RuntimeFnId::Sprintf
             | crate::ir::RuntimeFnId::ArraySumInt
+            | crate::ir::RuntimeFnId::ArraySumProbeSmall
+            | crate::ir::RuntimeFnId::ArraySumIntCached
             | crate::ir::RuntimeFnId::ArrayFilterCountMod
             | crate::ir::RuntimeFnId::ArrayMapSumAdd
+            | crate::ir::RuntimeFnId::ArrayMapSumAddInt
+            | crate::ir::RuntimeFnId::ArrayMapSumAddIntCached
+            | crate::ir::RuntimeFnId::ArrayMapSumProbeInt
             | crate::ir::RuntimeFnId::ArrayMapSumAddSafe
     )
 }

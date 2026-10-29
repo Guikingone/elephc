@@ -424,6 +424,70 @@ pub(super) fn lower_array_sum_int(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the one-time exact sum probe used by the loop-invariant sum cache.
+pub(super) fn lower_array_sum_probe_small(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_sum_probe_small");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the cached small/general raw sum dispatch selected by the loop-invariant proof.
+pub(super) fn lower_array_sum_int_cached(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let flag = expect_operand(inst, 1)?;
+    let general = ctx.next_label("array_sum_int_cached_general");
+    let done = ctx.next_label("array_sum_int_cached_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(flag, "x1")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x2", i64::MIN);
+            ctx.emitter.instruction("cmp x1, x2");                              // did the probe produce an exact small sum?
+            ctx.emitter.instruction(&format!("b.eq {general}"));                // otherwise use the exact guarded reducer
+            ctx.emitter.instruction("mov x0, x1");                              // return the cached exact sum
+            ctx.emitter.instruction(&format!("b {done}"));                      // skip the guarded reducer
+            ctx.emitter.label(&general);
+            super::core_builtins::prepare_deferred_call_site(ctx, inst)?;
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x2, [x0]");                            // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("mov x1, xzr");                             // the whole array is summed from index zero
+            abi::emit_call_label(ctx.emitter, "__rt_array_sum_int_value");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(flag, "rsi")?;
+            ctx.emitter.instruction("mov rax, 0x8000000000000000");             // sentinel for an invalid probe
+            ctx.emitter.instruction("cmp rsi, rax");                            // did the probe produce an exact small sum?
+            ctx.emitter.instruction(&format!("je {general}"));                  // otherwise use the exact guarded reducer
+            ctx.emitter.instruction("mov rax, rsi");                            // return the cached exact sum
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // skip the guarded reducer
+            ctx.emitter.label(&general);
+            super::core_builtins::prepare_deferred_call_site(ctx, inst)?;
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rdi]");                // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("xor esi, esi");                            // the whole array is summed from index zero
+            abi::emit_call_label(ctx.emitter, "__rt_array_sum_int_value");
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers the allocation-free `array_sum()` value entry selected by the int sink.
 ///
 /// The producer proved the packed receiver is `array<int>` and that the boxed result is

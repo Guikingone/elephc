@@ -76,7 +76,8 @@ fn array_sum_direct_source_removes_the_owner_frame() {
         r#"<?php
 $a = range(1, 100);
 $n = 0;
-for ($i = 0; $i < 3; $i++) { $n ^= array_sum($a); }
+$n ^= array_sum($a);
+$n ^= array_sum($a);
 echo $n, "\n";
 "#,
         true,
@@ -127,6 +128,65 @@ echo $s, "\n";
 
 /// Disabling EIR optimization leaves the boxed call and must produce the same output.
 #[test]
+/// The loop-invariant cache handles small, wide, negative and mutated receivers.
+#[test]
+fn array_sum_loop_cache_matches_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$small = range(1, 100);
+$n = 0;
+for ($i = 0; $i < 10; $i++) { $n ^= array_sum($small); }
+echo $n, '|';
+$large = [4294967296, 2];
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum($large); }
+echo $n, '|';
+$neg = range(-100, -1);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum($neg); }
+echo $n, '|';
+$mut = range(1, 3);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum($mut); $mut[] = 1; }
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "0|4294967298|-5050|9\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A stable loop receiver gets the probe/cache; a receiver mutated in the loop does not.
+#[test]
+fn array_sum_loop_cache_ir_is_conservative() {
+    let stable = emit_main_ir(
+        r#"<?php
+$a = range(1, 100);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum($a); }
+echo $n, "\n";
+"#,
+        true,
+    );
+    assert!(stable.contains("runtime.array_sum_probe_small"), "{stable}");
+    assert!(stable.contains("runtime.array_sum_int_cached"), "{stable}");
+    let mutated = emit_main_ir(
+        r#"<?php
+$a = range(1, 3);
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= array_sum($a); $a[] = 1; }
+echo $n, "\n";
+"#,
+        true,
+    );
+    assert!(!mutated.contains("runtime.array_sum_probe_small"), "{mutated}");
+    assert!(!mutated.contains("runtime.array_sum_int_cached"), "{mutated}");
+}
+
 fn array_sum_int_sink_no_ir_opt_parity() {
     without_ir_opt(|| {
         let out = compile_and_run(

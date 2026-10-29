@@ -118,6 +118,10 @@ pub enum RuntimeFnId {
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
     ArrayMapSumAddInt,
+    /// One-time checked probe for the loop-invariant raw map+sum cache.
+    ArrayMapSumProbeInt,
+    /// Cached dispatch for the raw fused map+sum kernel.
+    ArrayMapSumAddIntCached,
     /// Overflow preflight for a declared-int fused map+sum callback.
     ArrayMapSumAddSafe,
     ArrayMerge,
@@ -145,6 +149,10 @@ pub enum RuntimeFnId {
     ArraySum,
     /// Allocation-free `array_sum()` observed only through an `(int)` cast.
     ArraySumInt,
+    /// One-time exact sum probe for a packed int array that fits the cache path.
+    ArraySumProbeSmall,
+    /// Cached small-array dispatch for the raw `array_sum()` reducer.
+    ArraySumIntCached,
     ArrayUdiff,
     ArrayUintersect,
     ArrayUnique,
@@ -890,10 +898,13 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
-            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
             RuntimeFnId::ArraySumInt => Some((1, Some(1))),
+            RuntimeFnId::ArraySumProbeSmall => Some((1, Some(1))),
+            RuntimeFnId::ArraySumIntCached => Some((2, Some(2))),
             RuntimeFnId::AbsInt => Some((1, Some(1))),
             RuntimeFnId::Base64EncodedLen => Some((1, Some(1))),
             RuntimeFnId::StrposInt => Some((2, Some(3))),
@@ -1736,6 +1747,10 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapSumAddInt => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::MAY_WARN.bits())
             }
+            // The one-time probe only reads the packed payload.
+            RuntimeFnId::ArrayMapSumProbeInt => E::from_bits_retain(E::READS_HEAP.bits()),
+            // The cached dispatch may run the raw kernel and its warned cast fallback.
+            RuntimeFnId::ArrayMapSumAddIntCached => RuntimeFnId::ArrayMapSumAddInt.effects(),
             // The preflight only reads the packed payload and returns a raw bool.
             RuntimeFnId::ArrayMapSumAddSafe => E::from_bits_retain(E::READS_HEAP.bits()),
             // The fused filter-count kernel only reads the packed payload.
@@ -1749,6 +1764,10 @@ impl RuntimeFnId {
             RuntimeFnId::ArraySumInt => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::MAY_WARN.bits(),
             ),
+            // The one-time probe only reads the packed payload.
+            RuntimeFnId::ArraySumProbeSmall => E::from_bits_retain(E::READS_HEAP.bits()),
+            // The cached dispatch may run the guarded reducer and its warned float cast.
+            RuntimeFnId::ArraySumIntCached => RuntimeFnId::ArraySumInt.effects(),
             // The raw integer abs returns a scalar; INT_MIN applies the warned float cast.
             RuntimeFnId::AbsInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The encoded-length helper reads only the already-materialized string length.
@@ -2478,7 +2497,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayFilterCountMod
                 | RuntimeFnId::ArrayElementTypeCheck
                 | RuntimeFnId::ArraySumInt
+                | RuntimeFnId::ArraySumProbeSmall
+                | RuntimeFnId::ArraySumIntCached
                 | RuntimeFnId::ArrayMapSumAddInt
+                | RuntimeFnId::ArrayMapSumProbeInt
+                | RuntimeFnId::ArrayMapSumAddIntCached
                 | RuntimeFnId::ArrayMapSumAddSafe
                 | RuntimeFnId::AbsInt
                 | RuntimeFnId::Base64EncodedLen
@@ -2950,6 +2973,8 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMap => "array_map",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
+            RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",
+            RuntimeFnId::ArrayMapSumAddIntCached => "array_map_sum_add_int_cached",
             RuntimeFnId::ArrayMapSumAddSafe => "array_map_sum_add_safe",
             RuntimeFnId::ArrayMerge => "array_merge",
             RuntimeFnId::ArrayFilterCountMod => "array_filter_count_mod",
@@ -2974,6 +2999,8 @@ impl RuntimeFnId {
             RuntimeFnId::ArraySplice => "array_splice",
             RuntimeFnId::ArraySum => "array_sum",
             RuntimeFnId::ArraySumInt => "array_sum_int_value",
+            RuntimeFnId::ArraySumProbeSmall => "array_sum_probe_small",
+            RuntimeFnId::ArraySumIntCached => "array_sum_int_cached",
             RuntimeFnId::ArrayUdiff => "array_udiff",
             RuntimeFnId::ArrayUintersect => "array_uintersect",
             RuntimeFnId::ArrayUnique => "array_unique",

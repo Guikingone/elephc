@@ -663,6 +663,23 @@ float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
 before that suffix would change PHP's answer after overflow, so the pass fuses the
 complete expression at each cast and removes the now-unobserved boxed storage.
 
+## Loop-invariant array caches
+
+`src/ir_passes/array_sum_int_bounds.rs` proves a raw `array_sum()` receiver is a
+non-escaping PHP local that is neither written, unset nor observed by another in-loop
+load, then inserts `ArraySumProbeSmall` in the loop preheader. The probe returns the
+exact non-negative 32-bit sum or `PHP_INT_MIN`; the loop call becomes
+`ArraySumIntCached`, which returns the cached sum on success and keeps the exact guarded
+reducer (including warned float-to-int casts) on the sentinel path. Dynamic eval,
+generators and fibers keep the per-iteration call.
+
+`src/ir_passes/array_filter_count_hoist.rs` applies the same immutability proof to the pure
+fused `count(array_filter($ints, fn($x) => $x % C === 0))` kernel and moves the call to the
+preheader. `src/ir_passes/array_map_sum_cache.rs` inserts `ArrayMapSumProbeInt`, which
+performs the map and running sum with PHP's checked additions and returns `PHP_INT_MIN`
+when either step would promote. The loop call becomes `ArrayMapSumAddIntCached`, returning
+the cached integer or falling back to the raw kernel for warned float-to-int promotion.
+
 ## EIR cast-observed integer sinks
 
 `src/ir_passes/array_sum_int_sink.rs` handles a builtin `array_sum()` over a

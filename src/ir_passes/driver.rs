@@ -38,6 +38,9 @@ use super::json_encode_len_sink::JsonEncodeLenSink;
 use super::sqrt_add_int_sink::SqrtAddIntSink;
 use super::strpos_int_sink::StrposIntSink;
 use super::array_map_sum_add_int_sink::ArrayMapSumAddIntSink;
+use super::array_filter_count_hoist::ArrayFilterCountHoist;
+use super::array_map_sum_cache::ArrayMapSumCache;
+use super::array_sum_int_bounds::ArraySumIntBounds;
 use super::array_sum_int_direct::ArraySumIntDirect;
 use super::array_sum_int_sink::ArraySumIntSink;
 use super::array_sum_loop::ArraySumLoop;
@@ -149,6 +152,9 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ArraySumIntSink),
         Box::new(ArrayMapSumAddIntSink),
         Box::new(ArraySumIntDirect),
+        Box::new(ArraySumIntBounds),
+        Box::new(ArrayFilterCountHoist),
+        Box::new(ArrayMapSumCache),
         Box::new(AbsIntSink),
         Box::new(StringLenSink),
         Box::new(StrposIntSink),

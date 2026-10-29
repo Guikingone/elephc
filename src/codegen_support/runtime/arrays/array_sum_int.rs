@@ -18,7 +18,7 @@
 //! - The two entries are self-contained so Mach-O dead stripping can remove either
 //!   one without leaving a branch into removed code.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
 
 /// Emits every `__rt_array_sum_int` reducer entry for the active target.
@@ -31,11 +31,13 @@ pub fn emit_array_sum_int(emitter: &mut Emitter) {
         emit_array_sum_int_x86_64(emitter, false, false);
         emit_array_sum_int_x86_64(emitter, true, false);
         emit_array_sum_int_x86_64(emitter, true, true);
+        emit_array_sum_int_cached_x86_64(emitter);
         return;
     }
     emit_array_sum_int_aarch64(emitter, false, false);
     emit_array_sum_int_aarch64(emitter, true, false);
     emit_array_sum_int_aarch64(emitter, true, true);
+    emit_array_sum_int_cached_aarch64(emitter);
 }
 
 /// Emits one self-contained AArch64 reducer entry.
@@ -397,4 +399,33 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool, raw_result: 
         emitter.instruction("mov rax, rcx");                                    // return the seed cell itself
         emitter.instruction("jmp __rt_incref");                                 // add the reference consumed by the replacing store
     }
+}
+
+
+/// Emits the cached dispatch between the small and general raw value entries.
+fn emit_array_sum_int_cached_aarch64(e: &mut Emitter) {
+    e.blank();
+    e.comment("--- runtime: array_sum int cached value ---");
+    e.label_global("__rt_array_sum_int_value_cached");
+    abi::emit_load_int_immediate(e, "x2", i64::MIN);                            // sentinel for an invalid preheader probe
+    e.instruction("cmp x1, x2");                                                // did the probe produce an exact small sum?
+    e.instruction("b.eq __rt_array_sum_int_value_cached_general");              // otherwise use the exact guarded reducer
+    e.instruction("mov x0, x1");                                                // return the cached exact sum
+    e.instruction("ret");                                                       // transfer the cached result to the caller
+    e.label("__rt_array_sum_int_value_cached_general");
+    e.instruction("b __rt_array_sum_int_value");                                // fall back to the exact guarded reducer
+}
+
+/// Emits the x86_64 cached dispatch between the small and general raw value entries.
+fn emit_array_sum_int_cached_x86_64(e: &mut Emitter) {
+    e.blank();
+    e.comment("--- runtime: array_sum int cached value ---");
+    e.label_global("__rt_array_sum_int_value_cached");
+    e.instruction("mov rax, 0x8000000000000000");                               // sentinel for an invalid preheader probe
+    e.instruction("cmp rsi, rax");                                              // did the probe produce an exact small sum?
+    e.instruction("je __rt_array_sum_int_value_cached_general_x86");            // otherwise use the exact guarded reducer
+    e.instruction("mov rax, rsi");                                              // return the cached exact sum
+    e.instruction("ret");                                                       // transfer the cached result to the caller
+    e.label("__rt_array_sum_int_value_cached_general_x86");
+    e.instruction("jmp __rt_array_sum_int_value");                              // fall back to the exact guarded reducer
 }
