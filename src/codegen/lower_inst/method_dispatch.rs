@@ -73,6 +73,16 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     {
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
+    // A method the static class lacks belongs to a subclass the checker narrowed the receiver to
+    // (`$o instanceof B ? $o->k() : …` on an `A $o`): dispatch on the runtime class.
+    let declares = |name: &str| {
+        ctx.module.class_infos.get(class_name.trim_start_matches('\\')).is_some_and(|info| {
+            info.methods.contains_key(&php_symbol_key(name))
+        })
+    };
+    if ctx.module.class_infos.contains_key(class_name.trim_start_matches('\\')) && !declares(&method_name) && !declares("__call") {
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     if super::method_resolution::method_requires_runtime_literal_guards(ctx, &class_name, &target) {
         // An override may widen `false` or `null`. The vtable selects that body, so the

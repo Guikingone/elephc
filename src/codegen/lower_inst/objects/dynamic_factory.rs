@@ -420,46 +420,12 @@ pub(super) fn emit_dynamic_new_fatal(ctx: &mut FunctionContext<'_>, required_par
 
 /// Emits PHP's fatal diagnostic for source-level `new $name` with a missing class.
 pub(super) fn emit_dynamic_new_class_not_found_fatal(ctx: &mut FunctionContext<'_>) {
-    let (prefix_label, prefix_len) = ctx
-        .data
-        .add_string(b"Fatal error: Uncaught Error: Class \"");
-    let (suffix_label, suffix_len) = ctx.data.add_string(b"\" not found\n");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found prefix
-            ctx.emitter.adrp("x1", &prefix_label);
-            ctx.emitter.add_lo12("x1", "x1", &prefix_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", prefix_len));       // pass the class-not-found prefix byte length
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the missing class name
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found suffix
-            ctx.emitter.adrp("x1", &suffix_label);
-            ctx.emitter.add_lo12("x1", "x1", &suffix_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", suffix_len));       // pass the class-not-found suffix byte length
-            ctx.emitter.syscall(4);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", prefix_len));       // pass the class-not-found prefix byte length
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found prefix
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the prefix
-            ctx.emitter.instruction("syscall");                                 // write the class-not-found prefix
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the missing class name
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the class name
-            ctx.emitter.instruction("syscall");                                 // write the missing class name
-            abi::emit_symbol_address(ctx.emitter, "rsi", &suffix_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", suffix_len));       // pass the class-not-found suffix byte length
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found suffix
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the suffix
-            ctx.emitter.instruction("syscall");                                 // write the class-not-found suffix
-        }
-    }
-    abi::emit_exit(ctx.emitter, 1);
+    use super::super::exceptions::MessagePart;
+    // The class name is still on top of the temporary stack: PHP throws a catchable Error.
+    super::super::exceptions::emit_error_from_parts(
+        ctx,
+        &[MessagePart::Text("Class \""), MessagePart::Stacked(0), MessagePart::Text("\" not found")],
+    );
 }
 
 /// Emits PHP's fatal diagnostic for `new $name` when the class expression is not a string.

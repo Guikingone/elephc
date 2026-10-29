@@ -103,6 +103,8 @@ pub(crate) use instance_property_writes::{
     borrow_receiver_as_runtime_class, emit_receiver_instanceof, magic_accessor_subclasses,
 };
 pub(super) use typed_foreach::coerce_typed_assign_value;
+pub(crate) use static_property_helpers::declared_static_property_type;
+pub(in crate::ir_lower) use instance_property_writes::weak_scalar_conversion;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;
 pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;

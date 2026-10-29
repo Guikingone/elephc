@@ -59,10 +59,10 @@ pub(super) fn check_static_property_assign(
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
 
     if target.property_has_declared_type {
-        checker.require_compatible_arg_type(
+        checker.require_typed_property_value(
             &target.prop_ty,
             &val_ty,
-            span,
+            value,
             &format!("Static property {}::${}", target.class_name, property),
         )?;
     }

@@ -209,3 +209,22 @@ echo "|fin";
     );
     assert_eq!(out, "count:3|fin");
 }
+
+/// `exit()` runs the destructors of the objects still alive, newest first, before the process
+/// ends, as php-src's shutdown does: a function's local, then the globals, a static last.
+#[test]
+fn test_exit_runs_live_object_destructors() {
+    let out = compile_and_run(
+        r#"<?php
+class H { public function __construct(public string $n) {} public function __destruct() { echo "destruct {$this->n}\n"; } }
+class S { public static $keep; }
+S::$keep = new H('static');
+$a = new H('a');
+$b = new H('b');
+function f() { $c = new H('c'); exit(0); }
+echo "before\n";
+f();
+"#,
+    );
+    assert_eq!(out, "before\ndestruct c\ndestruct b\ndestruct a\ndestruct static\n");
+}

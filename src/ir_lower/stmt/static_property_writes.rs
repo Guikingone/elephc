@@ -53,6 +53,13 @@ pub(super) fn lower_static_property_assign(
     let source = static_property_type(ctx, receiver, property)
         .map(|slot_ty| {
             let source = ctx.retype_packed_address_for_pointer_sink(source, &slot_ty, Some(span));
+            // A scalar of another scalar type converts as PHP's weak mode does through the
+            // typed-slot guard, which takes the boxed value.
+            let source = if crate::ir_lower::stmt::weak_scalar_conversion(&ctx.builder.value_php_type(source.value), &slot_ty) {
+                ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span))
+            } else {
+                source
+            };
             coerce_typed_assign_value(ctx, source, &slot_ty, span)
         })
         .unwrap_or(source);

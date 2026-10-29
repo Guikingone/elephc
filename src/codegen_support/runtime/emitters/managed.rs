@@ -115,6 +115,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_is_list(emitter);
     arrays::emit_array_edge_key(emitter);
+    arrays::emit_array_edge_value(emitter);
     arrays::emit_array_ptr_seek(emitter);
     arrays::emit_array_ptr_key(emitter);
     arrays::emit_array_ptr_value(emitter);
@@ -267,6 +268,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_array_fetch_for_write(emitter);
     objects::emit_new_by_name(emitter);
     objects::emit_call_object_destructor(emitter);
+    objects::emit_exit_destructors(emitter);
     // PHP `==` walkers: one boxed-Mixed dispatcher plus the array and object
     // recursion it delegates to. Emitted after the object property accessors it calls.
     compare::emit_mixed_loose_eq(emitter);

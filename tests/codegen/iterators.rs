@@ -335,3 +335,22 @@ probe();
     );
     assert_eq!(out, "null:null");
 }
+
+/// `foreach` over an object that is not Traversable walks the properties visible where the loop
+/// runs, as PHP does: only public ones outside the class, every one from inside it.
+#[test]
+fn test_foreach_over_plain_object_walks_visible_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public $a = 1; protected $b = 2; private $c = 3;
+    public function all() { foreach ($this as $k => $v) { echo "$k=$v\n"; } }
+}
+$p = new P;
+foreach ($p as $k => $v) { echo "$k=$v\n"; }
+$p->all();
+foreach (new P as $k => $v) { echo "$k=$v\n"; }
+"#,
+    );
+    assert_eq!(out, "a=1\na=1\nb=2\nc=3\na=1\n");
+}

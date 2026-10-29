@@ -93,11 +93,12 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::ListUnpack { value: expr, .. }
         | StmtKind::Return(Some(expr)) => expr_effect(expr),
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::StaticPropertyAssign { value, .. } => {
+        StmtKind::Assign { value, .. } | StmtKind::TypedAssign { value, .. } => {
             expr_effect(value).with_side_effects()
         }
+        // A declared static slot's weak-mode guard throws PHP's TypeError for a value it does
+        // not convert, as an instance property store does.
+        StmtKind::StaticPropertyAssign { value, .. } => expr_effect(value).with_side_effects().with_may_throw(),
         // The source can call PHP or resolve a property, and rebinding can retire a target
         // whose destructor throws or changes globals. Keep the enclosing exception boundary.
         StmtKind::RefAssign { source, .. } => expr_effect(source)

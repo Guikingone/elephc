@@ -168,7 +168,7 @@ fn test_foreach_accepts_builtin_iterator_interface_parameter_types() {
 #[test]
 fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalikes() {
     for source in [
-        "<?php class Plain {} function walk(Plain $items): void { foreach ($items as $value) {} }",
+        "<?php class Plain {} function walk(Plain $items): void { foreach ($items as &$value) {} }",
         r"<?php namespace Domain; interface Traversable {} function walk(Traversable $items): void { foreach ($items as $value) {} }",
     ] {
         expect_error(
@@ -851,12 +851,19 @@ class Config {
     );
 }
 
-/// Verifies that assigning an incompatible value to a static property is rejected.
+/// A scalar that does not convert to a static property's type compiles: PHP raises a catchable
+/// `TypeError` at run time, in weak mode, rather than refusing the file.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]
-fn test_error_static_property_type_mismatch() {
+fn test_static_property_unconvertible_scalar_throws_at_run_time() {
+    expect_no_error("<?php class Box { public static int $count = 1; } Box::$count = \"x\";");
+}
+
+/// Under `declare(strict_types=1)` a static property takes no conversion, so the mismatch is refused.
+#[test]
+fn test_error_static_property_type_mismatch_under_strict_types() {
     expect_error(
-        "<?php class Box { public static int $count = 1; } Box::$count = \"x\";",
+        "<?php declare(strict_types=1); class Box { public static int $count = 1; } Box::$count = \"x\";",
         "Static property Box::$count expects",
     );
 }
@@ -2105,11 +2112,13 @@ fn test_typed_by_ref_param_can_detach_and_rebind() {
     expect_no_error("<?php function f(int &$a) { unset($a); $a = \"x\"; } $n = 1; f($n);");
 }
 
-/// Class properties never reach the local retype paths: pin the declared-property error.
+/// Class properties never reach the local retype paths: weak mode converts `5` into the declared
+/// string, while `declare(strict_types=1)` keeps the declared-property error.
 #[test]
 fn test_typed_property_stays_strict() {
+    expect_no_error("<?php class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;");
     expect_error(
-        "<?php class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
+        "<?php declare(strict_types=1); class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
         "Property C::$s expects string, got int",
     );
 }

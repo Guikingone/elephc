@@ -224,6 +224,30 @@ pub(super) fn emit_false_slot_mixed_guard(
     Ok(())
 }
 
+/// Emits the weak-mode type guard for a boxed value assigned to a declared static property,
+/// as for an instance one: PHP converts it or throws the same `TypeError`. Returns the label to
+/// emit after the caller's own value materialization, as `emit_mixed_property_type_guard` does.
+pub(in crate::codegen::lower_inst) fn emit_static_property_type_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    class_name: &str,
+    property: &str,
+    php_type: &PhpType,
+) -> Result<Option<String>> {
+    let slot = PropertySlot {
+        class_name: class_name.to_string(),
+        property: property.to_string(),
+        php_type: php_type.clone(),
+        offset: 0,
+        is_declared: true,
+        is_packed: false,
+        width: None,
+        is_reference: false,
+        abstract_setter_type_error_prefix: None,
+    };
+    emit_mixed_property_type_guard(ctx, value, &slot)
+}
+
 /// Emits the weak-mode type guard for a boxed value assigned to a declared property.
 ///
 /// Returns the label the caller must emit AFTER its own value materialization, when the

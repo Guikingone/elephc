@@ -152,7 +152,17 @@ pub(super) fn lower_store_static_property(
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
     let eval_done_label =
         emit_eval_native_frame_static_property_set_if_needed(ctx, inst, value, &slot)?;
+    // A boxed value assigned to a declared slot is converted, or refused with PHP's TypeError,
+    // by the weak-mode guard instance properties use, before the slot is touched.
+    let coerced_done_label = if slot.is_declared && matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+        objects::emit_static_property_type_guard(ctx, value, &slot.declaring_class, &slot.property, &slot.php_type)?
+    } else {
+        None
+    };
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
+    if let Some(done_label) = coerced_done_label {
+        ctx.emitter.label(&done_label);
+    }
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
         if emit_called_class_id_to_reg(ctx, class_id_reg)? {

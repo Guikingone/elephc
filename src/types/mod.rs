@@ -98,6 +98,7 @@ pub use checker::CheckOptions;
 pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
 pub use result::{check_with_target_and_options, ArrayPushPropertyPlan, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
+pub use schema::foreach_walks_properties;
 pub use schema::{
     class_declares_private_property, class_inherits_from,
     property_name_shadows_ancestor_private_slot, resolve_property_name,

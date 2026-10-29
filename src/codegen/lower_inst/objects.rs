@@ -197,6 +197,7 @@ mod instanceof_helpers;
 mod mixed_property_type_guard;
 mod extern_fields;
 pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
+pub(super) use mixed_property_type_guard::emit_static_property_type_guard;
 
 #[allow(unused_imports)]
 use fixed_new::*;

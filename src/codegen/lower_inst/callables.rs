@@ -2532,8 +2532,34 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
     }
 }
 
-/// Emits the fatal path for runtime callable arrays without a matching method.
+/// Throws PHP's `Error` for a runtime callable array naming a method its object lacks
+/// (`Call to undefined method Class::name()`); a pair of any other shape ends the program.
 fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
+    use super::exceptions::MessagePart;
+    let abort = ctx.next_label("callable_array_no_match_abort");
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_RECEIVER_TAG_OFFSET, MIXED_TAG_OBJECT, &abort);
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_METHOD_TAG_OFFSET, MIXED_TAG_STRING, &abort);
+    let object = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object, MIXED_RECEIVER_PAYLOAD_OFFSET);
+    super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, object, "object");
+    let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, name_ptr, name_len);
+    super::exceptions::emit_error_from_parts(
+        ctx,
+        &[
+            MessagePart::Text("Call to undefined method "),
+            MessagePart::Stacked(0),
+            MessagePart::Text("::"),
+            MessagePart::Stacked(16 + MIXED_METHOD_PAYLOAD_OFFSET),
+            MessagePart::Text("()"),
+        ],
+    );
+    ctx.emitter.label(&abort);
+    emit_runtime_callable_array_shape_abort(ctx);
+}
+
+/// Ends the program for a runtime callable array that names no object method.
+fn emit_runtime_callable_array_shape_abort(ctx: &mut FunctionContext<'_>) {
     let (message_label, message_len) = ctx
         .data
         .add_string(b"Fatal error: callable array did not resolve to an invokable target\n");
@@ -3509,28 +3535,13 @@ fn store_runtime_string_call_result(
     ctx.store_result_value(result)
 }
 
-/// Emits the fatal path for an unmatched runtime string callable name.
+/// Throws PHP's `Error` for an unmatched runtime string callable name, which sits on top of the
+/// temporary stack: `Call to undefined function NAME()`.
 fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
-    let message = b"Fatal error: Call to undefined function <dynamic>()\n";
-    let (message_label, message_len) = ctx.data.add_string(message);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the undefined dynamic-call diagnostic to stderr
-            ctx.emitter.adrp("x1", &message_label); // load the dynamic-call diagnostic string page
-            ctx.emitter.add_lo12("x1", "x1", &message_label); // resolve the dynamic-call diagnostic string address
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the dynamic-call diagnostic byte length to write
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the undefined dynamic-call diagnostic to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the dynamic-call diagnostic byte length to write
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
+    use super::exceptions::MessagePart;
+    super::exceptions::emit_error_from_parts(
+        ctx,
+        &[MessagePart::Text("Call to undefined function "), MessagePart::Stacked(0), MessagePart::Text("()")],
+    );
 }
+

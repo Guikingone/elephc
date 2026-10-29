@@ -645,3 +645,37 @@ var_dump(g(new D), g(new E), h(new E), g(new C));
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A RUNTIME property name (`$o->$n`) the class does not declare reaches `__get` and `__isset` as
+/// a literal name does: a read calls `__get`, `isset()` asks `__isset` alone, `empty()` and `??`
+/// ask `__isset` before `__get`, on a typed and a `mixed` receiver alike. They answered null, or
+/// the declared slots' type read the miss sentinel back as `int(9223372036854775806)`.
+#[test]
+fn test_runtime_property_names_reach_the_magic_accessors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class M {
+    public $d = 1;
+    public function __get($n) { echo "get $n\n"; return "v$n"; }
+    public function __isset($n) { echo "isset $n\n"; return $n === "a"; }
+}
+class G { public function __get($n) { echo "get $n\n"; return "g$n"; } }
+function viaMixed(mixed $o, string $n) { var_dump($o->$n, $o->$n ?? "dflt"); }
+$m = new M;
+$a = $argc > 9 ? "x" : "a"; $b = $argc > 9 ? "x" : "b"; $d = $argc > 9 ? "x" : "d";
+var_dump($m->$a, $m->$d);
+var_dump(isset($m->$a), isset($m->$b), isset($m->$d), empty($m->$a));
+var_dump($m->$a ?? "dflt", $m->$b ?? "dflt");
+viaMixed(new G, $a);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "get a\nstring(2) \"va\"\nint(1)\n\
+         isset a\nisset b\nisset a\nget a\nbool(true)\nbool(false)\nbool(true)\nbool(false)\n\
+         isset a\nget a\nisset b\nstring(2) \"va\"\nstring(4) \"dflt\"\n\
+         get a\nget a\nstring(2) \"ga\"\nstring(2) \"ga\"\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

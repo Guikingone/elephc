@@ -100,6 +100,8 @@ pub(crate) use statements::eval_object_clone_with_properties_for_ffi;
 #[cfg(not(test))]
 pub(crate) use statements::eval_property_set_for_ffi;
 #[cfg(not(test))]
+pub(crate) use statements::eval_property_fetch_for_ffi;
+#[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
 #[cfg(not(test))]
 pub(crate) use output_handlers::release_ob_handler_callbacks;

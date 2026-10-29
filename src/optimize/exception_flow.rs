@@ -570,9 +570,11 @@ impl ExceptionFlowAnalysis {
                     .filter(|name| self.constructor_default_errors.contains(&php_symbol_key(name)))
                     .map(|_| ThrownTypes::exact("Error"))
                     .unwrap_or_default();
+                // A declared slot refuses a value that does not convert with PHP's TypeError.
                 self.expr_throws(value, bindings, class_context)
                     .combined(self.overwrite_cleanup_throws())
                     .combined(initialization)
+                    .combined(ThrownTypes::exact("TypeError"))
             }
             StmtKind::ArrayPush { value, .. }
             | StmtKind::StaticPropertyArrayPush { value, .. } => self

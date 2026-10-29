@@ -62,7 +62,10 @@ pub(super) fn lower_mixed_prop_get(
     // A class answering undeclared names from `__get` needs an arm as well: the runtime helper
     // knows stdClass alone, so without one the read warned `Undefined property` instead.
     let has_magic_arms = !mixed_magic_get_arms(ctx, property, mode, &[])?.is_empty();
-    if !candidates.is_empty() || has_hash_arms || has_magic_arms {
+    // An instance of an eval-declared class has stdClass's layout, and only the ladder's stdClass
+    // arm hands it to Magician first (`emit_eval_owned_property_read`).
+    let eval_objects = crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module);
+    if !candidates.is_empty() || has_hash_arms || has_magic_arms || eval_objects {
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
     }
     lower_runtime_mixed_prop_get(ctx, inst, object, property)
@@ -173,7 +176,7 @@ pub(super) fn lower_declared_mixed_prop_get(
             MixedPropertyReadKind::MagicDeferred => {
                 let class_name = candidate.candidate.slot.class_name.clone();
                 match magic_property_arm(ctx, &class_name, mode)? {
-                    Some(arm) => emit_magic_property_arm(ctx, &arm, property, &done_label)?,
+                    Some(arm) => emit_magic_property_arm(ctx, &arm, &MagicName::Const(property), &done_label)?,
                     None => emit_boxed_null(ctx),
                 }
                 abi::emit_jump(ctx.emitter, &done_label);
@@ -225,11 +228,12 @@ pub(super) fn lower_declared_mixed_prop_get(
     let magic_labels = match_labels.iter().skip(candidates.len() + hash_arms.len());
     for (arm, label) in magic_arms.iter().zip(magic_labels) {
         ctx.emitter.label(label);
-        emit_magic_property_arm(ctx, arm, property, &done_label)?;
+        emit_magic_property_arm(ctx, arm, &MagicName::Const(property), &done_label)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&stdclass_label);
+    emit_eval_owned_property_read(ctx, ObjectSource::ResultReg, &MagicName::Const(property), mode, &done_label, 0)?;
     emit_stdclass_get_from_loaded_object(ctx, property);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -281,7 +285,7 @@ fn emit_hash_then_magic_arm(
     abi::emit_jump(ctx.emitter, done_label);
     ctx.emitter.label(&miss);
     abi::emit_pop_reg(ctx.emitter, object);
-    emit_magic_property_arm(ctx, magic, property, done_label)
+    emit_magic_property_arm(ctx, magic, &MagicName::Const(property), done_label)
 }
 
 /// One class of a `Mixed` ladder that answers a name from its magic accessors.
@@ -324,7 +328,7 @@ fn box_magic_result(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 
 /// The magic accessors class `class_name` answers a `mode` read through, or `None` when it has
 /// none this ladder can call.
-fn magic_property_arm(
+pub(super) fn magic_property_arm(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     mode: PropertyFetchMode,
@@ -403,19 +407,104 @@ pub(super) fn mixed_magic_get_arms(
     Ok(arms)
 }
 
-/// Loads the receiver (already in the integer result register) and the property name as the
-/// `(this, string $name)` arguments of a magic accessor.
-fn emit_magic_accessor_args(ctx: &mut FunctionContext<'_>, property: &str) {
-    let (label, len) = ctx.data.add_string(property.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x1", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+/// The classes a RUNTIME-name read reaches through `__get` / `__isset` when the name matched no
+/// declared slot: every class (or, with `within`, `within` and its subclasses) with an accessor
+/// this `mode` calls, except the classes in `skip` (their per-instance hash answers first).
+pub(super) fn runtime_name_magic_arms(
+    ctx: &mut FunctionContext<'_>,
+    within: Option<&str>,
+    mode: PropertyFetchMode,
+    skip: &[u64],
+) -> Result<Vec<MixedMagicArm>> {
+    let mut names: Vec<String> = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(name, info)| {
+            !crate::types::checker::builtin_stdclass::is_stdclass(name)
+                && !skip.contains(&info.class_id)
+                && !info.dynamic_property_hash_is_name_addressable()
+                && within.is_none_or(|root| {
+                    name.as_str() == root || crate::types::class_inherits_from(&ctx.module.class_infos, name, root)
+                })
+                && ["__get", "__isset"].iter().any(|method| info.methods.contains_key(&php_symbol_key(method)))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    names.sort();
+    let mut arms = Vec::new();
+    for name in names {
+        if let Some(arm) = magic_property_arm(ctx, &name, mode)? {
+            arms.push(arm);
         }
+    }
+    arms.sort_by_key(|arm| arm.class_id);
+    Ok(arms)
+}
+
+/// Emits the runtime-name miss dispatch to `arms`: with the receiver stacked at 16 and the name's
+/// pointer and length at 0 (the runtime-name ladders' 32-byte block), a receiver of an arm's class
+/// branches to that arm, which calls the accessors with the runtime name, releases the block and
+/// jumps to `done_label` with the result in place. A receiver of no arm's class falls through.
+pub(super) fn emit_runtime_name_magic_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    arms: &[MixedMagicArm],
+    done_label: &str,
+) -> Result<()> {
+    if arms.is_empty() {
+        return Ok(());
+    }
+    let labels = arms
+        .iter()
+        .map(|arm| ctx.next_label(&format!("dyn_prop_magic_{}", label_fragment(&arm.class_name))))
+        .collect::<Vec<_>>();
+    for (arm, label) in arms.iter().zip(labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
+    }
+    let fallthrough = ctx.next_label("dyn_prop_magic_none");
+    abi::emit_jump(ctx.emitter, &fallthrough);
+    for (arm, label) in arms.iter().zip(labels.iter()) {
+        ctx.emitter.label(label);
+        let arm_done = ctx.next_label("dyn_prop_magic_done");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+        emit_magic_property_arm(ctx, arm, &MagicName::Stacked(0), &arm_done)?;
+        ctx.emitter.label(&arm_done);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+        abi::emit_jump(ctx.emitter, done_label);
+    }
+    ctx.emitter.label(&fallthrough);
+    Ok(())
+}
+
+/// The name a magic accessor receives: a constant, or a runtime name whose pointer and length
+/// sit in one temporary stack slot, `offset` bytes above the stack pointer at the arm's entry.
+pub(super) enum MagicName<'a> {
+    Const(&'a str),
+    Stacked(usize),
+}
+
+/// Loads the receiver (already in the integer result register) and the property name as the
+/// `(this, string $name)` arguments of a magic accessor. `pushed` is what the arm itself has
+/// pushed since its entry, which moves a stacked name further from the stack pointer.
+fn emit_magic_accessor_args(ctx: &mut FunctionContext<'_>, name: &MagicName<'_>, pushed: usize) {
+    let (ptr, len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the receiver as the accessor's $this
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+            ("rsi", "rdx")
+        }
+    };
+    match name {
+        MagicName::Const(property) => {
+            let (label, length) = ctx.data.add_string(property.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, ptr, &label);
+            abi::emit_load_int_immediate(ctx.emitter, len, length as i64);
+        }
+        MagicName::Stacked(offset) => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, ptr, offset + pushed);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, len, offset + pushed + 8);
         }
     }
 }
@@ -423,10 +512,10 @@ fn emit_magic_accessor_args(ctx: &mut FunctionContext<'_>, property: &str) {
 /// Answers a `Mixed` property read from the receiver's magic accessors, leaving an owned Mixed
 /// cell in the result register: a probe asks `__isset` first and answers null when it says no,
 /// then reads through `__get` (or answers `true` when the class has no `__get`).
-fn emit_magic_property_arm(
+pub(super) fn emit_magic_property_arm(
     ctx: &mut FunctionContext<'_>,
     arm: &MixedMagicArm,
-    property: &str,
+    name: &MagicName<'_>,
     done_label: &str,
 ) -> Result<()> {
     if arm.absent_without_isset {
@@ -436,7 +525,7 @@ fn emit_magic_property_arm(
     if let Some(isset) = &arm.isset {
         let absent = ctx.next_label("mixed_prop_magic_absent");
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_magic_accessor_args(ctx, property);
+        emit_magic_accessor_args(ctx, name, 16);
         super::super::emit_resolved_method_call(ctx, isset)?;
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -456,7 +545,7 @@ fn emit_magic_property_arm(
                 emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
             }
             Some(get) => {
-                emit_magic_accessor_args(ctx, property);
+                emit_magic_accessor_args(ctx, name, 0);
                 super::super::emit_resolved_method_call(ctx, get)?;
                 box_magic_result(ctx, &get.return_ty);
             }
@@ -473,7 +562,7 @@ fn emit_magic_property_arm(
     }
     match &arm.get {
         Some(get) => {
-            emit_magic_accessor_args(ctx, property);
+            emit_magic_accessor_args(ctx, name, 0);
             super::super::emit_resolved_method_call(ctx, get)?;
             box_magic_result(ctx, &get.return_ty);
         }
@@ -800,6 +889,118 @@ pub(super) fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>,
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
+}
+
+/// Where an eval-owned read finds its receiver: the integer result register, or a temporary stack
+/// slot `offset` bytes above the stack pointer.
+pub(super) enum ObjectSource {
+    ResultReg,
+    Stacked(usize),
+}
+
+/// Hands a `stdClass`-shaped receiver to Magician before its hash is read: an instance of an
+/// eval-declared class has that layout, and reading the hash skipped the class's visibility,
+/// `__get` and `__isset`. `__elephc_eval_dynamic_object_property_get` answers zero for an object
+/// eval does not own, and the code falls through to the plain hash read with the stack as it found
+/// it; one with the owned Mixed result, which is left in the result register at `got_label`; two
+/// with an owned Throwable, raised after this block, the receiver and the caller's
+/// `enclosing_stack_bytes` are released.
+///
+/// Emitted only when the module can run eval at all: an eval-free program links no Magician.
+pub(super) fn emit_eval_owned_property_read(
+    ctx: &mut FunctionContext<'_>,
+    object: ObjectSource,
+    name: &MagicName<'_>,
+    mode: PropertyFetchMode,
+    got_label: &str,
+    enclosing_stack_bytes: usize,
+) -> Result<()> {
+    if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
+        return Ok(());
+    }
+    let target = ctx.emitter.target;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let pushed = match object {
+        ObjectSource::ResultReg => {
+            abi::emit_push_reg(ctx.emitter, result_reg);
+            16
+        }
+        ObjectSource::Stacked(_) => 0,
+    };
+    let (arg0, arg1, arg2, arg3, arg4, arg5) = (
+        abi::int_arg_reg_name(target, 0),
+        abi::int_arg_reg_name(target, 1),
+        abi::int_arg_reg_name(target, 2),
+        abi::int_arg_reg_name(target, 3),
+        abi::int_arg_reg_name(target, 4),
+        abi::int_arg_reg_name(target, 5),
+    );
+    // The block, low to high: Throwable out, value out, fetch mode, padding.
+    let code = match mode {
+        PropertyFetchMode::Read => 0,
+        PropertyFetchMode::Probe => 1,
+        PropertyFetchMode::Isset => 2,
+        PropertyFetchMode::Empty => 3,
+    };
+    abi::emit_load_int_immediate(ctx.emitter, arg4, code);
+    abi::emit_load_int_immediate(ctx.emitter, arg5, 0);
+    abi::emit_push_reg_pair(ctx.emitter, arg4, arg5);
+    abi::emit_push_reg_pair(ctx.emitter, arg5, arg5);
+    match object {
+        ObjectSource::ResultReg => abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, 32),
+        ObjectSource::Stacked(offset) => abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, offset + 32),
+    }
+    match name {
+        MagicName::Const(property) => {
+            let (label, length) = ctx.data.add_string(property.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, arg1, &label);
+            abi::emit_load_int_immediate(ctx.emitter, arg2, length as i64);
+        }
+        MagicName::Stacked(offset) => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, offset + pushed + 32);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, offset + pushed + 40);
+        }
+    }
+    abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
+    // php decides visibility from the READING function's lexical class; a free function has none.
+    let scope = ctx.lexical_class().unwrap_or_default().to_owned();
+    let (scope_label, scope_len) = ctx.data.add_string(scope.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, arg4, &scope_label);
+    abi::emit_load_int_immediate(ctx.emitter, arg5, scope_len as i64);
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("__elephc_eval_dynamic_object_property_get"));
+    let plain = ctx.next_label("eval_prop_get_plain");
+    let raise = ctx.next_label("eval_prop_get_raise");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &plain);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, #2"));          // did Magician hand back a Throwable instead of a value?
+            ctx.emitter.instruction(&format!("b.eq {raise}"));                  // raise it after unwinding every temporary block
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, 2"));           // did Magician hand back a Throwable instead of a value?
+            ctx.emitter.instruction(&format!("je {raise}"));                    // raise it after unwinding every temporary block
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + pushed);
+    abi::emit_jump(ctx.emitter, got_label);
+
+    ctx.emitter.label(&raise);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match target.arch {
+        Arch::AArch64 => abi::emit_store_reg_to_symbol(ctx.emitter, "x1", "_exc_value", 0),
+        Arch::X86_64 => abi::emit_store_reg_to_symbol(ctx.emitter, "rdi", "_exc_value", 0),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + pushed + enclosing_stack_bytes);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+
+    ctx.emitter.label(&plain);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if pushed > 0 {
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+    }
+    Ok(())
 }
 
 /// Reads a static property name from an already-unboxed stdClass payload.

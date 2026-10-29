@@ -370,11 +370,12 @@ mod tokenizer;
 
 // --- Iterator-related errors ---
 
-/// Verifies the error diagnostic for foreach over object not implementing iterator.
+/// Verifies by-reference foreach over a plain (non-Traversable) object is refused: PHP walks its
+/// properties by value; writing them through the loop variable is not supported.
 #[test]
 fn test_error_foreach_over_object_not_implementing_iterator() {
     expect_error(
-        "<?php class Plain { public int $x = 1; } foreach (new Plain() as $v) { echo $v; }",
+        "<?php class Plain { public int $x = 1; } $p = new Plain(); foreach ($p as &$v) { echo $v; }",
         "foreach over object requires Plain to implement Iterator",
     );
 }

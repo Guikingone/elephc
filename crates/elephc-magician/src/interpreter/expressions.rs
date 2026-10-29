@@ -314,6 +314,17 @@ fn eval_expr_with_result_ownership(
                     Some(value) => value,
                     None => values.null()?,
                 }
+            } else if let EvalExpr::PropertyGet { object, property } = value.as_ref() {
+                // php reads `??`'s operand as a silent probe: a magic class is asked `__isset`
+                // before `__get`. The receiver is evaluated first, as an ordinary read.
+                with_owned_receiver(object, context, scope, values, |object, context, _scope, values| {
+                    with_property_probe(|| eval_property_get_with_result_ownership(object, property, context, values, true))
+                })?
+            } else if let EvalExpr::DynamicPropertyGet { object, property } = value.as_ref() {
+                with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+                    let property = eval_dynamic_member_name(property, context, scope, values)?;
+                    with_property_probe(|| eval_property_get_with_result_ownership(object, &property, context, values, true))
+                })?
             } else {
                 eval_expr_with_result_ownership(value, context, scope, values, own_result)?
             };

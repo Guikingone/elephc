@@ -448,6 +448,15 @@ fn lower_property_assign_value(
         Some(ty) => {
             let value =
                 ctx.retype_packed_address_for_pointer_sink(value, &ty, Some(span));
+            // A scalar of another scalar type converts as PHP's weak mode does, or raises its
+            // TypeError: the backend's typed-property guard does both for a boxed value.
+            let value = if declared_property_type(ctx, object.value, property)
+                && weak_scalar_conversion(&ctx.builder.value_php_type(value.value), &ty)
+            {
+                ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
+            } else {
+                value
+            };
             coerce_typed_assign_value(ctx, value, &ty, span)
         }
         None => value,
@@ -544,6 +553,18 @@ fn lower_property_assign_value(
     // object extracted from a boxed nullable static property. Its caller retires those leases
     // after this store returns. Releasing `object` here as well would free that narrowed object
     // twice and leave any freshly published property payload dangling.
+}
+
+/// Whether storing a `source` value in a property declared `target` needs PHP's weak scalar
+/// conversion (`"12"` into an `int`, `5` into a `string`), which the typed-property guard performs
+/// at run time on a boxed value. The int-to-float widening converts statically.
+pub(in crate::ir_lower) fn weak_scalar_conversion(source: &PhpType, target: &PhpType) -> bool {
+    let scalar = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool);
+    let (source, target) = (source.codegen_repr(), target.codegen_repr());
+    scalar(&source)
+        && scalar(&target)
+        && source != target
+        && !(source == PhpType::Int && target == PhpType::Float)
 }
 
 /// Returns whether this receiver can dispatch the write through an inherited abstract setter.

@@ -509,6 +509,15 @@ pub(crate) fn lower_get_object_vars(
     let value = expect_operand(inst, 0)?;
     let scope_class_id = lexical_object_vars_scope_class_id(ctx);
     emit_object_hash_projection(ctx, value, false, scope_class_id)?;
+    // A call lowering built itself has no checked type and is typed Mixed: box the hash then.
+    if let Some(result) = inst.result {
+        if ctx.raw_value_php_type(result)?.codegen_repr() == PhpType::Mixed {
+            crate::codegen::emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray { key: Box::new(PhpType::Str), value: Box::new(PhpType::Mixed) },
+            );
+        }
+    }
     store_if_result(ctx, inst)
 }
 

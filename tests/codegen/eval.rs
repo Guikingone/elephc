@@ -17515,6 +17515,52 @@ echo $box->events;');
     );
 }
 
+/// Compiled code reading an object of an eval-declared class goes through that class: an
+/// undeclared or inaccessible name calls `__get`, `isset()` asks `__isset`, `??` asks `__isset`
+/// before `__get`, and a literal-name write of an undeclared name raises the dynamic-property
+/// deprecation. Compiled reads answered from the object's hash alone (null, false) and the
+/// literal-name write skipped the deprecation.
+#[test]
+fn test_compiled_code_reaches_eval_class_magic_accessors() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class M { public $x = 5; private $h = 1; public function __get($n) { echo "get $n\n"; return "v$n"; } public function __isset($n) { echo "isset $n\n"; return $n === "a"; } }');
+$m = new M;
+$k = $argc > 9 ? "x" : "b";
+var_dump($m->x, $m->a, $m->h, $m->$k);
+var_dump(isset($m->a), isset($m->b), isset($m->x));
+var_dump($m->a ?? "d", $m->b ?? "d");
+$m->z = 3;
+var_dump($m->z);
+"#,
+    );
+    assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "get a\nget h\nget b\nint(5)\nstring(2) \"va\"\nstring(2) \"vh\"\nstring(2) \"vb\"\n\
+         isset a\nisset b\nbool(true)\nbool(false)\nbool(true)\n\
+         isset a\nget a\nisset b\nstring(2) \"va\"\nstring(1) \"d\"\nint(3)\n"
+    );
+    assert!(out.stderr.contains("Creation of dynamic property M::$z is deprecated"), "{}", out.stderr);
+}
+
+/// Eval `??` reads its property operand as php's silent probe: a magic class is asked `__isset`
+/// first and read through `__get` only when it says yes; it called `__get` straight away.
+#[test]
+fn test_eval_coalesce_asks_isset_before_get() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class M { public function __get($n) { echo "get $n\n"; return "v"; } public function __isset($n) { echo "isset $n\n"; return $n === "a"; } }');
+eval('$m = new M; $k = "b"; var_dump($m->a ?? "d"); var_dump($m->b ?? "d"); var_dump($m->$k ?? "d");');
+"#,
+    );
+    assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "isset a\nget a\nstring(1) \"v\"\nisset b\nstring(1) \"d\"\nisset b\nstring(1) \"d\"\n"
+    );
+}
+
 /// Verifies eval-declared interface property hook contracts validate class properties.
 #[test]
 fn test_eval_declared_interface_property_hook_contracts() {

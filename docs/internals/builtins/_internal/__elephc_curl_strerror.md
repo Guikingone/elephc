@@ -2,7 +2,7 @@
 title: "__elephc_curl_strerror() - internals"
 description: "Compiler internals for __elephc_curl_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1156
+  order: 1158
 ---
 
 ## `__elephc_curl_strerror()` - internals

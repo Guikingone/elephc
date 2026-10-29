@@ -1375,9 +1375,11 @@ impl Op {
             // late-static visibility fatal before exposing the writable symbol slot.
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
+            // A declared static slot runs the weak-mode type guard on a boxed value, which
+            // converts it (with a possible deprecation) or throws PHP's TypeError.
+            StoreStaticProperty => E::WRITES_GLOBAL | E::MAY_THROW | E::MAY_WARN,
             StoreGlobal
             | StoreStaticLocal
-            | StoreStaticProperty
             | StoreReflectionStaticProperty
             | InitStaticLocal
             | IncludeOnceMark

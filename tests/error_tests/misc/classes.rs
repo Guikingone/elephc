@@ -383,9 +383,11 @@ fn test_error_typed_property_rejects_invalid_default() {
 /// Verifies the error diagnostic for typed property rejects invalid assignment.
 #[test]
 fn test_error_typed_property_rejects_invalid_assignment() {
-    // assigning a string to an int-typed property is rejected at the assignment site.
+    // weak mode leaves an unconvertible string to PHP's run-time TypeError; strict_types refuses
+    // it at the assignment site.
+    expect_no_error("<?php class Box { public int $value; } $b = new Box(); $b->value = \"bad\";");
     expect_error(
-        "<?php class Box { public int $value; } $b = new Box(); $b->value = \"bad\";",
+        "<?php declare(strict_types=1); class Box { public int $value; } $b = new Box(); $b->value = \"bad\";",
         "Property Box::$value expects int, got string",
     );
 }
@@ -394,9 +396,11 @@ fn test_error_typed_property_rejects_invalid_assignment() {
 /// param.
 #[test]
 fn test_error_typed_property_rejects_constructor_assignment_from_untyped_param() {
-    // an untyped constructor parameter passed to a typed property must still satisfy the property type.
+    // an untyped constructor parameter passed to a typed property must still satisfy the property
+    // type: under strict_types there is no conversion to fall back on.
     expect_error(
         r#"<?php
+declare(strict_types=1);
 class Box {
     public int $value;
     public function __construct($value) {

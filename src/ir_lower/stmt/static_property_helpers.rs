@@ -84,6 +84,20 @@ pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
 }
 
 /// Resolves the declared PHP type of a static property for statement lowering.
+/// The type of a static property declared with one, `None` for an untyped (inferred) one.
+pub(crate) fn declared_static_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+) -> Option<PhpType> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let info = ctx.classes.get(class_name.as_str())?;
+    if !info.declared_static_properties.contains(property) {
+        return None;
+    }
+    static_property_type(ctx, receiver, property)
+}
+
 pub(super) fn static_property_type(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,

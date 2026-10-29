@@ -35,7 +35,20 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
-        let rt = self.infer_type(right, env)?;
+        // `$o instanceof B && $o->k()`: the right operand runs only where the left one held
+        // (and `||`'s only where it did not), so it sees the guard's narrowing, as a ternary does.
+        let rt = match op {
+            BinOp::And | BinOp::Or => match self.guard_narrowing(left, env)? {
+                Some(guard) => {
+                    let mut narrowed = env.clone();
+                    let ty = if matches!(op, BinOp::And) { guard.then_ty } else { guard.else_ty };
+                    narrowed.insert(guard.var, ty);
+                    self.infer_type(right, &narrowed)?
+                }
+                None => self.infer_type(right, env)?,
+            },
+            _ => self.infer_type(right, env)?,
+        };
         if let Some(plan) = crate::types::object_operators::binary_plan(op, &lt, &rt) {
             return Ok(plan.result_type(op));
         }

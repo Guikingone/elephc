@@ -87,6 +87,9 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
     }
 
     ctx.emitter.label(&miss_label);
+    // A name no slot answers goes to the runtime class's `__get` / `__isset`, as php does.
+    let magic_arms = super::mixed_property_reads::runtime_name_magic_arms(ctx, Some(&class_name), mode, &[])?;
+    super::mixed_property_reads::emit_runtime_name_magic_dispatch(ctx, inst, &magic_arms, &done_label)?;
     // A class with per-instance hash storage keeps undeclared names there, so the ladder's miss
     // arm has to probe it before answering null: `$o->{$name}` must see exactly what the clone
     // override applicator, or a literal-name write, stored under the same key.
