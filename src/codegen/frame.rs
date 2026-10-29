@@ -1237,6 +1237,25 @@ fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
+    // A request ends in php-src's order too (`emit_main_epilogue`): the sole-reference globals
+    // go first, then every remaining destructor runs, then RSHUTDOWN closes the request's
+    // resources. The handler's own variables are then released here, and the statics, globals
+    // and hosting tables by `__rt_web_reset` before the next request; its RSHUTDOWN call then
+    // finds this request already ended.
+    let (static_properties, hosting_tables) = super::runtime_metadata::static_properties_hosting_last(ctx.module);
+    let hosts_php_ext = !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module);
+    if module_orders_shutdown_like_php(ctx.module, hosts_php_ext) {
+        emit_main_sole_object_release(ctx);
+        abi::emit_call_label(ctx.emitter, "__rt_shutdown_destructors");
+        if hosts_php_ext {
+            let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
+            abi::emit_call_label(ctx.emitter, &symbol);
+        }
+        // php releases the static properties before the remaining globals. Each retired slot
+        // keeps the uninitialized sentinel, which `__rt_web_reset` skips, and the next request's
+        // handler re-runs the initializers.
+        emit_main_static_property_cleanup(ctx, static_properties);
+    }
     emit_main_local_epilogue_cleanup(ctx);
     // Per-request local teardown may run PHP destructors, so it belongs inside
     // the request's `{main}` frame just like process-exit teardown does.

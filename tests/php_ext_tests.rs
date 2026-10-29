@@ -1286,6 +1286,66 @@ fn web_requests_free_their_resources_and_leaked_objects() {
     );
 }
 
+/// Each `--web` request ends in php-src's order, as a program's end does: the sole-reference
+/// globals first, every remaining destructor, RSHUTDOWN with the resources closing, then the
+/// static properties and the shared globals, every request alike.
+#[test]
+fn web_requests_end_in_php_destructor_order() {
+    use std::os::unix::process::CommandExt;
+    let dir = project("web-shutdown-order");
+    let main = dir.join("main.php");
+    fs::write(
+        &main,
+        r#"<?php
+class D { public function __construct(public string $n) {} public function __destruct() { fwrite(STDERR, "elephc_demo: DESTRUCT {$this->n}\n"); } }
+class Keep { public static $c; public static $d; }
+$solo = new D("solo-global");
+$x = new D("shared-global"); $y = $x;
+Keep::$d = new D("static");
+$c1 = new DemoCounter(1);
+$c2 = new DemoCounter(2); $c2b = $c2;
+Keep::$c = new DemoCounter(3);
+demo_open_handle('h');
+echo "end";
+"#,
+    )
+    .unwrap();
+    let compile = Command::new(elephc()).current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
+    assert_success(&compile, "compile --web");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let address = format!("127.0.0.1:{port}");
+    let stderr = fs::File::create(dir.join("server.err")).unwrap();
+    let server = ServerGroup(
+        Command::new(dir.join("main"))
+            .args(["--listen", &address, "--workers", "1"])
+            .env("ELEPHC_DEMO_TRACE", "1")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .expect("spawn the web server"),
+    );
+    server.wait_until_listening(&address);
+    // A request's last phases run when the next one starts, so a third request completes the second.
+    let bodies: Vec<String> = (0..3).map(|_| http_body(&address).trim().to_string()).collect();
+    drop(server);
+    let output = fs::read_to_string(dir.join("server.err")).unwrap();
+    let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(bodies, ["end", "end", "end"], "{output}");
+    let request = [
+        "FREE counter 1", "DESTRUCT solo-global", "DESTRUCT shared-global", "DESTRUCT static",
+        "RSHUTDOWN Hello", "CLOSE h alive=1", "FREE counter 3", "FREE counter 2", "POST_DEACTIVATE Hello",
+    ];
+    let expected = std::iter::once("RINIT")
+        .chain(request)
+        .chain(std::iter::once("RINIT"))
+        .chain(request)
+        .collect::<Vec<_>>();
+    assert_eq!(&traced[..expected.len()], expected.as_slice(), "{output}");
+}
+
 /// A `--web` worker serves one request after another in one process, but an extension's request
 /// state belongs to a single request: the next request runs RSHUTDOWN and RINIT first, so what
 /// `demo_keep()` stored (destroyed by the demo's RSHUTDOWN, rebuilt empty by its RINIT) does not

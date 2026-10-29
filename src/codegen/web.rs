@@ -83,6 +83,10 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // reset is the final backstop for non-Throwable request escapes, before the retired request
     // stack can be reused and before any reset destructor performs another property write.
     abi::emit_store_zero_to_symbol(emitter, "_magic_set_guard_head", 0);
+    // The previous request's handler epilogue ran its live objects' destructors
+    // (`__rt_shutdown_destructors`), which marks the walk done: a later request's exit() must
+    // run its own objects' destructors again.
+    abi::emit_store_zero_to_symbol(emitter, "_exit_destructors_ran", 0);
     abi::emit_store_zero_to_symbol(emitter, "_fiber_main_saved_magic_set_guard", 0);
     // The remaining transient owners point into the request heap. Clear them before the static
     // and global cleanup below can run user destructors: a destructor that echoes, throws, or
@@ -395,6 +399,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
 /// lives outside `_heap_buf` and is unaffected.
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
+    emit_object_handle_reset(emitter);
     crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
@@ -407,6 +412,42 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
     // `memory_get_peak_usage()` is per request in PHP, so its watermark starts over with the arena.
     abi::emit_store_zero_to_symbol(emitter, "_gc_peak", 0);
+}
+
+/// Starts the next request with a fresh object store, as php-src's `init_executor` does: every
+/// handle-table entry the previous arena used is cleared (an object a cycle leaked would
+/// otherwise leave its handle on a granule the next request reuses for something else, and the
+/// shutdown destructor walk would take that block for a live object), and handles are minted
+/// from 1 again, so `spl_object_id()` and the destructor order restart per request.
+/// Must run while `_heap_off` still holds the previous arena's extent.
+fn emit_object_handle_reset(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        abi::emit_load_symbol_to_reg(emitter, "rcx", "_heap_off", 0);
+        emitter.instruction("add rcx, 15");                                     // round the used heap extent up to whole granules
+        emitter.instruction("shr rcx, 4");                                      // the number of handle-table entries it covers
+        abi::emit_symbol_address(emitter, "r8", "_obj_handle_index");
+        emitter.label("__rt_web_reset_handle_loop");
+        emitter.instruction("test rcx, rcx");                                   // have all used entries been cleared?
+        emitter.instruction("jz __rt_web_reset_handle_done");                   // finish once the table is clean
+        emitter.instruction("sub rcx, 1");                                      // move to the next used entry from the end
+        emitter.instruction("mov DWORD PTR [r8 + rcx * 4], 0");                 // no live object in this granule any more
+        emitter.instruction("jmp __rt_web_reset_handle_loop");                  // clear the remaining used entries
+    } else {
+        abi::emit_load_symbol_to_reg(emitter, "x9", "_heap_off", 0);
+        emitter.instruction("add x9, x9, #15");                                 // round the used heap extent up to whole granules
+        emitter.instruction("lsr x9, x9, #4");                                  // the number of handle-table entries it covers
+        abi::emit_symbol_address(emitter, "x10", "_obj_handle_index");
+        emitter.label("__rt_web_reset_handle_loop");
+        emitter.instruction("cbz x9, __rt_web_reset_handle_done");              // finish once the table is clean
+        emitter.instruction("sub x9, x9, #1");                                  // move to the next used entry from the end
+        emitter.instruction("str wzr, [x10, x9, lsl #2]");                      // no live object in this granule any more
+        emitter.instruction("b __rt_web_reset_handle_loop");                    // clear the remaining used entries
+    }
+    emitter.label("__rt_web_reset_handle_done");
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_int_immediate(emitter, result, 1);
+    abi::emit_store_reg_to_symbol(emitter, result, "_obj_handle_next", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_obj_handle_free_top", 0);
 }
 
 #[cfg(test)]
