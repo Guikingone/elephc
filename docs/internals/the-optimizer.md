@@ -763,6 +763,11 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
+`src/ir_passes/base64_decode_len_sink.rs` folds `strlen(base64_decode(...))` into
+`Base64DecodedLen`. The helper counts accepted sextets, ignores whitespace and lax
+invalid bytes, and reproduces strict-mode padding rejection; a rejected decode answers
+zero like `strlen(false)`. The encoded-string lifetime pin and hidden slot are retired.
+
 `src/ir_passes/str_split_count_sink.rs` folds `count(str_split(...))` into the
 allocation-free `StrSplitCount` helper when the temporary array is observed only by
 `count()` and release scaffolding. The helper keeps the same source/chunk operands

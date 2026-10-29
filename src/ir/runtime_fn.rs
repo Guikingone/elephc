@@ -507,6 +507,8 @@ pub enum RuntimeFnId {
     SplObjectHash,
     SplObjectId,
     Base64Decode,
+    /// Allocation-free `strlen(base64_decode(...))` length computation.
+    Base64DecodedLen,
     Chop,
     Chr,
     ChunkSplit,
@@ -929,6 +931,7 @@ impl RuntimeFnId {
             RuntimeFnId::ChunkSplitLen => Some((3, Some(3))),
             RuntimeFnId::Bin2HexLen => Some((1, Some(1))),
             RuntimeFnId::StrSplitCount => Some((1, Some(2))),
+            RuntimeFnId::Base64DecodedLen => Some((1, Some(2))),
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
@@ -1806,6 +1809,8 @@ impl RuntimeFnId {
             RuntimeFnId::Bin2HexLen => E::from_bits_retain(E::MAY_FATAL.bits()),
             // The count-only split keeps str_split()'s length validation and coercion.
             RuntimeFnId::StrSplitCount => RuntimeFnId::StrSplit.effects(),
+            // The length-only decoder keeps base64_decode()'s strict rejection semantics.
+            RuntimeFnId::Base64DecodedLen => RuntimeFnId::Base64Decode.effects(),
             // A negative integer sum has a NAN square root and PHP's cast warning.
             RuntimeFnId::SqrtAddInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The raw encoder keeps the JSON error state and encoder side effects.
@@ -2545,6 +2550,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ChunkSplitLen
                 | RuntimeFnId::Bin2HexLen
                 | RuntimeFnId::StrSplitCount
+                | RuntimeFnId::Base64DecodedLen
                 | RuntimeFnId::SqrtAddInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
@@ -3589,6 +3595,7 @@ impl RuntimeFnId {
             RuntimeFnId::ChunkSplitLen => "chunk_split_len",
             RuntimeFnId::Bin2HexLen => "bin2hex_len",
             RuntimeFnId::StrSplitCount => "str_split_count",
+            RuntimeFnId::Base64DecodedLen => "base64_decoded_len",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",

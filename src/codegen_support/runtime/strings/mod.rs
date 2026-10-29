@@ -95,6 +95,7 @@ mod urldecode;
 mod rawurlencode;
 mod base64_encode;
 mod base64_decode;
+mod base64_decode_len;
 mod sprintf;
 mod sprintf_mixed_cast;
 mod sprintf_pack_mixed;
@@ -285,6 +286,7 @@ pub use rawurlencode::emit_rawurlencode;
 pub use base64_encode::emit_base64_encode;
 /// Emit Base64 encoding helper.
 pub use base64_decode::emit_base64_decode;
+pub use base64_decode_len::emit_base64_decoded_len;
 /// Emit Base64 decoding helper.
 /// Re-export the php-src reverse-table sentinels so `runtime::data::fixed` builds
 /// `_b64_decode_tbl` from the exact classification `__rt_base64_decode` reads back.

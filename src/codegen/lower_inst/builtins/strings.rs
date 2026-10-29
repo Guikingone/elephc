@@ -359,6 +359,34 @@ pub(crate) fn lower_base64_decode(ctx: &mut FunctionContext<'_>, inst: &Instruct
     store_if_result(ctx, inst)
 }
 
+/// Lowers the allocation-free `strlen(base64_decode(...))` helper.
+pub(crate) fn lower_base64_decoded_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "base64_decode expected 1 or 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    materialize_truthy_flag(ctx, inst, 1, "base64_decode")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "base64_decode", "x1", "x2")?;
+            abi::emit_pop_reg(ctx.emitter, "x3");                               // reload the parked $strict flag
+            abi::emit_call_label(ctx.emitter, "__rt_base64_decoded_len");
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "base64_decode", "rax", "rdx")?;
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // reload the parked $strict flag
+            abi::emit_call_label(ctx.emitter, "__rt_base64_decoded_len");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ucwords(string, separators?)` with an explicit separator byte set.
 ///
 /// `__rt_ucwords` always scans a caller-supplied set, so an omitted `$separators` is

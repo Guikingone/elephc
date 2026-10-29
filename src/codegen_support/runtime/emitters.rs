@@ -151,6 +151,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
+    strings::emit_base64_decoded_len(emitter);
     strings::emit_sprintf(emitter);
     strings::emit_sprintf_pack_mixed(emitter);
     strings::emit_sprintf_mixed_casts(emitter, features.eval_bridge);

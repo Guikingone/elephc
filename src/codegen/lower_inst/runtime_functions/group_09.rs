@@ -38,6 +38,9 @@ pub(super) fn lower(
         RuntimeFnId::Base64Decode => Some({
             crate::codegen::lower_inst::builtins::strings::lower_base64_decode(ctx, inst)
         }),
+        RuntimeFnId::Base64DecodedLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base64_decoded_len(ctx, inst)
+        }),
         RuntimeFnId::Chop => Some({
             crate::codegen::lower_inst::builtins::strings::lower_trim_like(
                     ctx,

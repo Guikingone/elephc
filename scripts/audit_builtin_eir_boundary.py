@@ -58,6 +58,7 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "ChunkSplitLen",
     "Bin2HexLen",
     "StrSplitCount",
+    "Base64DecodedLen",
     "StriposInt",
     "StrrposInt",
     "StrriposInt",

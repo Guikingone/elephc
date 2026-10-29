@@ -28,6 +28,7 @@ mod json_encode_len_sink;
 mod sqrt_add_int_sink;
 mod strpos_int_sink;
 mod str_split_count_sink;
+mod base64_decode_len_sink;
 mod strstr_len_sink;
 mod array_sum_loop;
 mod boxed_narrowing;

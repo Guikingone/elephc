@@ -19,6 +19,8 @@ mod sqrt_add_int_sink;
 mod strpos_int_sink;
 #[path = "optimizer/strstr_len_sink.rs"]
 mod strstr_len_sink;
+#[path = "optimizer/base64_decode_len_sink.rs"]
+mod base64_decode_len_sink;
 #[path = "optimizer/string_len_sink.rs"]
 mod string_len_sink;
 #[path = "optimizer/str_split_count_sink.rs"]
