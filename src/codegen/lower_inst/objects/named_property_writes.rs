@@ -46,6 +46,33 @@ pub(super) fn lower_mixed_prop_set(
     property: &str,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let done = ctx.next_label("mixed_prop_set_done");
+    if crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
+        // An instance of an eval-declared class has stdClass's layout: Magician stores into it,
+        // through its visibility, `__set` and the dynamic-property deprecation, as the
+        // runtime-name ladder's stdClass arm already does.
+        let plain = ctx.next_label("mixed_prop_set_plain");
+        let shaped = ctx.next_label("mixed_prop_set_stdclass");
+        ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        super::runtime_property_writes::emit_branch_if_mixed_unboxed_not_object(ctx, &plain);
+        super::runtime_property_writes::push_mixed_unboxed_object_payload(ctx);
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        let (name_label, name_len) = ctx.data.add_string(property.as_bytes());
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &name_label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, name_len as i64);
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        super::runtime_property_writes::emit_branch_if_stacked_object_is_stdclass(ctx, 16, &shaped);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &plain);
+        ctx.emitter.label(&shaped);
+        super::runtime_property_writes::emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
+            ctx, value, &value_ty, 16, 0, 32,
+        )?;
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&plain);
+    }
     materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let (label, len) = ctx.data.add_string(property.as_bytes());
@@ -64,6 +91,7 @@ pub(super) fn lower_mixed_prop_set(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_property_set");
+    ctx.emitter.label(&done);
     Ok(())
 }
 

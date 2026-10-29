@@ -1553,6 +1553,17 @@ pub(super) fn emit_runtime_stdclass_get_for_stacked_name(
     object_stack_offset: usize,
     name_stack_offset: usize,
 ) -> Result<()> {
+    // An eval-declared receiver has this layout too: Magician answers it, through its visibility
+    // and magic accessors, before the hash is read. The caller holds a 32-byte block.
+    let got = ctx.next_label("stdclass_get_got");
+    super::mixed_property_reads::emit_eval_owned_property_read(
+        ctx,
+        super::mixed_property_reads::ObjectSource::Stacked(object_stack_offset),
+        &super::mixed_property_reads::MagicName::Stacked(name_stack_offset),
+        property_fetch_mode(inst),
+        &got,
+        32,
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", object_stack_offset);
@@ -1566,6 +1577,7 @@ pub(super) fn emit_runtime_stdclass_get_for_stacked_name(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+    ctx.emitter.label(&got);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
 }
 
@@ -1580,7 +1592,7 @@ pub(super) fn emit_runtime_stdclass_get_for_stacked_name(
 /// `enclosing_stack_bytes` — has been released, which is what the unwinder expects.
 ///
 /// Emitted only when the module can run eval at all: an eval-free program links no Magician.
-fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
+pub(super) fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     value_ty: &PhpType,

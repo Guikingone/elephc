@@ -349,6 +349,98 @@ unsafe fn dynamic_object_property_set_inner(
     written.map(|()| 1)
 }
 
+/// Reads a property of an eval-owned object for compiled code, which answers it from the object's
+/// hash otherwise and so skipped the eval class's visibility, `__get` and `__isset`. Returns zero
+/// for an object eval does not own (the caller reads its hash as before), one with the value, or
+/// two with an owned Throwable.
+///
+/// `block` is one writable four-word stack block: word 0 receives an owned Throwable on status
+/// two, word 1 the owned boxed value on status one (both are cleared first), and word 2 holds the
+/// compiled fetch mode (0 read, 1 `??` probe, 2 `isset()`, 3 `empty()`). The scope names the
+/// reading function's lexical class, as for the write.
+///
+/// # Safety
+/// `object` must be null or a live elephc runtime object pointer that stays borrowed for the
+/// call. `name_ptr` must be readable for `name_len` bytes and `scope_ptr` for `scope_len` bytes.
+/// `block` must point at four writable native words as described above.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_object_property_get(
+    object: *mut RuntimeCell,
+    name_ptr: *const u8,
+    name_len: u64,
+    block: *mut *mut RuntimeCell,
+    scope_ptr: *const u8,
+    scope_len: u64,
+) -> u64 {
+    let read = std::panic::catch_unwind(|| unsafe {
+        dynamic_object_property_get_inner(object, name_ptr, name_len, block, scope_ptr, scope_len)
+    });
+    match read {
+        Ok(Ok(status)) => status,
+        Ok(Err(_)) | Err(_) => {
+            let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+            let _ = values.fatal("Fatal error: eval() property read failed\n");
+            std::process::abort()
+        }
+    }
+}
+
+/// Executes the property read after the exported ABI shim has installed a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_dynamic_object_property_get`.
+#[cfg(not(test))]
+unsafe fn dynamic_object_property_get_inner(
+    object: *mut RuntimeCell,
+    name_ptr: *const u8,
+    name_len: u64,
+    block: *mut *mut RuntimeCell,
+    scope_ptr: *const u8,
+    scope_len: u64,
+) -> Result<u64, EvalStatus> {
+    if block.is_null() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mode = unsafe { *block.add(2) } as u64;
+    unsafe {
+        *block = std::ptr::null_mut();
+        *block.add(1) = std::ptr::null_mut();
+    }
+    if object.is_null() {
+        return Ok(0);
+    }
+    let identity = object as u64;
+    let Some(context) = dynamic_object_owner_context(identity) else {
+        return Ok(0);
+    };
+    let Some(context) = (unsafe { context.as_mut() }) else {
+        return Ok(0);
+    };
+    if context.abi_version() != ABI_VERSION || context.dynamic_object_class(identity).is_none() {
+        return Ok(0);
+    }
+    let name = crate::ffi::util::abi_name_to_string(name_ptr, name_len)?;
+    let scope = crate::ffi::util::abi_name_to_string(scope_ptr, scope_len)?;
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let object_cell = ElephcRuntimeOps::object_from_raw(object)?;
+    let previous_throw = context.take_pending_throw();
+    context.push_class_scope(scope);
+    let read = crate::interpreter::eval_property_fetch_for_ffi(object_cell, &name, mode, context, &mut values)
+        .and_then(|value| values.retain(value));
+    context.pop_class_scope();
+    let escaped = take_escaping_throwable(&read, context, &mut values);
+    let escaped =
+        finish_bridge_ownership(escaped, previous_throw, object_cell, context, &mut values)?;
+    if let Some(thrown) = escaped {
+        unsafe { *block = thrown.as_ptr(); }
+        return Ok(2);
+    }
+    let value = read?;
+    unsafe { *block.add(1) = value.as_ptr(); }
+    Ok(1)
+}
+
 /// Clones an eval-owned object, returning zero for a miss, one for success, or two with an owned Throwable.
 ///
 /// The generated `clone` lowering calls this before its own shallow-clone adapter. A zero

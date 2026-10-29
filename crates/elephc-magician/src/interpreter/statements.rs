@@ -63,6 +63,9 @@ pub(crate) use class_resolution::eval_object_clone_with_properties_result as eva
 // Same rule for the property setter the generated stdClass write arm hands eval-declared receivers.
 #[cfg(not(test))]
 pub(crate) use instance_property_access::eval_property_set_result as eval_property_set_for_ffi;
+// And for the property getter the generated stdClass read arm hands them.
+#[cfg(not(test))]
+pub(crate) use instance_property_access::eval_property_fetch_result as eval_property_fetch_for_ffi;
 use attributes_magic_validation::*;
 use core_attributes::*;
 pub(in crate::interpreter) use callable_objects::*;

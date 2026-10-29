@@ -62,7 +62,10 @@ pub(super) fn lower_mixed_prop_get(
     // A class answering undeclared names from `__get` needs an arm as well: the runtime helper
     // knows stdClass alone, so without one the read warned `Undefined property` instead.
     let has_magic_arms = !mixed_magic_get_arms(ctx, property, mode, &[])?.is_empty();
-    if !candidates.is_empty() || has_hash_arms || has_magic_arms {
+    // An instance of an eval-declared class has stdClass's layout, and only the ladder's stdClass
+    // arm hands it to Magician first (`emit_eval_owned_property_read`).
+    let eval_objects = crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module);
+    if !candidates.is_empty() || has_hash_arms || has_magic_arms || eval_objects {
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
     }
     lower_runtime_mixed_prop_get(ctx, inst, object, property)
@@ -223,6 +226,7 @@ pub(super) fn lower_declared_mixed_prop_get(
     }
 
     ctx.emitter.label(&stdclass_label);
+    emit_eval_owned_property_read(ctx, ObjectSource::ResultReg, &MagicName::Const(property), mode, &done_label, 0)?;
     emit_stdclass_get_from_loaded_object(ctx, property);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -842,6 +846,118 @@ pub(super) fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>,
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
+}
+
+/// Where an eval-owned read finds its receiver: the integer result register, or a temporary stack
+/// slot `offset` bytes above the stack pointer.
+pub(super) enum ObjectSource {
+    ResultReg,
+    Stacked(usize),
+}
+
+/// Hands a `stdClass`-shaped receiver to Magician before its hash is read: an instance of an
+/// eval-declared class has that layout, and reading the hash skipped the class's visibility,
+/// `__get` and `__isset`. `__elephc_eval_dynamic_object_property_get` answers zero for an object
+/// eval does not own, and the code falls through to the plain hash read with the stack as it found
+/// it; one with the owned Mixed result, which is left in the result register at `got_label`; two
+/// with an owned Throwable, raised after this block, the receiver and the caller's
+/// `enclosing_stack_bytes` are released.
+///
+/// Emitted only when the module can run eval at all: an eval-free program links no Magician.
+pub(super) fn emit_eval_owned_property_read(
+    ctx: &mut FunctionContext<'_>,
+    object: ObjectSource,
+    name: &MagicName<'_>,
+    mode: PropertyFetchMode,
+    got_label: &str,
+    enclosing_stack_bytes: usize,
+) -> Result<()> {
+    if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
+        return Ok(());
+    }
+    let target = ctx.emitter.target;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let pushed = match object {
+        ObjectSource::ResultReg => {
+            abi::emit_push_reg(ctx.emitter, result_reg);
+            16
+        }
+        ObjectSource::Stacked(_) => 0,
+    };
+    let (arg0, arg1, arg2, arg3, arg4, arg5) = (
+        abi::int_arg_reg_name(target, 0),
+        abi::int_arg_reg_name(target, 1),
+        abi::int_arg_reg_name(target, 2),
+        abi::int_arg_reg_name(target, 3),
+        abi::int_arg_reg_name(target, 4),
+        abi::int_arg_reg_name(target, 5),
+    );
+    // The block, low to high: Throwable out, value out, fetch mode, padding.
+    let code = match mode {
+        PropertyFetchMode::Read => 0,
+        PropertyFetchMode::Probe => 1,
+        PropertyFetchMode::Isset => 2,
+        PropertyFetchMode::Empty => 3,
+    };
+    abi::emit_load_int_immediate(ctx.emitter, arg4, code);
+    abi::emit_load_int_immediate(ctx.emitter, arg5, 0);
+    abi::emit_push_reg_pair(ctx.emitter, arg4, arg5);
+    abi::emit_push_reg_pair(ctx.emitter, arg5, arg5);
+    match object {
+        ObjectSource::ResultReg => abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, 32),
+        ObjectSource::Stacked(offset) => abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, offset + 32),
+    }
+    match name {
+        MagicName::Const(property) => {
+            let (label, length) = ctx.data.add_string(property.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, arg1, &label);
+            abi::emit_load_int_immediate(ctx.emitter, arg2, length as i64);
+        }
+        MagicName::Stacked(offset) => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, offset + pushed + 32);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, arg2, offset + pushed + 40);
+        }
+    }
+    abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
+    // php decides visibility from the READING function's lexical class; a free function has none.
+    let scope = ctx.lexical_class().unwrap_or_default().to_owned();
+    let (scope_label, scope_len) = ctx.data.add_string(scope.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, arg4, &scope_label);
+    abi::emit_load_int_immediate(ctx.emitter, arg5, scope_len as i64);
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("__elephc_eval_dynamic_object_property_get"));
+    let plain = ctx.next_label("eval_prop_get_plain");
+    let raise = ctx.next_label("eval_prop_get_raise");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &plain);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, #2"));          // did Magician hand back a Throwable instead of a value?
+            ctx.emitter.instruction(&format!("b.eq {raise}"));                  // raise it after unwinding every temporary block
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, 2"));           // did Magician hand back a Throwable instead of a value?
+            ctx.emitter.instruction(&format!("je {raise}"));                    // raise it after unwinding every temporary block
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + pushed);
+    abi::emit_jump(ctx.emitter, got_label);
+
+    ctx.emitter.label(&raise);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match target.arch {
+        Arch::AArch64 => abi::emit_store_reg_to_symbol(ctx.emitter, "x1", "_exc_value", 0),
+        Arch::X86_64 => abi::emit_store_reg_to_symbol(ctx.emitter, "rdi", "_exc_value", 0),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 32 + pushed + enclosing_stack_bytes);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+
+    ctx.emitter.label(&plain);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if pushed > 0 {
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+    }
+    Ok(())
 }
 
 /// Reads a static property name from an already-unboxed stdClass payload.

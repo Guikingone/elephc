@@ -45,6 +45,31 @@ fn eval_magic_property_read(
     eval_magic_property_get(object, object_class_name, property_name, context, values)
 }
 
+/// Fetches a property of an eval-owned object for compiled code, in the compiled fetch's mode:
+/// 0 an ordinary read, 1 the silent probe `??` makes, 2 the probe `isset()` makes (`true` or
+/// null), 3 the probe `empty()` makes (null when not set, else the value).
+pub(crate) fn eval_property_fetch_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    mode: u64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match mode {
+        1 => with_property_probe(|| eval_property_get_result(object, property_name, context, values)),
+        2 | 3 => {
+            if !eval_property_isset_result(object, property_name, context, values)? {
+                return values.null();
+            }
+            if mode == 2 {
+                return values.bool_value(true);
+            }
+            eval_property_get_result(object, property_name, context, values)
+        }
+        _ => eval_property_get_result(object, property_name, context, values),
+    }
+}
+
 /// Reads one object property while enforcing eval-declared member visibility.
 pub(in crate::interpreter) fn eval_property_get_result(
     object: RuntimeCellHandle,
