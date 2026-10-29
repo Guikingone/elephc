@@ -763,6 +763,12 @@ frees (a scratch-backed result is a no-op). A JSON error without
 `(string) false`, so the observed length stays zero. Any other observer keeps the
 boxed call.
 
+`src/ir_passes/str_split_count_sink.rs` folds `count(str_split(...))` into the
+allocation-free `StrSplitCount` helper when the temporary array is observed only by
+`count()` and release scaffolding. The helper keeps the same source/chunk operands
+and `$length >= 1` guard, and returns `ceil(len / chunk_len)` (zero for an empty
+source). The source lifetime pin and hidden array slot are retired.
+
 `src/ir_passes/string_len_sink.rs` removes a hash/encoding/case conversion whose
 bytes are never observed. When a one-argument `md5()`, `base64_encode()`,
 `strtolower()` or `strtoupper()` call receives an already-materialized PHP string
@@ -775,7 +781,10 @@ the subject's `str_len` replaces the transform and the transform's argument pin
 and hidden slot are retired. `chunk_split()` uses `ChunkSplitLen`, which computes
 `subject_len + max(1, ceil(subject_len / chunk_len)) * separator_len` and reports
 the same allocation-overflow fatal as the allocating helper. `bin2hex()` folds to
-`Bin2HexLen`, which returns `2 * subject_len` with the same overflow guard. The operand
+`Bin2HexLen`, which returns `2 * subject_len` with the same overflow guard.
+`count(str_split(...))` uses `StrSplitCount`, which returns
+`ceil(subject_len / chunk_len)` without allocating the chunk array. The source
+lifetime pin and hidden slot are retired for both sinks. The operand
 evaluation and its side effects remain; the binary `md5(..., true)` form,
 non-string operands, the replacement-pair `strtr()` form and any other observer
 keep the real call.

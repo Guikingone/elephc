@@ -384,6 +384,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_strstr_len` | Allocation-free `strlen(strstr(...))`: runs the `strpos` search and returns the prefix/suffix length, or zero for `strlen(false)` | `x1`/`x2` + `x3`/`x4` + before flag | `x0` |
 | `__rt_chunk_split_len` | Allocation-free `strlen(chunk_split(...))`: computes the exact split length and reproduces the allocation-overflow fatal | subject + chunk length + separator | `x0` |
 | `__rt_bin2hex_len` | Allocation-free `strlen(bin2hex(...))`: returns `2 * source length` with the allocation-overflow fatal | source string | `x0` |
+| `__rt_str_split_count` | Allocation-free `count(str_split(...))`: returns `ceil(source length / chunk length)`, or zero for an empty source | source + chunk length | `x0` |
 | `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
@@ -425,7 +426,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_substr_replace` | Replace substring at offset | str + replacement + start + len | `x1`/`x2` |
 | `__rt_str_offset_set` | String offset write `$s[$i] = $v` (one byte, space padding, PHP warnings/`Error`) | str in `x1`/`x2` + offset in `x0` + value in `x3`/`x4` | `x1`/`x2` |
 | `__rt_str_pad` | Pad string to length | str + len + pad_str + type | `x1`/`x2` |
-| `__rt_str_split` | Split into chunks | str + chunk_len | `x0` (array ptr) |
+| `__rt_str_split` | Split into chunks; `__rt_str_split_count` gives the allocation-free chunk count | str + chunk_len | `x0` (array ptr / count) |
 | `__rt_wordwrap` | Wrap text at word boundaries | str + width + break + cut | `x1`/`x2` |
 | `__rt_number_format` | Format number with separators | float + decimals + sep | `x1`/`x2` |
 | `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
