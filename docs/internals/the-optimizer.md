@@ -779,6 +779,22 @@ evaluation and its side effects remain; the binary `md5(..., true)` form,
 non-string operands, the replacement-pair `strtr()` form and any other observer
 keep the real call.
 
+## Performance regression guards
+
+The optimized string paths are pinned by deterministic IR assertions rather than
+wall-clock thresholds: `tests/codegen/optimizer/strpos_int_sink.rs` checks the raw
+integer variants for all four searches, `strstr_len_sink.rs` checks the length helper
+and the absence of the haystack owner pin, and `string_len_sink.rs` checks the
+length-only folds for `strtr`, `chunk_split`, the case transforms and `ucwords`.
+These tests run in the normal suite, so a lost sink or a reintroduced boxing
+temporary fails CI even when functional output stays correct.
+
+`tests/codegen/perf_regressions.rs` adds opt-in wall-clock ceilings for the same
+paths. It is ignored by default because runner speed varies; run it explicitly with
+`cargo test --test codegen_tests perf_regressions -- --ignored` (use a release
+build locally for the closest numbers). The ceilings are deliberately loose and
+catch order-of-magnitude regressions rather than small timing noise.
+
 ## EIR buffer resolution hoisting
 
 `src/ir_passes/buffer_access.rs` runs once after the module fixed point (and
