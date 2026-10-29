@@ -244,3 +244,43 @@ echo strlen(base64_encode("abc")), "\n";
         out.stderr
     );
 }
+
+/// Ports php-src search/translate/split/case edge cases for the String batch.
+///
+/// Covers `stripos_basic1`/`stripos_variation*` first and repeated matches, `strrpos_*`
+/// last-match/empty/negative cases, `strstr.phpt` hit/prefix/miss, `strtr_basic` plus the
+/// replacement-pair form, `chunk_split_*` defaults/empty/invalid length, and the
+/// `ucwords`/`ucfirst`/`lcfirst` non-ASCII and default-separator variants.
+#[test]
+fn php_src_string_search_translate_split_case_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo stripos("Hello World", "WORLD"), '|';
+echo stripos("ABCabc", "abc"), '|';
+echo strrpos("aAaA", "aA"), '|';
+echo strrpos("abc", ""), '|';
+echo strstr("hello", "ll"), '|';
+echo strstr("hello", "ll", true), '|';
+var_export(strstr("hello", "zz")); echo '|';
+echo strtr("hi all", "hi", "ib"), '|';
+echo strtr("abc", ["a" => "1", "b" => "2"]), '|';
+echo json_encode(chunk_split("abcdef", 2, "-")), '|';
+echo json_encode(chunk_split("", 3, "-")), '|';
+echo json_encode(ucwords("foo\tbar\rbaz\fbat\vqux")), '|';
+echo ucfirst("élan"), '|';
+echo lcfirst("Élan"), '|';
+try { chunk_split("abc", 0); } catch (ValueError $e) { echo 'VE'; }
+echo "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "6|0|2|3|llo|he|false|ib all|12c|\"ab-cd-ef-\"|\"-\"|\"Foo\\tBar\\rBaz\\fBat\\u000bQux\"|élan|Élan|VE\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
