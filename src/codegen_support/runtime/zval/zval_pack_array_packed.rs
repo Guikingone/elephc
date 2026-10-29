@@ -208,7 +208,7 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #32]");                                   // store nInternalPointer at offset 32 (32-bit)
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the length for nNextFreeElement
     emitter.instruction("cbnz x9, __rt_zval_pack_array_packed_next_ready");     // nonempty packed arrays append after their final integer key
-    emitter.instruction("movz x9, #0x8000, lsl #48");                          // an empty table has no integer key yet: ZEND_LONG_MIN
+    emitter.instruction("movz x9, #0x8000, lsl #48");                           // an empty table has no integer key yet: ZEND_LONG_MIN
     emitter.label("__rt_zval_pack_array_packed_next_ready");
     emitter.instruction("str x9, [x0, #40]");                                   // store nNextFreeElement at offset 40 (64-bit)
     emitter.instruction("str xzr, [x0, #48]");                                  // store pDestructor = NULL at offset 48

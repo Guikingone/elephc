@@ -999,6 +999,33 @@ function php_unrelated_pending_return_inner(array $value): int {
         echo 'after|';
     }
 }
+#[Export] function php_chained_replacement_catch(array $value): void {
+    try {
+        try { echo $value['h1']; }
+        finally {
+            try {
+                try { echo $value['h2']; }
+                finally { throw new RuntimeException('X'); }
+            } finally { throw new RuntimeException('Y'); }
+        }
+    } catch (RuntimeException $error) {}
+    throw new TypeError('Z');
+}
+function php_chained_replacement_return_inner(array $value): int {
+    try {
+        try { echo $value['h1']; }
+        finally {
+            try {
+                try { echo $value['h2']; }
+                finally { throw new RuntimeException('X'); }
+            } finally { throw new RuntimeException('Y'); }
+        }
+    } finally { return 1; }
+}
+#[Export] function php_chained_replacement_return(array $value): void {
+    php_chained_replacement_return_inner($value);
+    throw new TypeError('Z');
+}
 #[Export] function php_related_pending_discard(array $value): int {
     try {
         try {
@@ -1015,7 +1042,12 @@ $dump = function (Throwable $error): void {
     }
     echo "\n";
 };
-foreach (['php_unrelated_pending_catch', 'php_unrelated_pending_return'] as $function) {
+foreach ([
+    'php_unrelated_pending_catch',
+    'php_unrelated_pending_return',
+    'php_chained_replacement_catch',
+    'php_chained_replacement_return',
+] as $function) {
     $host = 0;
     set_error_handler(function () use (&$host) {
         throw new LogicException('host' . ++$host);

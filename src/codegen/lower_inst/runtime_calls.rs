@@ -119,10 +119,10 @@ fn lower_exception_finally_chain(
         ctx.emitter.bl_c("elephc_php_finally_chain");
         abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
         abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
-        let visit = ctx.next_label("finally_chain_pending_visit");
-        let done = ctx.next_label("finally_chain_pending_done");
-        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-        ctx.emitter.label(&visit);
+        let pending_visit = ctx.next_label("finally_chain_pending_visit");
+        let pending_done = ctx.next_label("finally_chain_pending_done");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &pending_done);
+        ctx.emitter.label(&pending_visit);
         abi::emit_push_reg(ctx.emitter, result);
         abi::emit_reg_move(
             ctx.emitter,
@@ -132,8 +132,28 @@ fn lower_exception_finally_chain(
         ctx.emitter.bl_c("elephc_php_finally_chain_pending");
         abi::emit_pop_reg(ctx.emitter, result);
         abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
-        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
-        ctx.emitter.label(&done);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &pending_visit);
+        ctx.emitter.label(&pending_done);
+        let replacement_visit = ctx.next_label("finally_chain_replacement_visit");
+        let replacement_done = ctx.next_label("finally_chain_replacement_done");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &replacement_done);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &replacement_done);
+        ctx.emitter.label(&replacement_visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter
+            .bl_c("elephc_php_finally_chain_replacement");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &replacement_visit);
+        ctx.emitter.label(&replacement_done);
         abi::emit_release_temporary_stack(ctx.emitter, 32);
     }
     lower_exception_chain(ctx, inst)

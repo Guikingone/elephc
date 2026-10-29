@@ -220,28 +220,28 @@ fn emit_release_replacement_owners(emitter: &mut Emitter, base: usize, suffix: &
         Arch::AArch64 => {
             abi::load_at_offset(emitter, "x10", base);
             abi::emit_load_symbol_to_reg(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-            emitter.instruction("cmp x9, x10");                                // retire only pins acquired below this export boundary
-            emitter.instruction(&format!("b.ls {done}"));
-            emitter.instruction("sub x9, x9, #1");
+            emitter.instruction("cmp x9, x10");                                 // retire only pins acquired below this export boundary
+            emitter.instruction(&format!("b.ls {done}"));                       // stop at the owner count saved by this export
+            emitter.instruction("sub x9, x9, #1");                              // claim the newest replacement pin for release
             abi::emit_store_reg_to_symbol(emitter, "x9", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
             abi::emit_extern_symbol_address(emitter, "x10", PHPEXT_REPLACEMENT_OWNERS);
-            emitter.instruction("ldr x0, [x10, x9, lsl #3]");                  // consume the last retained replacement owner
-            emitter.instruction("str xzr, [x10, x9, lsl #3]");                // make an escaping destructor path idempotent
+            emitter.instruction("ldr x0, [x10, x9, lsl #3]");                   // consume the last retained replacement owner
+            emitter.instruction("str xzr, [x10, x9, lsl #3]");                  // make an escaping destructor path idempotent
             abi::emit_call_label(emitter, "__rt_decref_any");
-            emitter.instruction(&format!("b {loop_label}"));
+            emitter.instruction(&format!("b {loop_label}"));                    // retire every pin acquired by this export
         }
         Arch::X86_64 => {
             abi::load_at_offset(emitter, "r11", base);
             abi::emit_load_symbol_to_reg(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
-            emitter.instruction("cmp r10, r11");                               // retire only pins acquired below this export boundary
-            emitter.instruction(&format!("jbe {done}"));
-            emitter.instruction("sub r10, 1");
+            emitter.instruction("cmp r10, r11");                                // retire only pins acquired below this export boundary
+            emitter.instruction(&format!("jbe {done}"));                        // stop at the owner count saved by this export
+            emitter.instruction("sub r10, 1");                                  // claim the newest replacement pin for release
             abi::emit_store_reg_to_symbol(emitter, "r10", PHPEXT_REPLACEMENT_OWNER_COUNT, 0);
             abi::emit_extern_symbol_address(emitter, "r11", PHPEXT_REPLACEMENT_OWNERS);
-            emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");           // consume the last retained replacement owner
-            emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");            // make an escaping destructor path idempotent
+            emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");            // consume the last retained replacement owner
+            emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");              // make an escaping destructor path idempotent
             abi::emit_call_label(emitter, "__rt_decref_any");
-            emitter.instruction(&format!("jmp {loop_label}"));
+            emitter.instruction(&format!("jmp {loop_label}"));                  // retire every pin acquired by this export
         }
     }
     emitter.label(&done);

@@ -209,14 +209,24 @@ function chain_pending(array $value): void {
         let pending_callback = hosted
             .find("elephc_php_finally_chain_pending")
             .expect("the hosted pending-chain notification is missing");
+        let replacement_callback = hosted
+            .find("elephc_php_finally_chain_replacement")
+            .expect("the hosted replacement-chain notification is missing");
         let pending_walk = hosted[callback..pending_callback]
             .find("__rt_throwable_previous")
             .expect("the hosted pending exception chain walk is missing");
         let chain = hosted[callback..]
             .find("__rt_exception_chain")
             .expect("the native exception chain call is missing");
+        let replacement_walk = hosted[pending_callback..replacement_callback]
+            .find("__rt_throwable_previous")
+            .expect("the hosted replacement exception chain walk is missing");
         assert!(
-            pending_walk > 0 && pending_callback > callback && chain > pending_callback - callback,
+            pending_walk > 0
+                && pending_callback > callback
+                && replacement_walk > 0
+                && replacement_callback > pending_callback
+                && chain > replacement_callback - callback,
             "{target}: the adapter must inspect the pending chain before native chaining"
         );
         assert!(

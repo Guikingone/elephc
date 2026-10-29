@@ -799,6 +799,20 @@ static void ep_match_finally_chain_pending(ep_call *call, const uintptr_t *pendi
     }
 }
 
+/* Match an escaping replacement-chain node to the newest logical replacement. */
+static void ep_match_finally_chain_replacement(ep_call *call, const uintptr_t *replacement)
+{
+    if (call->finally_chain_matched || !replacement) { return; }
+    ep_host_predecessor *logical = ep_logical_host_predecessor(call);
+    if (logical && logical->root == replacement) {
+        ep_parked_host_exception *parked = ep_finally_chain_candidate(call);
+        if (parked) {
+            parked->crossed_finally = true;
+            call->finally_chain_matched = true;
+        }
+    }
+}
+
 /* Begin one finally crossing with both the escaping and pending native identities. */
 void elephc_php_finally_chain(const uintptr_t *replacement, const uintptr_t *pending)
 {
@@ -809,13 +823,23 @@ void elephc_php_finally_chain(const uintptr_t *replacement, const uintptr_t *pen
         ep_match_finally_chain_pending(call, pending);
         return;
     }
-    ep_host_predecessor *logical = ep_logical_host_predecessor(call);
-    bool continued_replacement = replacement && logical && logical->root == replacement;
-    if (replacement && !continued_replacement) { return; }
+    if (replacement) {
+        ep_match_finally_chain_replacement(call, replacement);
+        return;
+    }
     ep_parked_host_exception *parked = ep_finally_chain_candidate(call);
     if (parked) {
         parked->crossed_finally = true;
         call->finally_chain_matched = true;
+    }
+}
+
+/* Continue matching the escaping replacement chain without crossing twice. */
+void elephc_php_finally_chain_replacement(const uintptr_t *replacement)
+{
+    ep_call *call = ep_current;
+    if (call && !call->host_bailout && !call->error) {
+        ep_match_finally_chain_replacement(call, replacement);
     }
 }
 
