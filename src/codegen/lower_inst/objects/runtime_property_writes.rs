@@ -1610,6 +1610,9 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
             ctx, value, value_ty, object_stack_offset, name_stack_offset,
         );
     }
+    // The receiver and name are stacked and the value is materialized below, so the call may
+    // clobber any register.
+    super::mixed_property_reads::emit_publish_eval_native_site(ctx);
     let plain = ctx.next_label("eval_prop_set_plain");
     let handled = ctx.next_label("eval_prop_set_handled");
     let raise = ctx.next_label("eval_prop_set_raise");
