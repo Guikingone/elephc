@@ -73,7 +73,8 @@ fn emit_strstr_len_x86_64(e: &mut Emitter) {
     e.instruction("jz __rt_strstr_len_suffix_x86_64");                          // the default form returns the suffix length
     e.instruction("jmp __rt_strstr_len_done_x86_64");                           // the prefix length is already the match offset
     e.label("__rt_strstr_len_suffix_x86_64");
-    e.instruction("sub rax, rdx");                                              // suffix length = haystack length - match offset
+    e.instruction("sub rdx, rax");                                              // suffix length = haystack length - match offset
+    e.instruction("mov rax, rdx");                                              // carry the suffix length in the result register
     e.instruction("jmp __rt_strstr_len_done_x86_64");                           // restore the frame and return
     e.label("__rt_strstr_len_miss_x86_64");
     e.instruction("xor eax, eax");                                              // strlen(false) is zero
