@@ -3,7 +3,9 @@
 #include <Zend/zend_exceptions.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #if defined(__SANITIZE_ADDRESS__)
 #define EP_SANITIZED_ALLOCATOR 1
@@ -17,6 +19,11 @@
 #include <sanitizer/allocator_interface.h>
 #elif defined(__GLIBC__)
 #include <malloc.h>
+#if defined(HAVE_VALGRIND)
+#include <valgrind/valgrind.h>
+/* Valgrind emulates mallinfo, but not mallinfo2. This bounded fixture fits its legacy fields. */
+extern struct mallinfo emulated_malloc_info(void) __asm__("mallinfo");
+#endif
 #elif defined(__APPLE__)
 #include <mach/mach.h>
 #include <malloc/malloc.h>
@@ -38,18 +45,32 @@ bool ZEND_FASTCALL _vgr00000ZU_libphpZdso_zend_string_equal_val(const zend_strin
 static atomic_int failures;
 static atomic_uint request_ids;
 
-/* Reachable allocations also count: PHP can retain a fatal Fiber's stack mapping. */
+#if defined(__APPLE__) && !defined(EP_SANITIZED_ALLOCATOR)
+/* Apple aggregate statistics include medium blocks already returned to per-CPU free caches. */
+static size_t live_apple_malloc_bytes(void);
+#endif
+
+/* Count retained native allocations even when a parked fatal Fiber still references them. */
 static size_t live_malloc_bytes(void)
 {
 #if defined(EP_SANITIZED_ALLOCATOR)
     return __sanitizer_get_current_allocated_bytes();
 #elif defined(__GLIBC__)
+#if defined(HAVE_VALGRIND)
+    if (RUNNING_ON_VALGRIND) {
+        struct mallinfo stats = emulated_malloc_info();
+        if (stats.uordblks < 0 || stats.hblkhd < 0) {
+            fprintf(stderr, "Valgrind live malloc statistics overflowed\n");
+            atomic_fetch_add(&failures, 1);
+            return 0;
+        }
+        return (size_t)stats.uordblks + (size_t)stats.hblkhd;
+    }
+#endif
     struct mallinfo2 stats = mallinfo2();
     return stats.uordblks + stats.hblkhd;
 #else
-    malloc_statistics_t stats;
-    malloc_zone_statistics(NULL, &stats);
-    return stats.size_in_use;
+    return live_apple_malloc_bytes();
 #endif
 }
 
@@ -68,6 +89,47 @@ static kern_return_t read_local_memory(task_t task, vm_address_t address, vm_siz
     (void)size;
     *memory = (void *)address;
     return KERN_SUCCESS;
+}
+
+typedef struct {
+    size_t bytes;
+    bool overflow;
+} live_malloc_total;
+
+/* The in-use enumerator excludes cached free blocks while retaining every live user allocation. */
+static void sum_live_malloc_ranges(task_t task, void *context, unsigned type,
+    vm_range_t *ranges, unsigned count)
+{
+    (void)task;
+    if (!(type & MALLOC_PTR_IN_USE_RANGE_TYPE)) { return; }
+    live_malloc_total *total = context;
+    for (unsigned i = 0; i < count; i++) {
+        if (ranges[i].size > SIZE_MAX - total->bytes) { total->overflow = true; return; }
+        total->bytes += ranges[i].size;
+    }
+}
+
+/* Count actual allocations, not magazine accounting that deliberately retains freed blocks. */
+static size_t live_apple_malloc_bytes(void)
+{
+    vm_address_t *zones;
+    unsigned count;
+    live_malloc_total total = {0};
+    kern_return_t status = malloc_get_all_zones(mach_task_self(), read_local_memory, &zones, &count);
+    if (status != KERN_SUCCESS) { goto failed; }
+    for (unsigned i = 0; i < count; i++) {
+        malloc_zone_t *zone = (malloc_zone_t *)zones[i];
+        if (!zone->introspect || !zone->introspect->enumerator) { status = KERN_FAILURE; goto failed; }
+        status = zone->introspect->enumerator(mach_task_self(), &total, MALLOC_PTR_IN_USE_RANGE_TYPE,
+            zones[i], read_local_memory, sum_live_malloc_ranges);
+        if (status != KERN_SUCCESS) { goto failed; }
+        if (total.overflow) { status = KERN_FAILURE; goto failed; }
+    }
+    return total.bytes;
+failed:
+    fprintf(stderr, "live malloc allocation enumeration failed: %d\n", status);
+    atomic_fetch_add(&failures, 1);
+    return 0;
 }
 
 /* Record into stack storage so diagnostics cannot allocate while walking a malloc zone. */
@@ -121,6 +183,38 @@ static void report_large_malloc_ranges(void)
     }
 }
 #endif
+
+static void *volatile malloc_probe_roots[3];
+
+/* Independent ground truth ensures the counter detects retained images above the 4 MiB bound. */
+static void check_malloc_accounting(void)
+{
+    const size_t bytes = 7 * 256 * 1024;
+    size_t baseline = live_malloc_bytes();
+    unsigned allocated = 0;
+    for (; allocated < 3; allocated++) {
+        void *buffer = malloc(bytes);
+        malloc_probe_roots[allocated] = buffer;
+        if (!buffer) { atomic_fetch_add(&failures, 1); break; }
+        memset(buffer, 0xa5, bytes);
+    }
+    if (allocated == 3) {
+        size_t held = live_malloc_bytes();
+        if (held < baseline || held - baseline < 3 * bytes) {
+            fprintf(stderr, "live malloc counter missed %zu independently held bytes\n", 3 * bytes);
+            atomic_fetch_add(&failures, 1);
+        }
+    }
+    for (unsigned i = 0; i < 3; i++) {
+        free(malloc_probe_roots[i]);
+        malloc_probe_roots[i] = NULL;
+    }
+    size_t released = live_malloc_bytes();
+    if (released > baseline && released - baseline > 4 * 1024 * 1024) {
+        fprintf(stderr, "live malloc counter retained %zu already freed bytes\n", released - baseline);
+        atomic_fetch_add(&failures, 1);
+    }
+}
 
 /* A shutdown-flushed output callback can park a Fiber after the destructor pass. */
 static void run_late_userland_fiber_request(void)
@@ -272,7 +366,9 @@ int main(int argc, char **argv)
     php_embed_module.php_ini_path_override = argv[1];
     php_embed_module.php_ini_ignore_cwd = 1;
     if (php_embed_init(1, argv) == FAILURE) { return 3; }
-    if (getenv("ELEPHC_EMBED_FATAL_PHASE")) {
+    if (getenv("ELEPHC_EMBED_ALLOCATOR_PROBE")) {
+        check_malloc_accounting();
+    } else if (getenv("ELEPHC_EMBED_FATAL_PHASE")) {
         run_abandoned_requests();
     } else {
 #ifdef ZTS

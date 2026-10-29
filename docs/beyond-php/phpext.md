@@ -221,6 +221,12 @@ with Zend's request allocator enabled, which reclaims executor objects left by
 bailout. Native adapter allocations, snapshots and checkpoints use libc in both
 processes and remain subject to leak detection and the live-allocation bound.
 
+A separate allocator probe holds 5.25 MiB of known allocations and requires the
+counter to detect that live growth before releasing the buffers. On macOS the
+counter enumerates in-use allocation ranges, excluding already freed blocks in
+Apple's per-CPU caches. Under Valgrind it uses the tool's emulated allocator
+statistics. The fatal-request growth limit remains 4 MiB.
+
 For a local embed check with a PHP SDK configured with `--enable-embed=shared`:
 
 ```sh

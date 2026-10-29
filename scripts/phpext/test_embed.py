@@ -108,10 +108,14 @@ def main():
         # Fatal requests need Zend's arena reclamation for executor-owned objects
         # intentionally left alive after bailout. Native adapter/checkpoint mallocs
         # remain individually visible to ASan, Valgrind and leaks in both phases.
-        for phase, zend_alloc in [("ordinary", "0"), ("fatal", "1")]:
+        # Keep the allocator oracle in its own process, preserving cold fatal-request caches.
+        for phase, zend_alloc in [("allocator", "1"), ("ordinary", "0"), ("fatal", "1")]:
             phase_env = dict(env, USE_ZEND_ALLOC=zend_alloc)
             phase_env.pop("ELEPHC_EMBED_FATAL_PHASE", None)
-            if phase == "fatal":
+            phase_env.pop("ELEPHC_EMBED_ALLOCATOR_PROBE", None)
+            if phase == "allocator":
+                phase_env["ELEPHC_EMBED_ALLOCATOR_PROBE"] = "1"
+            elif phase == "fatal":
                 phase_env["ELEPHC_EMBED_FATAL_PHASE"] = "1"
             if args.leaks:
                 check_apple_leaks(command, phase_env, work)
