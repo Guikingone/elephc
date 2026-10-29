@@ -154,6 +154,7 @@ static void run_abandoned_requests(void)
     php_request_shutdown(NULL);
     size_t baseline = live_malloc_bytes();
     size_t samples[9] = {baseline};
+    unsigned completed = 0;
     for (unsigned request = 0; request < 8; request++) {
         if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); break; }
         unsigned expected_resumes = (request / 4) * 2 + (request % 4 < 2 ? request % 4 : 2);
@@ -163,9 +164,12 @@ static void run_abandoned_requests(void)
             "$nested = %s; $resumed = %s; %s", expected_resumes,
             request % 2 ? "true" : "false", request % 4 < 2 ? "true" : "false", code);
         volatile bool bailed = false;
+        volatile bool evaluation_failed = false;
         zend_first_try {
             if (zend_eval_string(script, NULL, "phpext abandoned request") == FAILURE || EG(exception)) {
+                evaluation_failed = true;
                 atomic_fetch_add(&failures, 1);
+                if (EG(exception)) { zend_exception_error(EG(exception), E_WARNING); }
             } else {
                 /* Finish eval ownership before deliberately abandoning the executor. */
                 zend_error_noreturn(E_USER_ERROR, "intentional fatal request");
@@ -173,8 +177,9 @@ static void run_abandoned_requests(void)
         } zend_catch {
             bailed = true;
         } zend_end_try();
-        if (!bailed) { atomic_fetch_add(&failures, 1); }
+        if (!bailed && !evaluation_failed) { atomic_fetch_add(&failures, 1); }
         php_request_shutdown(NULL);
+        completed = request + 1;
         size_t current = live_malloc_bytes();
         samples[request + 1] = current;
         /* The fixture uses a 512 KiB native heap; abandoned images grow well past 4 MiB. */
@@ -193,9 +198,10 @@ static void run_abandoned_requests(void)
     }
     if (php_request_startup() == FAILURE) {
         atomic_fetch_add(&failures, 1);
-    } else if (zend_eval_string("if (elephc_late_resume_count() !== 4) { throw new Exception('final late resume missing'); }",
-        NULL, "phpext final late resume") == FAILURE || EG(exception)) {
+    } else if (completed == 8 && (zend_eval_string("if (elephc_late_resume_count() !== 4) { throw new Exception('final late resume missing'); }",
+        NULL, "phpext final late resume") == FAILURE || EG(exception))) {
         atomic_fetch_add(&failures, 1);
+        if (EG(exception)) { zend_exception_error(EG(exception), E_WARNING); }
     }
 }
 

@@ -33,14 +33,14 @@ def check_apple_leaks(command, env, work):
     with subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
         try:
-            if not select.select([process.stdout], [], [], 120)[0]:
-                raise RuntimeError("PHP lifecycle did not reach the Apple leak inspection checkpoint")
-            ready = process.stdout.readline()
-            if ready not in ("request isolation ok\n", "request isolation failed\n"):
+            readable = select.select([process.stdout], [], [], 120)[0]
+            ready = process.stdout.readline() if readable else ""
+            if not readable or ready not in ("request isolation ok\n", "request isolation failed\n"):
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)
                 stdout, stderr = process.communicate()
-                raise RuntimeError(f"PHP lifecycle failed before leak inspection ({process.returncode}):\n"
+                reason = "failed before leak inspection" if readable else "did not reach the Apple leak inspection checkpoint"
+                raise RuntimeError(f"PHP lifecycle {reason} ({process.returncode}):\n"
                                    f"{ready}{stdout}\n{stderr}")
             result = subprocess.run(["leaks", str(process.pid)], capture_output=True, text=True, timeout=120)
             stdout, stderr = process.communicate("\n", timeout=30)
