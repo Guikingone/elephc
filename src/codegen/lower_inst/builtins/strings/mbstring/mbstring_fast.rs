@@ -132,6 +132,13 @@ pub(super) fn try_lower(
         RuntimeBuiltinId::MbEregSearch => try_lower_ereg_search_step(ctx, inst),
         RuntimeBuiltinId::MbEregSearchGetpos => lower_ereg_search_getpos(ctx, inst),
         RuntimeBuiltinId::MbEregSearchSetpos => try_lower_ereg_search_setpos(ctx, inst),
+        RuntimeBuiltinId::MbEregSearchPos => try_lower_ereg_search_pos(ctx, inst),
+        RuntimeBuiltinId::MbEregSearchRegs => {
+            try_lower_ereg_search_regs(ctx, inst, operation, true)
+        }
+        RuntimeBuiltinId::MbEregSearchGetregs => {
+            try_lower_ereg_search_regs(ctx, inst, operation, false)
+        }
         _ => Ok(false),
     }
 }
@@ -733,6 +740,187 @@ fn try_lower_ereg_search_step(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&fallback);
     super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEregSearch, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Emits the provider-ready probe that selects the dedicated or generic regex path.
+///
+/// The dedicated ABI also reports its unavailable sentinel, but probing first keeps the shared
+/// bridge responsible for the very first call, where it registers the provider with Magician.
+fn emit_regex_provider_probe(ctx: &mut FunctionContext<'_>, fallback: &str) {
+    ctx.emitter.bl_c("elephc_mbstring_regex_available_v1");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz w0, {fallback}"));            // run the bridge until the provider is registered
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                           // is the shared regex provider registered yet?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // run the bridge until the provider is registered
+        }
+    }
+}
+
+/// Lowers `mb_ereg_search_pos()` into a native two-integer indexed array.
+fn try_lower_ereg_search_pos(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if !inst.operands.is_empty() {
+        return Ok(false);
+    }
+    let fallback = ctx.next_label("mb_ereg_search_pos_fallback");
+    let no_match = ctx.next_label("mb_ereg_search_pos_no_match");
+    let done = ctx.next_label("mb_ereg_search_pos_done");
+    emit_regex_provider_probe(ctx, &fallback);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the start/length output slots
+            ctx.emitter.instruction("mov x0, sp");                              // pass the start output slot
+            ctx.emitter.instruction("add x1, sp, #8");                          // pass the length output slot
+            ctx.emitter.bl_c("elephc_mbstring_ereg_search_pos_v1");
+            ctx.emitter.instruction("cmp w0, #0");                              // inspect the signed match status
+            ctx.emitter.instruction(&format!("b.lt {fallback}_pop"));           // bridge preserves unexpected diagnostics
+            ctx.emitter.instruction(&format!("cbz w0, {no_match}_pop"));        // no retained match returns false
+            ctx.emitter.instruction("mov x0, #2");                              // the result carries start and length
+            ctx.emitter.instruction("mov x1, #8");                              // indexed int slots are eight bytes
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            ctx.emitter.instruction("ldr x9, [sp]");                            // load the match start
+            ctx.emitter.instruction("str x9, [x0, #24]");                       // append the match start
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // load the match length
+            ctx.emitter.instruction("str x9, [x0, #32]");                       // append the match length
+            ctx.emitter.instruction("mov x9, #2");                              // publish both integer elements
+            ctx.emitter.instruction("str x9, [x0]");                            // set the logical array length
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the output slots
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Int)),
+            );
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{no_match}_pop"));
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the output slots
+            ctx.emitter.instruction("mov x0, xzr");                             // false payload
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{fallback}_pop"));
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the output slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve the start/length output slots
+            ctx.emitter.instruction("mov rdi, rsp");                            // pass the start output slot
+            ctx.emitter.instruction("lea rsi, [rsp + 8]");                      // pass the length output slot
+            ctx.emitter.bl_c("elephc_mbstring_ereg_search_pos_v1");
+            ctx.emitter.instruction("test eax, eax");                           // inspect the signed match status
+            ctx.emitter.instruction(&format!("js {fallback}_pop"));             // bridge preserves unexpected diagnostics
+            ctx.emitter.instruction(&format!("jz {no_match}_pop"));             // no retained match returns false
+            ctx.emitter.instruction("mov rdi, 2");                              // the result carries start and length
+            ctx.emitter.instruction("mov rsi, 8");                              // indexed int slots are eight bytes
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // load the match start
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");           // append the match start
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 8]");            // load the match length
+            ctx.emitter.instruction("mov QWORD PTR [rax + 32], r10");           // append the match length
+            ctx.emitter.instruction("mov QWORD PTR [rax], 2");                  // publish both integer elements
+            ctx.emitter.instruction("add rsp, 32");                             // release the output slots
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Int)),
+            );
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{no_match}_pop"));
+            ctx.emitter.instruction("add rsp, 32");                             // release the output slots
+            ctx.emitter.instruction("xor eax, eax");                            // false payload
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{fallback}_pop"));
+            ctx.emitter.instruction("add rsp, 32");                             // release the output slots
+        }
+    }
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEregSearchPos, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers `mb_ereg_search_regs()`/`mb_ereg_search_getregs()` into a native one-element array.
+fn try_lower_ereg_search_regs(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+    advance: bool,
+) -> Result<bool> {
+    if !inst.operands.is_empty() {
+        return Ok(false);
+    }
+    let fallback = ctx.next_label("mb_ereg_search_regs_fallback");
+    let no_match = ctx.next_label("mb_ereg_search_regs_no_match");
+    let done = ctx.next_label("mb_ereg_search_regs_done");
+    let helper = if advance {
+        "elephc_mbstring_ereg_search_regs_v1"
+    } else {
+        "elephc_mbstring_ereg_search_getregs_v1"
+    };
+    emit_regex_provider_probe(ctx, &fallback);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the borrowed match range output slots
+            ctx.emitter.instruction("mov x0, sp");                              // pass the match pointer output slot
+            ctx.emitter.instruction("add x1, sp, #8");                          // pass the match length output slot
+            ctx.emitter.bl_c(helper);
+            ctx.emitter.instruction("cmp w0, #0");                              // inspect the signed match status
+            ctx.emitter.instruction(&format!("b.lt {fallback}_pop"));           // bridge preserves unexpected diagnostics
+            ctx.emitter.instruction(&format!("cbz w0, {no_match}_pop"));        // no match returns false
+            ctx.emitter.instruction("mov x0, #1");                              // the result carries one match
+            ctx.emitter.instruction("mov x1, #16");                             // string slots carry pointer and length
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            ctx.emitter.instruction("ldr x1, [sp]");                            // load the borrowed match pointer
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // load the borrowed match length
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the output slots
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Str)),
+            );
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{no_match}_pop"));
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the output slots
+            ctx.emitter.instruction("mov x0, xzr");                             // false payload
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{fallback}_pop"));
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the output slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve the borrowed match range output slots
+            ctx.emitter.instruction("mov rdi, rsp");                            // pass the match pointer output slot
+            ctx.emitter.instruction("lea rsi, [rsp + 8]");                      // pass the match length output slot
+            ctx.emitter.bl_c(helper);
+            ctx.emitter.instruction("test eax, eax");                           // inspect the signed match status
+            ctx.emitter.instruction(&format!("js {fallback}_pop"));             // bridge preserves unexpected diagnostics
+            ctx.emitter.instruction(&format!("jz {no_match}_pop"));             // no match returns false
+            ctx.emitter.instruction("mov rdi, 1");                              // the result carries one match
+            ctx.emitter.instruction("mov rsi, 16");                             // string slots carry pointer and length
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            ctx.emitter.instruction("mov rdi, rax");                            // append into the new array
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // load the borrowed match pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // load the borrowed match length
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            ctx.emitter.instruction("add rsp, 32");                             // release the output slots
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Str)),
+            );
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{no_match}_pop"));
+            ctx.emitter.instruction("add rsp, 32");                             // release the output slots
+            ctx.emitter.instruction("xor eax, eax");                            // false payload
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&format!("{fallback}_pop"));
+            ctx.emitter.instruction("add rsp, 32");                             // release the output slots
+        }
+    }
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, operation, false)?;
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(true)

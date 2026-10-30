@@ -117,6 +117,31 @@ impl Session {
     /// Returns the progressive byte position even before a subject has been initialized.
     pub fn position(&self) -> usize { self.data.borrow().position }
 
+    /// Reports whether both a progressive pattern and subject are ready for a search step.
+    ///
+    /// Dedicated ABI step paths return their unavailable sentinel when this is false so the
+    /// generic bridge can emit PHP's exact "no pattern/subject" diagnostics.
+    pub fn progressive_ready(&self) -> bool {
+        let data = self.data.borrow();
+        data.pattern.is_some() && data.subject.is_some()
+    }
+
+    /// Returns the retained match's start and length, if a search has matched.
+    pub fn match_position(&self) -> Option<(usize, usize)> {
+        self.data.borrow().matched.as_ref().map(Match::position)
+    }
+
+    /// Borrows the retained match's complete group-0 byte range.
+    ///
+    /// The returned pointer points into the session-owned subject copy. Callers must copy it
+    /// before any operation that can replace the retained match.
+    pub fn match_group0(&self) -> Option<(*const u8, usize)> {
+        let data = self.data.borrow();
+        let matched = data.matched.as_ref()?;
+        let range = matched.captures.groups.first()?.as_ref()?.clone();
+        Some((matched.subject[range.clone()].as_ptr(), range.len()))
+    }
+
     /// Sets a byte position, resolving negatives only when an initialized subject supplies its length.
     pub fn set_position(&self, position: i64) -> MbResult<()> {
         let mut data = self.data.borrow_mut();

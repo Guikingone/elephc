@@ -80,3 +80,111 @@ pub extern "C" fn elephc_mbstring_ereg_search_setpos_v1(position: i64) -> i32 {
     }))
     .unwrap_or(0)
 }
+
+/// Runs one search step and reports the retained match's start and length.
+///
+/// Returns one on a match, zero when the search found nothing, and the negative sentinel when
+/// the provider is not registered yet or the request has no progressive pattern/subject. The
+/// caller then runs the generic bridge, which installs the provider and emits PHP diagnostics.
+///
+/// # Safety
+/// Both output pointers must be null or address writable `i64` storage.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_ereg_search_pos_v1(
+    start_out: *mut i64,
+    len_out: *mut i64,
+) -> i32 {
+    if start_out.is_null() || len_out.is_null() || !crate::regex::provider_available() {
+        return -1;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        REGEX.with(|session| {
+            if !session.progressive_ready() {
+                return -1;
+            }
+            let limits = Limits { stack: None, retry: None };
+            match session.search(None, None, "mb_ereg_search_pos", limits, &mut |_| {}) {
+                Ok(Some(_)) => match session.match_position() {
+                    Some((start, len)) => {
+                        unsafe {
+                            *start_out = start as i64;
+                            *len_out = len as i64;
+                        }
+                        1
+                    }
+                    None => 0,
+                },
+                Ok(None) => 0,
+                Err(_) => -1,
+            }
+        })
+    }))
+    .unwrap_or(-1)
+}
+
+/// Runs one search step and borrows the complete group-0 match range.
+///
+/// The pointer stays valid only until the next session mutation; the caller copies it into the
+/// returned PHP array immediately. Negative status selects the generic bridge.
+///
+/// # Safety
+/// `ptr_out` and `len_out` must be null or address writable pointer/usize storage.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_ereg_search_regs_v1(
+    ptr_out: *mut *const u8,
+    len_out: *mut u64,
+) -> i32 {
+    if ptr_out.is_null() || len_out.is_null() || !crate::regex::provider_available() {
+        return -1;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        REGEX.with(|session| {
+            if !session.progressive_ready() {
+                return -1;
+            }
+            let limits = Limits { stack: None, retry: None };
+            match session.search(None, None, "mb_ereg_search_regs", limits, &mut |_| {}) {
+                Ok(Some(_)) => match session.match_group0() {
+                    Some((ptr, len)) => {
+                        unsafe {
+                            *ptr_out = ptr;
+                            *len_out = len as u64;
+                        }
+                        1
+                    }
+                    None => 0,
+                },
+                Ok(None) => 0,
+                Err(_) => -1,
+            }
+        })
+    }))
+    .unwrap_or(-1)
+}
+
+/// Borrows the previously retained group-0 match range without advancing the search.
+///
+/// # Safety
+/// `ptr_out` and `len_out` must be null or address writable pointer/usize storage.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_ereg_search_getregs_v1(
+    ptr_out: *mut *const u8,
+    len_out: *mut u64,
+) -> i32 {
+    if ptr_out.is_null() || len_out.is_null() || !crate::regex::provider_available() {
+        return -1;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        REGEX.with(|session| match session.match_group0() {
+            Some((ptr, len)) => {
+                unsafe {
+                    *ptr_out = ptr;
+                    *len_out = len as u64;
+                }
+                1
+            }
+            None => 0,
+        })
+    }))
+    .unwrap_or(-1)
+}

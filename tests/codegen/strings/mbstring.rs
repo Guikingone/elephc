@@ -644,6 +644,47 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the native array-returning `mb_ereg_search_pos`/`regs`/`getregs` paths.
+///
+/// The returned arrays must own copies of the session match, so mutating one result never
+/// changes what a later `getregs()` reads. The no-match and uninitialized branches keep PHP's
+/// `false` result.
+#[test]
+fn test_mb_ereg_search_native_array_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+mb_ereg_search_init("abc123", "[0-9]+");
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search_getregs());
+mb_ereg_search_init("abc123", "[0-9]+");
+$r = mb_ereg_search_regs();
+var_dump($r);
+$r[0] = "changed";
+var_dump(mb_ereg_search_getregs());
+mb_ereg_search_init("abc", "[0-9]+");
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_regs());
+var_dump(mb_ereg_search_getregs());
+mb_ereg_search_init("abc", "[0-9]*");
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_getregs());
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(2) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(3)\n}\n\
+bool(false)\nint(6)\nbool(false)\n\
+array(1) {\n  [0]=>\n  string(3) \"123\"\n}\n\
+array(1) {\n  [0]=>\n  string(3) \"123\"\n}\n\
+bool(false)\nbool(false)\nbool(false)\n\
+array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(0)\n}\n\
+array(1) {\n  [0]=>\n  string(0) \"\"\n}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.
