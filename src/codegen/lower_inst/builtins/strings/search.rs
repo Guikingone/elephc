@@ -353,7 +353,7 @@ pub(crate) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
 /// PHP's default is `null`, meaning "to the end of the subject", and an explicitly written
 /// `null` behaves identically. A `TaggedScalar` needs a runtime tag check, while a statically
 /// null operand can immediately take the absent path.
-fn optional_null_length_kind(
+pub(super) fn optional_null_length_kind(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     operand_index: usize,

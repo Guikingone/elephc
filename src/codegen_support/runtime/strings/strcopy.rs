@@ -103,6 +103,54 @@ fn emit_strcopy_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the copied string in the standard x86_64 string result registers
 }
 
+/// Emits `__rt_str_dup_owned`, which always copies a borrowed slice into a fresh owned string.
+///
+/// AArch64 input: `x1`/`x2` = source pointer/length; output is the same pair.
+/// x86_64 input: `rax`/`rdx` = source pointer/length; output is the same pair.
+/// The result is an ordinary owned string with no mbstring logical-identity metadata.
+pub fn emit_str_dup_owned(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: str_dup_owned ---");
+        emitter.label_global("__rt_str_dup_owned");
+        emitter.instruction("push rbp");                                        // preserve the caller frame pointer across allocation
+        emitter.instruction("mov rbp, rsp");                                    // establish a stable copy frame
+        emitter.instruction("sub rsp, 32");                                     // reserve the source pair and destination
+        emitter.instruction("mov QWORD PTR [rbp - 8], rax");                    // save the borrowed source pointer
+        emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                   // save the borrowed source length
+        emitter.instruction("mov rax, rdx");                                    // request exactly the source byte count
+        emitter.instruction("call __rt_str_new_owned");                         // allocate one owned untracked string
+        emitter.instruction("mov QWORD PTR [rbp - 24], rax");                   // keep the destination across memcpy
+        emitter.instruction("mov rdi, rax");                                    // first memcpy argument = destination
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                    // second memcpy argument = source pointer
+        emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                   // third memcpy argument = source length
+        emitter.bl_c("memcpy");                                                // copy the borrowed bytes with the libc vectorized routine
+        emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                   // return the owned destination pointer
+        emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                   // return the unchanged logical length
+        emitter.instruction("leave");                                           // restore the caller frame pointer
+        emitter.instruction("ret");                                             // transfer the owned copy to the caller
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: str_dup_owned ---");
+    emitter.label_global("__rt_str_dup_owned");
+    emitter.instruction("sub sp, sp, #48");                                    // reserve the source pair, destination, and linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                            // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #32");                                   // establish a stable copy frame
+    emitter.instruction("stp x1, x2, [sp, #0]");                               // save the borrowed source pointer and length
+    emitter.instruction("mov x0, x2");                                         // request exactly the source byte count
+    emitter.instruction("bl __rt_str_new_owned");                             // allocate one owned untracked string
+    emitter.instruction("str x0, [sp, #16]");                                  // keep the destination across memcpy
+    emitter.instruction("ldr x1, [sp, #0]");                                   // pass the borrowed source pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                   // pass the borrowed source length
+    emitter.bl_c("memcpy");                                                     // copy the borrowed bytes with the libc vectorized routine
+    emitter.instruction("ldr x1, [sp, #16]");                                  // return the owned destination pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                   // return the unchanged logical length
+    emitter.instruction("ldp x29, x30, [sp, #32]");                            // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #48");                                    // release the copy frame
+    emitter.instruction("ret");                                               // transfer the owned copy to the caller
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

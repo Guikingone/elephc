@@ -29,6 +29,8 @@ mod input;
 mod materialize;
 mod exception;
 mod invoke;
+mod utf8_strlen;
+mod ascii_case;
 mod capture_invoke;
 mod deferred_capture;
 mod callbacks;
@@ -66,6 +68,8 @@ pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
     exception::emit(emitter);
     if mbregex { regex::emit(emitter); callback::emit(emitter, eval_bridge); }
     invoke::emit(emitter, mbregex);
+    utf8_strlen::emit(emitter);
+    ascii_case::emit(emitter);
     capture_invoke::emit(emitter, mbregex);
     callbacks::emit(emitter);
     capture_hash::emit(emitter);

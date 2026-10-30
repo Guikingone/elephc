@@ -151,7 +151,7 @@ pub use number_format::emit_number_format;
 /// Emit number formatting helper.
 pub use atoi::emit_atoi;
 /// Emit ASCII-to-integer conversion.
-pub use strcopy::emit_strcopy;
+pub use strcopy::{emit_str_dup_owned, emit_strcopy};
 /// Emit string copy helper.
 pub use concat_scratch::emit_concat_scratch;
 pub use str_new_owned::emit_str_new_owned;

@@ -13,9 +13,83 @@ use super::*;
 use elephc_builtin_contract::{RuntimeBuiltinId, TypeSpec};
 
 mod capture;
+mod mbstring_fast;
 
 /// Stages borrowed value descriptors and invokes shared PHP argument preparation on either architecture.
 pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: RuntimeBuiltinId) -> Result<()> {
+    if mbstring_fast::try_lower(ctx, inst, operation)? {
+        return Ok(());
+    }
+    lower_mbstring_impl(ctx, inst, operation, true)
+}
+
+/// Lowers `mb_strlen()` with a direct UTF-8 counter when the encoding is explicitly UTF-8.
+///
+/// The fast path validates the subject and returns `-1` for malformed input, in which case
+/// the shared coordinator runs the same call and reproduces PHP's replacement-character
+/// counting. An omitted, null, or non-UTF-8 encoding stays on the coordinator.
+pub(crate) fn lower_mb_strlen(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+) -> Result<()> {
+    if operation == RuntimeBuiltinId::MbStrlen
+        && inst.operands.len() == 2
+        && explicit_utf8_encoding(ctx, inst.operands[1])?
+    {
+        let (ptr_reg, len_reg) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 0, "mb_strlen", ptr_reg, len_reg)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mb_strlen_utf8");
+        let done = ctx.next_label("mb_strlen_utf8_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #-1");                         // did the helper reject malformed UTF-8?
+                ctx.emitter.instruction(&format!("b.ne {done}"));               // a valid count is the final result
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, -1");                         // did the helper reject malformed UTF-8?
+                ctx.emitter.instruction(&format!("jne {done}"));                // a valid count is the final result
+            }
+        }
+        lower_mbstring_impl(ctx, inst, operation, false)?;
+        ctx.emitter.label(&done);
+        return store_if_result(ctx, inst);
+    }
+    lower_mbstring(ctx, inst, operation)
+}
+
+/// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
+fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
+    let mut value = value;
+    for _ in 0..4 {
+        let Some(definition) = ctx.function.value(value) else {
+            break;
+        };
+        let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
+            break;
+        };
+        let Some(instruction) = ctx.function.instruction(inst) else {
+            break;
+        };
+        if instruction.op == crate::ir::Op::Acquire && instruction.operands.len() == 1 {
+            value = instruction.operands[0];
+            continue;
+        }
+        break;
+    }
+    let Some(encoding) = super::super::shared::maybe_const_string_operand(ctx, value)? else {
+        return Ok(false);
+    };
+    Ok(encoding.eq_ignore_ascii_case("UTF-8") || encoding.eq_ignore_ascii_case("UTF8"))
+}
+
+/// Shared mbstring invocation with an optional result store for a fast-path fallback.
+fn lower_mbstring_impl(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+    store: bool,
+) -> Result<()> {
     let capture = matches!(operation, RuntimeBuiltinId::MbEreg | RuntimeBuiltinId::MbEregi);
     let query = operation == RuntimeBuiltinId::MbParseStr;
     let variables = operation == RuntimeBuiltinId::MbConvertVariables;
@@ -79,11 +153,16 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_native");
     }
     abi::emit_release_temporary_stack(ctx.emitter, size);
-    finish_result(ctx, inst, contract.returns)
+    finish_result(ctx, inst, contract.returns, store)
 }
 
 /// Adapts the shared successful result into the PHP type declared by the neutral contract.
-fn finish_result(ctx: &mut FunctionContext<'_>, inst: &Instruction, returns: TypeSpec) -> Result<()> {
+fn finish_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    returns: TypeSpec,
+    store: bool,
+) -> Result<()> {
     let target = ctx.emitter.target;
     if returns == TypeSpec::Str {
         match target.arch {
@@ -94,7 +173,7 @@ fn finish_result(ctx: &mut FunctionContext<'_>, inst: &Instruction, returns: Typ
     if matches!(returns, TypeSpec::Mixed | TypeSpec::Union(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_box_result");
     }
-    store_if_result(ctx, inst)
+    if store { store_if_result(ctx, inst) } else { Ok(()) }
 }
 
 /// Invokes the same coordinator over an owned Mixed array without padding or truncating its length.
@@ -140,7 +219,7 @@ fn lower_packed(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: Ru
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), i64::from(strict));
     abi::emit_call_label(ctx.emitter, "__rt_mbstring_native");
     abi::emit_release_temporary_stack(ctx.emitter, size);
-    finish_result(ctx, inst, contract.returns)
+    finish_result(ctx, inst, contract.returns, true)
 }
 
 /// Stores an AArch64 raw value and a borrowed invoker marker with its concrete runtime tag.

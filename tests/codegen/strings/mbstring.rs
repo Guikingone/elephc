@@ -320,6 +320,73 @@ fn check_mbstring_supported_target_lowering(target: &str) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+
+/// Verifies the ASCII case fast paths, including Unicode fallbacks and title word rules.
+#[test]
+fn test_mb_ascii_case_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$ascii = "hello_world-foo bar";
+$accented = "héllo wörld";
+echo mb_strtoupper($ascii, "UTF-8"), "|";
+echo mb_strtolower("HELLO", "UTF-8"), "|";
+echo mb_convert_case($ascii, MB_CASE_TITLE, "UTF-8"), "|";
+echo mb_convert_case("don't stop", MB_CASE_TITLE, "UTF-8"), "|";
+echo mb_convert_case("ABC", MB_CASE_FOLD, "UTF-8"), "|";
+echo mb_ucfirst("hello", "UTF-8"), "|";
+echo mb_lcfirst("Hello", "UTF-8"), "|";
+echo mb_strtoupper($accented, "UTF-8"), "|";
+echo mb_strtolower("HÉLLO", "UTF-8"), "|";
+echo mb_convert_case($accented, MB_CASE_TITLE, "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "HELLO_WORLD-FOO BAR|hello|Hello_World-Foo Bar|Don't Stop|abc|Hello|hello|\
+         HÉLLO WÖRLD|héllo|Héllo Wörld|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies ASCII width, encoding validation, slicing, and padding fast paths.
+#[test]
+fn test_mb_ascii_width_slice_and_pad_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_strwidth("hello", "UTF-8"), "|";
+echo mb_strwidth("héllo", "UTF-8"), "|";
+echo mb_check_encoding("héllo", "UTF-8") ? "1" : "0", "|";
+echo mb_check_encoding("\x80", "UTF-8") ? "1" : "0", "|";
+echo mb_substr("abcdefghij", 2, 3, "UTF-8"), "|";
+echo mb_substr("abcdefghij", -3, 2, "UTF-8"), "|";
+echo mb_strcut("abcdefghij", 2, 3, "UTF-8"), "|";
+echo mb_str_pad("x", 5, "-", STR_PAD_BOTH, "UTF-8"), "|";
+echo mb_ord("A", "UTF-8"), "|";
+try { mb_ord("", "UTF-8"); } catch (ValueError $e) { echo "empty|"; }
+echo mb_ord("é", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|5|1|0|cde|hi|cde|--x--|65|empty|233|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies ASCII trim, substring counting, and a non-ASCII trim fallback.
+#[test]
+fn test_mb_ascii_trim_and_substr_count_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_trim("  hi  ", " ", "UTF-8"), "|";
+echo mb_ltrim("  hi  ", " ", "UTF-8"), "|";
+echo mb_rtrim("  hi  ", " ", "UTF-8"), "|";
+echo mb_substr_count("banana", "ana", "UTF-8"), "|";
+echo mb_substr_count("héllo", "l", "UTF-8"), "|";
+echo mb_trim("héllo", " ", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "hi|hi  |  hi|1|2|héllo|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

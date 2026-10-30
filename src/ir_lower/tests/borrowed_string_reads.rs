@@ -168,3 +168,59 @@ echo $r->byteAt($argc), $r->findAt($argc), $r->findLast($argc), $r->findCase($ar
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Read-only mbstring calls borrow string operands instead of copying each subject.
+#[test]
+fn borrowed_mbstring_reads_avoid_subject_copies() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId, ValueDef};
+    let source = r#"<?php
+function mbReads(string $s, int $n): string {
+    $a = mb_strtoupper($s, "UTF-8");
+    $b = mb_convert_case($s, MB_CASE_TITLE, "UTF-8");
+    $c = mb_trim($s, " ", "UTF-8");
+    $d = mb_substr($s, 0, $n, "UTF-8");
+    return $a . $b . $c . $d;
+}
+echo mbReads("hello", $argc);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "mbReads").unwrap();
+        let mut calls = 0;
+        for call in &function.instructions {
+            let Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(target)
+                    | RuntimeCallTarget::ProfiledFunction { target, .. },
+            )) = &call.immediate
+            else {
+                continue;
+            };
+            if !matches!(
+                target,
+                RuntimeFnId::MbStrtoupper
+                    | RuntimeFnId::MbConvertCase
+                    | RuntimeFnId::MbTrim
+                    | RuntimeFnId::MbSubstr
+            ) {
+                continue;
+            }
+            calls += 1;
+            let ValueDef::Instruction { inst, .. } = function.value(call.operands[0]).unwrap().def
+            else {
+                panic!("{target:?}: mbstring subject producer");
+            };
+            assert_ne!(
+                function.instruction(inst).unwrap().op,
+                Op::Acquire,
+                "{target:?}: mbstring subjects must be borrowed",
+            );
+        }
+        assert_eq!(calls, 4, "{target:?}: every read-only mbstring call");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

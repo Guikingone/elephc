@@ -62,6 +62,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
+    strings::emit_str_dup_owned(emitter);
     strings::emit_str_persist(emitter, features.mbstring || features.eval_bridge);
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);

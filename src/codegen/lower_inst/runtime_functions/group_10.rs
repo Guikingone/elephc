@@ -19,8 +19,12 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
-        RuntimeFnId::MbStrlen
-        | RuntimeFnId::MbStrwidth
+        RuntimeFnId::MbStrlen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(
+                ctx, inst, target.mbstring_operation().expect("mbstring runtime operation"),
+            )
+        }),
+        RuntimeFnId::MbStrwidth
         | RuntimeFnId::MbStrtoupper
         | RuntimeFnId::MbStrtolower
         | RuntimeFnId::MbConvertCase
