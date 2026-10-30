@@ -447,6 +447,26 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the allocation-free mbstring setting fast paths and boxed boolean results.
+#[test]
+fn test_mb_setting_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo (int)mb_internal_encoding("UTF-8"), "|";
+echo (int)mb_language("neutral"), "|";
+echo (int)mb_http_output("pass"), "|";
+echo (int)mb_regex_encoding("UTF-8"), "|";
+echo (int)mb_substitute_character(0xFFFD), "|";
+echo mb_internal_encoding(), "|";
+echo mb_http_output(), "|";
+echo mb_regex_encoding(), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|1|1|1|1|UTF-8|pass|UTF-8|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

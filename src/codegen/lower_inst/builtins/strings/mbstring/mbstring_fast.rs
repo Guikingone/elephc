@@ -98,6 +98,33 @@ pub(super) fn try_lower(
         RuntimeBuiltinId::MbPreferredMimeName => {
             try_lower_preferred_mime_name(ctx, inst)
         }
+        RuntimeBuiltinId::MbInternalEncoding => try_lower_string_setting_bool(
+            ctx,
+            inst,
+            operation,
+            "elephc_mbstring_internal_encoding_set_v1",
+        ),
+        RuntimeBuiltinId::MbLanguage => try_lower_string_setting_bool(
+            ctx,
+            inst,
+            operation,
+            "elephc_mbstring_language_set_v1",
+        ),
+        RuntimeBuiltinId::MbHttpOutput => try_lower_string_setting_bool(
+            ctx,
+            inst,
+            operation,
+            "elephc_mbstring_http_output_set_v1",
+        ),
+        RuntimeBuiltinId::MbRegexEncoding => try_lower_string_setting_bool(
+            ctx,
+            inst,
+            operation,
+            "elephc_mbstring_regex_encoding_set_v1",
+        ),
+        RuntimeBuiltinId::MbSubstituteCharacter => {
+            try_lower_substitute_character(ctx, inst, operation)
+        }
         _ => Ok(false),
     }
 }
@@ -511,6 +538,114 @@ pub(super) fn lower_ord_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers a string mbstring setting through its allocation-free C ABI setter.
+fn try_lower_string_setting_bool(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    source: RuntimeBuiltinId,
+    helper: &str,
+) -> Result<bool> {
+    if inst.operands.len() != 1 {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_setting", pointer, length)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                             // pass the setting pointer as the first C argument
+            ctx.emitter.instruction("mov x1, x2");                             // pass the setting length as the second C argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                          // pass the setting pointer as the first SysV argument
+            ctx.emitter.instruction("mov rsi, rdx");                          // pass the setting length as the second SysV argument
+        }
+    }
+    ctx.emitter.bl_c(helper);
+    let fallback = ctx.next_label("mb_setting_fallback");
+    let done = ctx.next_label("mb_setting_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {fallback}"));          // invalid settings keep the bridge diagnostics
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                          // did the setting accept the value?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                // invalid settings keep the bridge diagnostics
+        }
+    }
+    // The setting functions return bool|string, so the accepted boolean becomes one Mixed cell.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                             // pass the boolean payload
+            ctx.emitter.instruction("mov x2, xzr");                            // boolean payloads have no high word
+            ctx.emitter.instruction("mov x0, #3");                             // runtime tag 3 = boolean
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                          // pass the boolean payload
+            ctx.emitter.instruction("xor esi, esi");                          // boolean payloads have no high word
+            ctx.emitter.instruction("mov eax, 3");                            // runtime tag 3 = boolean
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, source, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers `mb_substitute_character()` through its allocation-free C ABI setter.
+fn try_lower_substitute_character(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    source: RuntimeBuiltinId,
+) -> Result<bool> {
+    if inst.operands.len() != 1 {
+        return Ok(false);
+    }
+    load_as_int(ctx, inst.operands[0], "mb_substitute_character")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                           // pass the codepoint as the first SysV argument
+        }
+    }
+    ctx.emitter.bl_c("elephc_mbstring_substitute_character_set_v1");
+    let fallback = ctx.next_label("mb_substitute_fallback");
+    let done = ctx.next_label("mb_substitute_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {fallback}"));          // invalid codepoints keep the bridge diagnostics
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                          // did the setter accept the codepoint?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                // invalid codepoints keep the bridge diagnostics
+        }
+    }
+    // The setting functions return bool|string, so the accepted boolean becomes one Mixed cell.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                             // pass the boolean payload
+            ctx.emitter.instruction("mov x2, xzr");                            // boolean payloads have no high word
+            ctx.emitter.instruction("mov x0, #3");                             // runtime tag 3 = boolean
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                          // pass the boolean payload
+            ctx.emitter.instruction("xor esi, esi");                          // boolean payloads have no high word
+            ctx.emitter.instruction("mov eax, 3");                            // runtime tag 3 = boolean
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, source, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
 }
 
 /// Lowers `mb_preferred_mime_name("UTF-8")` to the same persistent encoding literal.

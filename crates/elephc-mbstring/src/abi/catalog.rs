@@ -47,6 +47,131 @@ pub extern "C" fn elephc_mbstring_internal_encoding_length_v1() -> i64 {
     .unwrap_or(-1)
 }
 
+/// Applies one string setting and reports whether the value was valid.
+///
+/// # Safety
+/// `name` must be null or point to `len` readable bytes for the duration of the call.
+unsafe fn set_string_setting(
+    name: *const u8,
+    len: u64,
+    apply: impl FnOnce(&[u8]) -> bool,
+) -> i32 {
+    if len > isize::MAX as u64 || (len != 0 && name.is_null()) {
+        return 0;
+    }
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(name, len as usize) }
+    };
+    i32::from(apply(bytes))
+}
+
+/// Sets the request internal encoding, returning `1` on success and `0` on validation failure.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_internal_encoding_set_v1(
+    name: *const u8,
+    len: u64,
+) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        set_string_setting(name, len, |bytes| {
+            super::REQUEST.with(|state| state.borrow_mut().set_internal_encoding(bytes).is_ok())
+        })
+    }))
+    .unwrap_or(0)
+}
+
+/// Sets the request language, returning `1` on success and `0` on validation failure.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_language_set_v1(name: *const u8, len: u64) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        set_string_setting(name, len, |bytes| {
+            super::REQUEST.with(|state| state.borrow_mut().set_language(bytes).is_ok())
+        })
+    }))
+    .unwrap_or(0)
+}
+
+/// Sets the HTTP output encoding, returning `1` on success and `0` on validation failure.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_http_output_set_v1(name: *const u8, len: u64) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        set_string_setting(name, len, |bytes| {
+            super::REQUEST.with(|state| state.borrow_mut().set_http_output(bytes).is_ok())
+        })
+    }))
+    .unwrap_or(0)
+}
+
+/// Sets the regex encoding, returning `1` on success and `0` on validation failure.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_regex_encoding_set_v1(name: *const u8, len: u64) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        set_string_setting(name, len, |bytes| {
+            super::REGEX.with(|session| session.set_encoding(bytes).is_ok())
+        })
+    }))
+    .unwrap_or(0)
+}
+
+/// Sets the substitute codepoint, returning `1` on success and `0` on validation failure.
+#[no_mangle]
+pub extern "C" fn elephc_mbstring_substitute_character_set_v1(code: i64) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        i32::from(super::REQUEST.with(|state| state.borrow_mut().set_substitute_codepoint(code).is_ok()))
+    }))
+    .unwrap_or(0)
+}
+
+/// Applies regex options and returns the byte length of the previous option string, or `-1`.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_regex_set_options_len_v1(
+    options: *const u8,
+    len: u64,
+) -> i64 {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        if len > isize::MAX as u64 || (len != 0 && options.is_null()) {
+            return -1;
+        }
+        let bytes = if len == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(options, len as usize)
+        };
+        super::REGEX.with(|session| {
+            session
+                .set_options(bytes)
+                .map(|previous| previous.as_string().len() as i64)
+                .unwrap_or(-1)
+        })
+    }))
+    .unwrap_or(-1)
+}
+
+/// Returns the byte length of the identified HTTP input encoding, or `-1` for unsupported lists.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_http_input_len_v1(
+    selector: *const u8,
+    len: u64,
+) -> i64 {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        if len > isize::MAX as u64 || (len != 0 && selector.is_null()) {
+            return -1;
+        }
+        let bytes = if len == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(selector, len as usize)
+        };
+        match super::REQUEST.with(|state| state.borrow().http_input(Some(bytes))) {
+            Ok(crate::state::InputInformation::Unidentified) => 0,
+            Ok(crate::state::InputInformation::String(name)) => name.len() as i64,
+            Ok(crate::state::InputInformation::List(_)) | Err(_) => -1,
+        }
+    }))
+    .unwrap_or(-1)
+}
+
 /// Returns the number of canonical encodings exposed by `mb_list_encodings()`.
 #[no_mangle]
 pub extern "C" fn elephc_mbstring_list_encodings_count_v1() -> i64 {
