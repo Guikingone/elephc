@@ -469,6 +469,28 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the MIME base64 fast path, the ASCII passthrough, and the bridge fallback for an
+/// ASCII prefix before the first non-ASCII byte.
+#[test]
+fn test_mb_encode_mimeheader_fast_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_encode_mimeheader("héllo", "UTF-8"), "|";
+echo mb_encode_mimeheader("héllo wörld", "UTF-8"), "|";
+echo mb_encode_mimeheader("hello", "UTF-8"), "|";
+echo mb_encode_mimeheader("a b é", "UTF-8"), "|";
+echo mb_encode_mimeheader("日本", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "=?UTF-8?B?aMOpbGxv?=|=?UTF-8?B?aMOpbGxvIHfDtnJsZA==?=|hello|\
+         a b =?UTF-8?B?w6k=?=|=?UTF-8?B?5pel5pys?=|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

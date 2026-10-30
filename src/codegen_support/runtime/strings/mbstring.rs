@@ -31,6 +31,7 @@ mod exception;
 mod invoke;
 mod utf8_strlen;
 mod ascii_case;
+mod mime_b64;
 mod ascii_strstr_len;
 mod utf8_latin1;
 mod numericentity_len;
@@ -73,6 +74,7 @@ pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
     invoke::emit(emitter, mbregex);
     utf8_strlen::emit(emitter);
     ascii_case::emit(emitter);
+    mime_b64::emit(emitter);
     ascii_strstr_len::emit(emitter);
     utf8_latin1::emit(emitter);
     numericentity_len::emit(emitter);
