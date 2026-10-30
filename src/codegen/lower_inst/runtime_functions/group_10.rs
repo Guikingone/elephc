@@ -31,6 +31,9 @@ pub(super) fn lower(
         | RuntimeFnId::MbStrrichrLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strstr_len(ctx, inst, target)
         }),
+        RuntimeFnId::MbConvertEncodingLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_convert_encoding_len(ctx, inst, target)
+        }),
         RuntimeFnId::MbStrSplitCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_str_split_count(ctx, inst, target)
         }),

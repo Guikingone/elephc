@@ -92,6 +92,9 @@ pub(super) fn try_lower(
         RuntimeBuiltinId::MbStrrchr => try_lower_strstr(ctx, inst, operation, "__rt_strrpos"),
         RuntimeBuiltinId::MbStrrichr => try_lower_strstr(ctx, inst, operation, "__rt_strripos"),
         RuntimeBuiltinId::MbScrub => try_lower_scrub(ctx, inst, operation),
+        RuntimeBuiltinId::MbConvertEncoding => {
+            try_lower_convert_encoding(ctx, inst, operation)
+        }
         _ => Ok(false),
     }
 }
@@ -507,6 +510,57 @@ pub(super) fn lower_ord_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     Ok(())
 }
 
+/// Lowers explicit `mb_convert_encoding($s, "ISO-8859-1", "UTF-8")` through a byte converter.
+fn try_lower_convert_encoding(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+) -> Result<bool> {
+    if inst.operands.len() != 3
+        || !explicit_latin1_encoding(ctx, inst.operands[1])?
+        || !super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+    {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_convert_encoding", pointer, length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_utf8_to_latin1");
+    let fallback = ctx.next_label("mb_convert_encoding_latin1_fallback");
+    let done = ctx.next_label("mb_convert_encoding_latin1_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {fallback}"));           // a null result means the bridge must handle it
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                          // did the byte converter accept the subject?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                // a null result means the bridge must handle it
+        }
+    }
+    // `mb_convert_encoding()` returns string|false, so the owned pair becomes one Mixed cell.
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_owned_string");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, operation, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Returns whether the operand is a literal ISO-8859-1/Latin-1 encoding name.
+fn explicit_latin1_encoding(
+    ctx: &FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<bool> {
+    let Some(encoding) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, value)? else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        encoding.to_ascii_uppercase().as_str(),
+        "ISO-8859-1" | "ISO8859-1" | "LATIN1" | "LATIN-1"
+    ))
+}
+
 /// Lowers `mb_scrub()` over an already-valid explicit UTF-8 subject to an owned copy.
 fn try_lower_scrub(
     ctx: &mut FunctionContext<'_>,
@@ -742,6 +796,46 @@ fn move_string_length_to_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rax, rdx");                          // return the produced string's byte length
         }
     }
+}
+
+/// Lowers `strlen(mb_convert_encoding(...))` for an explicit UTF-8 to Latin-1 conversion.
+pub(super) fn lower_convert_encoding_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let fast = inst.operands.len() == 3
+        && explicit_latin1_encoding(ctx, inst.operands[1])?
+        && super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str;
+    if !fast {
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbConvertEncoding, false)?;
+        emit_boxed_string_length(ctx);
+        store_if_result(ctx, inst)?;
+        return Ok(());
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_convert_encoding", pointer, length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_strlen_utf8");
+    let fallback = ctx.next_label("mb_convert_encoding_len_fallback");
+    let done = ctx.next_label("mb_convert_encoding_len_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #-1");                            // did the validator reject malformed UTF-8?
+            ctx.emitter.instruction(&format!("b.eq {fallback}"));             // malformed input keeps the bridge's substitution length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                           // did the validator reject malformed UTF-8?
+            ctx.emitter.instruction(&format!("je {fallback}"));               // malformed input keeps the bridge's substitution length
+        }
+    }
+    // One Latin-1 byte per UTF-8 codepoint, so the codepoint count is the result length.
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbConvertEncoding, false)?;
+    emit_boxed_string_length(ctx);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(())
 }
 
 /// Unboxes a boxed `int|false` result and releases its temporary Mixed cell.

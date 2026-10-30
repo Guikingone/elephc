@@ -32,6 +32,7 @@ mod invoke;
 mod utf8_strlen;
 mod ascii_case;
 mod ascii_strstr_len;
+mod utf8_latin1;
 mod capture_invoke;
 mod deferred_capture;
 mod callbacks;
@@ -72,6 +73,7 @@ pub fn emit_mbstring(emitter: &mut Emitter, eval_bridge: bool, mbregex: bool) {
     utf8_strlen::emit(emitter);
     ascii_case::emit(emitter);
     ascii_strstr_len::emit(emitter);
+    utf8_latin1::emit(emitter);
     capture_invoke::emit(emitter, mbregex);
     callbacks::emit(emitter);
     capture_hash::emit(emitter);

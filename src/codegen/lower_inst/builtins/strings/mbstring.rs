@@ -165,6 +165,15 @@ pub(crate) fn lower_mb_strimwidth_len(
     mbstring_fast::lower_strimwidth_len(ctx, inst)
 }
 
+/// Lowers an allocation-free mbstring conversion length selected by the length sink.
+pub(crate) fn lower_mb_convert_encoding_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_convert_encoding_len(ctx, inst)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;

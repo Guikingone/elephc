@@ -761,6 +761,8 @@ pub enum RuntimeFnId {
     MbDetectEncodingLen,
     /// Converts strings and recursive arrays through the shared mbstring engine.
     MbConvertEncoding,
+    /// Allocation-free `strlen(mb_convert_encoding(...))` for UTF-8 to Latin-1.
+    MbConvertEncodingLen,
     MbEncodeNumericentity,
     MbDecodeNumericentity,
     /// Decodes MIME headers through the shared mbstring engine.
@@ -967,6 +969,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbDetectEncodingLen => Some((2, Some(2))),
             RuntimeFnId::MbChrLen => Some((2, Some(2))),
             RuntimeFnId::MbStrimwidthLen => Some((5, Some(5))),
+            RuntimeFnId::MbConvertEncodingLen => Some((3, Some(3))),
             RuntimeFnId::MbStrposInt
             | RuntimeFnId::MbStriposInt
             | RuntimeFnId::MbStrrposInt
@@ -1859,6 +1862,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbDetectEncodingLen => RuntimeFnId::MbDetectEncoding.effects(),
             RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
             RuntimeFnId::MbStrimwidthLen => RuntimeFnId::MbStrimwidth.effects(),
+            RuntimeFnId::MbConvertEncodingLen => RuntimeFnId::MbConvertEncoding.effects(),
             // The raw mbstring position keeps the bridge search's offset/encoding validation.
             RuntimeFnId::MbStrposInt => RuntimeFnId::MbStrpos.effects(),
             RuntimeFnId::MbStriposInt => RuntimeFnId::MbStripos.effects(),
@@ -3645,6 +3649,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbDetectEncoding => "mb_detect_encoding",
             RuntimeFnId::MbDetectEncodingLen => "mb_detect_encoding_len",
             RuntimeFnId::MbConvertEncoding => "mb_convert_encoding",
+            RuntimeFnId::MbConvertEncodingLen => "mb_convert_encoding_len",
             RuntimeFnId::MbConvertVariables => "mb_convert_variables",
             RuntimeFnId::MbEncodeNumericentity => "mb_encode_numericentity",
             RuntimeFnId::MbDecodeNumericentity => "mb_decode_numericentity",
