@@ -51,6 +51,7 @@ mod mb_strstr_len_const_sink;
 mod mb_numericentity_len_sink;
 mod mb_strimwidth_len_sink;
 mod strstr_len_sink;
+mod token_get_all_count_hoist;
 mod array_sum_loop;
 mod boxed_narrowing;
 mod bounded_mixed_counter;

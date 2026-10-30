@@ -61,6 +61,7 @@ use super::openssl_cbc_len_sink::OpensslCbcLenSink;
 use super::mb_strstr_len_const_sink::MbStrstrLenConstSink;
 use super::mb_strimwidth_len_sink::MbStrimwidthLenSink;
 use super::strstr_len_sink::StrstrLenSink;
+use super::token_get_all_count_hoist::TokenGetAllCountHoist;
 use super::array_map_sum_add_int_sink::ArrayMapSumAddIntSink;
 use super::array_filter_count_hoist::ArrayFilterCountHoist;
 use super::array_map_sum_cache::ArrayMapSumCache;
@@ -204,6 +205,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(MbNumericentityLenSink),
         Box::new(MbStrimwidthLenSink),
         Box::new(StrstrLenSink),
+        Box::new(TokenGetAllCountHoist),
         Box::new(MbStrstrLenConstSink),
         Box::new(Base64DecodeLenSink),
         Box::new(SqrtAddIntSink),
