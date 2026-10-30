@@ -410,6 +410,39 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the numeric-entity, literal-split, regex-replace, and raw-position fast paths.
+#[test]
+fn test_mb_numericentity_and_regex_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r##"<?php
+$map = [0x80, 0x10FFFF, 0, 0x1FFFFF];
+echo strlen(mb_encode_numericentity("héllo wörld", $map, "UTF-8")), "|";
+echo mb_encode_numericentity("€", $map, "UTF-8"), "|";
+echo strlen(mb_encode_numericentity("a\x80b", $map, "UTF-8")), "|";
+echo strlen(mb_decode_numericentity("h&#233;llo w&#246;rld", $map, "UTF-8")), "|";
+echo mb_decode_numericentity("h&#233;llo", $map, "UTF-8"), "|";
+echo strlen(mb_decode_numericentity("a&b", $map, "UTF-8")), "|";
+echo count(mb_split(",", "1,2,3")), "|";
+echo count(mb_split(",", "")), "|";
+echo count(mb_split(",", ",a,")), "|";
+$regexSplit = mb_split("a+", "baaac");
+echo count($regexSplit), "|";
+echo strlen(mb_ereg_replace("[0-9]+", "#", "abc123def456")), "|";
+echo mb_ereg_replace("[0-9]+", "#", "abc123def456"), "|";
+echo strlen(mb_ereg_replace("[0-9]+", "#", "a1b22c333")), "|";
+echo strlen(mb_ereg_replace("[a-z]+", "#", "abc123")), "|";
+echo (int)mb_strpos("abcdef", "cd", 0, "UTF-8"), "|";
+echo (int)mb_strrpos("abcdef", "cd", 0, "UTF-8"), "|";
+echo "\n";
+"##);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "21|&#8364;|3|13|héllo|3|3|1|3|2|8|abc#def#|6|4|2|2|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

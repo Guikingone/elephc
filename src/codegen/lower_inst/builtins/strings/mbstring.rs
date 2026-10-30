@@ -174,6 +174,42 @@ pub(crate) fn lower_mb_convert_encoding_len(
     mbstring_fast::lower_convert_encoding_len(ctx, inst)
 }
 
+/// Lowers an allocation-free numeric-entity encode length selected by the length sink.
+pub(crate) fn lower_mb_encode_numericentity_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_encode_numericentity_len(ctx, inst)
+}
+
+/// Lowers an allocation-free numeric-entity decode length selected by the length sink.
+pub(crate) fn lower_mb_decode_numericentity_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_decode_numericentity_len(ctx, inst)
+}
+
+/// Lowers an allocation-free literal-separator split count selected by the split sink.
+pub(crate) fn lower_mb_split_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_split_count(ctx, inst)
+}
+
+/// Lowers an allocation-free `mb_ereg_replace()` length selected by the length sink.
+pub(crate) fn lower_mb_ereg_replace_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_ereg_replace_len(ctx, inst)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;

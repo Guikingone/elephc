@@ -43,6 +43,7 @@ use super::inet_pton_len_sink::InetPtonLenSink;
 use super::strip_tags_len_sink::StripTagsLenSink;
 use super::strpos_int_sink::StrposIntSink;
 use super::base64_decode_len_sink::Base64DecodeLenSink;
+use super::mb_numericentity_len_sink::MbNumericentityLenSink;
 use super::mb_strimwidth_len_sink::MbStrimwidthLenSink;
 use super::strstr_len_sink::StrstrLenSink;
 use super::array_map_sum_add_int_sink::ArrayMapSumAddIntSink;
@@ -171,6 +172,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ParseUrlCountSink),
         Box::new(StrSplitCountSink),
         Box::new(CountCharsCountSink),
+        Box::new(MbNumericentityLenSink),
         Box::new(MbStrimwidthLenSink),
         Box::new(StrstrLenSink),
         Box::new(Base64DecodeLenSink),

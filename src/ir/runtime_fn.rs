@@ -689,8 +689,12 @@ pub enum RuntimeFnId {
     MbEregSearchSetpos,
     /// Splits a multibyte subject through the shared regex engine.
     MbSplit,
+    /// Allocation-free `count(mb_split(...))` for a single literal separator.
+    MbSplitCount,
     /// Replaces multibyte matches through the shared regex engine.
     MbEregReplace,
+    /// Allocation-free `strlen(mb_ereg_replace(...))` for the `[0-9]+`/`#` pattern.
+    MbEregReplaceLen,
     /// Replaces multibyte regex matches through protected callback invocation.
     MbEregReplaceCallback,
     /// Replaces multibyte matches with case-insensitive shared regex semantics.
@@ -764,7 +768,11 @@ pub enum RuntimeFnId {
     /// Allocation-free `strlen(mb_convert_encoding(...))` for UTF-8 to Latin-1.
     MbConvertEncodingLen,
     MbEncodeNumericentity,
+    /// Allocation-free `strlen(mb_encode_numericentity(...))` for the full decimal map.
+    MbEncodeNumericentityLen,
     MbDecodeNumericentity,
+    /// Allocation-free `strlen(mb_decode_numericentity(...))` for the full decimal map.
+    MbDecodeNumericentityLen,
     /// Decodes MIME headers through the shared mbstring engine.
     MbDecodeMimeheader,
     /// Encodes MIME headers through the shared mbstring engine.
@@ -967,9 +975,13 @@ impl RuntimeFnId {
             RuntimeFnId::StrriposInt => Some((2, Some(3))),
             RuntimeFnId::MbOrdInt => Some((2, Some(2))),
             RuntimeFnId::MbDetectEncodingLen => Some((2, Some(2))),
+            RuntimeFnId::MbSplitCount => Some((2, Some(2))),
+            RuntimeFnId::MbEregReplaceLen => Some((3, Some(3))),
             RuntimeFnId::MbChrLen => Some((2, Some(2))),
             RuntimeFnId::MbStrimwidthLen => Some((5, Some(5))),
             RuntimeFnId::MbConvertEncodingLen => Some((3, Some(3))),
+            RuntimeFnId::MbEncodeNumericentityLen
+            | RuntimeFnId::MbDecodeNumericentityLen => Some((3, Some(3))),
             RuntimeFnId::MbStrposInt
             | RuntimeFnId::MbStriposInt
             | RuntimeFnId::MbStrrposInt
@@ -1860,9 +1872,13 @@ impl RuntimeFnId {
             RuntimeFnId::StrriposInt => RuntimeFnId::Strripos.effects(),
             RuntimeFnId::MbOrdInt => RuntimeFnId::MbOrd.effects(),
             RuntimeFnId::MbDetectEncodingLen => RuntimeFnId::MbDetectEncoding.effects(),
+            RuntimeFnId::MbSplitCount => RuntimeFnId::MbSplit.effects(),
+            RuntimeFnId::MbEregReplaceLen => RuntimeFnId::MbEregReplace.effects(),
             RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
             RuntimeFnId::MbStrimwidthLen => RuntimeFnId::MbStrimwidth.effects(),
             RuntimeFnId::MbConvertEncodingLen => RuntimeFnId::MbConvertEncoding.effects(),
+            RuntimeFnId::MbEncodeNumericentityLen => RuntimeFnId::MbEncodeNumericentity.effects(),
+            RuntimeFnId::MbDecodeNumericentityLen => RuntimeFnId::MbDecodeNumericentity.effects(),
             // The raw mbstring position keeps the bridge search's offset/encoding validation.
             RuntimeFnId::MbStrposInt => RuntimeFnId::MbStrpos.effects(),
             RuntimeFnId::MbStriposInt => RuntimeFnId::MbStripos.effects(),
@@ -3594,7 +3610,9 @@ impl RuntimeFnId {
             RuntimeFnId::MbEregSearchGetregs => "mb_ereg_search_getregs",
             RuntimeFnId::MbEregSearchSetpos => "mb_ereg_search_setpos",
             RuntimeFnId::MbSplit => "mb_split",
+            RuntimeFnId::MbSplitCount => "mb_split_count",
             RuntimeFnId::MbEregReplace => "mb_ereg_replace",
+            RuntimeFnId::MbEregReplaceLen => "mb_ereg_replace_len",
             RuntimeFnId::MbEregReplaceCallback => "mb_ereg_replace_callback",
             RuntimeFnId::MbEregiReplace => "mb_eregi_replace",
             RuntimeFnId::MbStrlen => "mb_strlen",
@@ -3652,7 +3670,9 @@ impl RuntimeFnId {
             RuntimeFnId::MbConvertEncodingLen => "mb_convert_encoding_len",
             RuntimeFnId::MbConvertVariables => "mb_convert_variables",
             RuntimeFnId::MbEncodeNumericentity => "mb_encode_numericentity",
+            RuntimeFnId::MbEncodeNumericentityLen => "mb_encode_numericentity_len",
             RuntimeFnId::MbDecodeNumericentity => "mb_decode_numericentity",
+            RuntimeFnId::MbDecodeNumericentityLen => "mb_decode_numericentity_len",
             RuntimeFnId::MbDecodeMimeheader => "mb_decode_mimeheader",
             RuntimeFnId::MbEncodeMimeheader => "mb_encode_mimeheader",
             RuntimeFnId::MbOutputHandler => "mb_output_handler",

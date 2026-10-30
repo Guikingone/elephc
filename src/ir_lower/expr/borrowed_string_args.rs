@@ -147,6 +147,8 @@ fn borrowable_string_read_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbCheckEncoding
             | RuntimeFnId::MbDetectEncoding
             | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbEncodeNumericentity
+            | RuntimeFnId::MbDecodeNumericentity
             | RuntimeFnId::MbSplit
             | RuntimeFnId::MbEregReplace
     )
@@ -181,8 +183,10 @@ fn safe_read(ctx: &LoweringContext<'_, '_>, expr: &Expr, string: bool, property_
                 let representation = ctx.local_type(name).codegen_repr();
                 if string {
                     representation == PhpType::Str
+                } else if matches!(representation, PhpType::Int | PhpType::Bool | PhpType::Float) {
+                    true
                 } else {
-                    matches!(representation, PhpType::Int | PhpType::Bool | PhpType::Float)
+                    matches!(&representation, PhpType::Array(inner) if inner.codegen_repr() == PhpType::Int)
                 }
             },
         ExprKind::PropertyAccess { object, property } if string && property_allowed => {

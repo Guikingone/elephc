@@ -121,7 +121,11 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
     let Some(call) = function.instruction_mut(candidate) else {
         return false;
     };
-    let Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(current))) = call.immediate else {
+    let Some(Immediate::RuntimeCall(
+        RuntimeCallTarget::Function(current)
+        | RuntimeCallTarget::ProfiledFunction { target: current, .. },
+    )) = call.immediate
+    else {
         return false;
     };
     let Some(raw) = raw_variant(current) else {

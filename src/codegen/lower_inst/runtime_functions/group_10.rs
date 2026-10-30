@@ -31,6 +31,18 @@ pub(super) fn lower(
         | RuntimeFnId::MbStrrichrLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strstr_len(ctx, inst, target)
         }),
+        RuntimeFnId::MbSplitCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_split_count(ctx, inst, target)
+        }),
+        RuntimeFnId::MbEregReplaceLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_ereg_replace_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbEncodeNumericentityLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_encode_numericentity_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbDecodeNumericentityLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_decode_numericentity_len(ctx, inst, target)
+        }),
         RuntimeFnId::MbConvertEncodingLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_convert_encoding_len(ctx, inst, target)
         }),

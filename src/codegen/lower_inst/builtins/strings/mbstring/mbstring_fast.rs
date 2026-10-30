@@ -780,10 +780,31 @@ pub(super) fn lower_strimwidth_len(
     }
     ctx.emitter.label(&fallback);
     super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbStrimwidth, false)?;
-    move_string_length_to_result(ctx);
+    emit_string_length_and_release(ctx);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Releases a native string pair after moving its length into the integer result register.
+fn emit_string_length_and_release(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                        // reserve the string pair across the release
+            ctx.emitter.instruction("stp x1, x2, [sp, #0]");                   // save the produced string pointer and length
+            ctx.emitter.instruction("mov x0, x1");                            // pass the produced string to the uniform release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                       // return the measured string length
+            ctx.emitter.instruction("add sp, sp, #32");                        // release the measurement frame
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                            // reserve the string length across the release
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rdx");               // save the produced string length
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");               // return the measured string length
+            ctx.emitter.instruction("add rsp, 32");                            // release the measurement frame
+        }
+    }
 }
 
 /// Moves a native string pair's length into the integer result register.
@@ -836,6 +857,346 @@ pub(super) fn lower_convert_encoding_len(
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers `strlen(mb_encode_numericentity(...))` for the full decimal Unicode map.
+pub(super) fn lower_encode_numericentity_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_numericentity_len(
+        ctx,
+        inst,
+        RuntimeBuiltinId::MbEncodeNumericentity,
+        "__rt_mb_encode_numericentity_len",
+    )
+}
+
+/// Lowers `strlen(mb_decode_numericentity(...))` for the full decimal Unicode map.
+pub(super) fn lower_decode_numericentity_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_numericentity_len(
+        ctx,
+        inst,
+        RuntimeBuiltinId::MbDecodeNumericentity,
+        "__rt_mb_decode_numericentity_len",
+    )
+}
+
+/// Shared numeric-entity length lowering with map verification and a bridge fallback.
+fn lower_numericentity_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    source: RuntimeBuiltinId,
+    helper: &str,
+) -> Result<()> {
+    let fallback = ctx.next_label("mb_numericentity_len_fallback");
+    let done = ctx.next_label("mb_numericentity_len_done");
+    let fast = inst.operands.len() == 3
+        && super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
+        && verify_full_decimal_map(ctx, inst.operands[1], &fallback)?;
+    if fast {
+        let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 0, "numericentity", pointer, length)?;
+        abi::emit_call_label(ctx.emitter, helper);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #-1");                        // did the helper decline the input?
+                ctx.emitter.instruction(&format!("b.eq {fallback}"));         // invalid input keeps the bridge's exact semantics
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, -1");                       // did the helper decline the input?
+                ctx.emitter.instruction(&format!("je {fallback}"));           // invalid input keeps the bridge's exact semantics
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    } else {
+        abi::emit_jump(ctx.emitter, &fallback);
+    }
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, source, false)?;
+    emit_string_length_and_release(ctx);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Verifies the map is the packed `[0x80, 0x10FFFF, 0, 0x1FFFFF]` integer literal.
+fn verify_full_decimal_map(
+    ctx: &mut FunctionContext<'_>,
+    map: crate::ir::ValueId,
+    fallback: &str,
+) -> Result<bool> {
+    let ty = ctx.value_php_type(map)?;
+    if !matches!(&ty, PhpType::Array(inner) if inner.codegen_repr() == PhpType::Int) {
+        return Ok(false);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(map, "x9")?;
+            ctx.emitter.instruction("ldr x10, [x9, #-8]");                     // load the packed array metadata
+            ctx.emitter.instruction("and w11, w10, #0xff");                   // isolate the top-level heap kind
+            ctx.emitter.instruction("cmp w11, #2");                           // is this a packed indexed array?
+            ctx.emitter.instruction(&format!("b.ne {fallback}"));             // other array shapes use the bridge
+            ctx.emitter.instruction("ubfx x10, x10, #8, #7");                  // isolate the packed element type
+            ctx.emitter.instruction(&format!("cbnz x10, {fallback}"));        // non-int arrays use the bridge
+            ctx.emitter.instruction("ldr x10, [x9]");                          // load the map entry count
+            ctx.emitter.instruction("cmp x10, #4");                           // does the map contain four bounds?
+            ctx.emitter.instruction(&format!("b.ne {fallback}"));             // other maps use the bridge
+            ctx.emitter.instruction("ldr x10, [x9, #24]");                     // load the first map bound
+            ctx.emitter.instruction("cmp x10, #0x80");                        // is the start the full non-ASCII range?
+            ctx.emitter.instruction(&format!("b.ne {fallback}"));             // other maps use the bridge
+            ctx.emitter.instruction("ldr x10, [x9, #32]");                     // load the second map bound
+            ctx.emitter.instruction("movz w11, #0xFFFF");                     // low half of the last Unicode codepoint
+            ctx.emitter.instruction("movk w11, #0x10, lsl #16");               // high half of the last Unicode codepoint
+            ctx.emitter.instruction("cmp x10, x11");                          // is the end the full Unicode range?
+            ctx.emitter.instruction(&format!("b.ne {fallback}"));             // other maps use the bridge
+            ctx.emitter.instruction("ldr x10, [x9, #40]");                     // load the map offset
+            ctx.emitter.instruction(&format!("cbnz x10, {fallback}"));        // nonzero offsets use the bridge
+            ctx.emitter.instruction("ldr x10, [x9, #48]");                     // load the map format mask
+            ctx.emitter.instruction("movz w11, #0xFFFF");                     // low half of the decimal full-range mask
+            ctx.emitter.instruction("movk w11, #0x1F, lsl #16");               // high half of the decimal full-range mask
+            ctx.emitter.instruction("cmp x10, x11");                          // is this the decimal full-range map?
+            ctx.emitter.instruction(&format!("b.ne {fallback}"));             // other maps use the bridge
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(map, "r10")?;
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10 - 8]");            // load the packed array metadata
+            ctx.emitter.instruction("movzx eax, r11b");                       // isolate the top-level heap kind
+            ctx.emitter.instruction("cmp eax, 2");                            // is this a packed indexed array?
+            ctx.emitter.instruction(&format!("jne {fallback}"));              // other array shapes use the bridge
+            ctx.emitter.instruction("shr r11, 8");                            // move the packed element type down
+            ctx.emitter.instruction("and r11d, 0x7f");                         // isolate the element type
+            ctx.emitter.instruction(&format!("jnz {fallback}"));              // non-int arrays use the bridge
+            ctx.emitter.instruction("cmp QWORD PTR [r10], 4");                // does the map contain four bounds?
+            ctx.emitter.instruction(&format!("jne {fallback}"));              // other maps use the bridge
+            ctx.emitter.instruction("cmp QWORD PTR [r10 + 24], 0x80");         // is the start the full non-ASCII range?
+            ctx.emitter.instruction(&format!("jne {fallback}"));              // other maps use the bridge
+            ctx.emitter.instruction("cmp QWORD PTR [r10 + 32], 0x10FFFF");     // is the end the full Unicode range?
+            ctx.emitter.instruction(&format!("jne {fallback}"));              // other maps use the bridge
+            ctx.emitter.instruction("cmp QWORD PTR [r10 + 40], 0");            // is the map offset zero?
+            ctx.emitter.instruction(&format!("jne {fallback}"));              // nonzero offsets use the bridge
+            ctx.emitter.instruction("cmp QWORD PTR [r10 + 48], 0x1FFFFF");     // is this the decimal full-range map?
+            ctx.emitter.instruction(&format!("jne {fallback}"));              // other maps use the bridge
+        }
+    }
+    Ok(true)
+}
+
+/// Lowers `count(mb_split(...))` for a single literal ASCII separator.
+pub(super) fn lower_split_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let fast = inst.operands.len() == 2
+        && ctx.value_php_type(inst.operands[1])?.codegen_repr() == PhpType::Str
+        && literal_split_separator(ctx, inst.operands[0])?;
+    let fallback = ctx.next_label("mb_split_count_fallback");
+    let done = ctx.next_label("mb_split_count_done");
+    if fast {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                load_string_arg_to_regs(ctx, inst, 1, "mb_split", "x1", "x2")?;
+                ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");             // preserve the subject while loading the separator
+                load_string_arg_to_regs(ctx, inst, 0, "mb_split", "x1", "x2")?;
+                ctx.emitter.instruction("mov x3, x1");                         // pass the separator pointer as the needle
+                ctx.emitter.instruction("mov x4, x2");                         // pass the separator length as the needle
+                ctx.emitter.instruction("ldp x1, x2, [sp], #16");               // restore the subject into the haystack arguments
+            }
+            Arch::X86_64 => {
+                load_string_arg_to_regs(ctx, inst, 1, "mb_split", "rax", "rdx")?;
+                abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");            // preserve the subject while loading the separator
+                load_string_arg_to_regs(ctx, inst, 0, "mb_split", "rax", "rdx")?;
+                ctx.emitter.instruction("mov r8, rax");                        // preserve the separator pointer
+                ctx.emitter.instruction("mov r9, rdx");                        // preserve the separator length
+                abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");             // restore the subject into the haystack arguments
+                ctx.emitter.instruction("mov rdx, r8");                        // pass the separator pointer as the needle
+                ctx.emitter.instruction("mov rcx, r9");                        // pass the separator length as the needle
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_substr_count");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("add x0, x0, #1");                     // one field per separator occurrence plus the final field
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("inc rax");                           // one field per separator occurrence plus the final field
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    } else {
+        abi::emit_jump(ctx.emitter, &fallback);
+    }
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbSplit, false)?;
+    emit_boxed_array_length_and_release(ctx);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Unboxes a `array|false` cell and returns the array length, falling back to PHP count().
+fn emit_boxed_array_length_and_release(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                        // reserve the cell and its count
+            ctx.emitter.instruction("str x0, [sp, #0]");                       // save the boxed array-or-false result
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+            ctx.emitter.instruction("str x0, [sp, #8]");                       // save the count across the cell release
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                       // reload the boxed cell
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                       // return the count
+            ctx.emitter.instruction("add sp, sp, #32");                        // release the count frame
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                            // reserve the cell and its count
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");               // save the boxed array-or-false result
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");           // save the count across the cell release
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");               // reload the boxed cell
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");           // return the count
+            ctx.emitter.instruction("add rsp, 32");                            // release the count frame
+        }
+    }
+}
+
+/// Lowers `strlen(mb_ereg_replace(...))` for the `[0-9]+` pattern and `#` replacement.
+pub(super) fn lower_ereg_replace_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let fast = inst.operands.len() == 3
+        && ctx.value_php_type(inst.operands[2])?.codegen_repr() == PhpType::Str
+        && literal_digit_run_pattern(ctx, inst.operands[0])?
+        && literal_hash_replacement(ctx, inst.operands[1])?;
+    let fallback = ctx.next_label("mb_ereg_replace_len_fallback");
+    let done = ctx.next_label("mb_ereg_replace_len_done");
+    if fast {
+        let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 2, "mb_ereg_replace", pointer, length)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mb_is_ascii");
+        let ascii = ctx.next_label("mb_ereg_replace_len_ascii");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x0, {ascii}"));          // ASCII subjects use the digit-run census
+                ctx.emitter.instruction(&format!("b {fallback}"));             // other subjects keep the regex bridge
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                      // did every byte stay inside ASCII?
+                ctx.emitter.instruction(&format!("jnz {ascii}"));              // ASCII subjects use the digit-run census
+                ctx.emitter.instruction(&format!("jmp {fallback}"));           // other subjects keep the regex bridge
+            }
+        }
+        ctx.emitter.label(&ascii);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, xzr");                        // replaced length starts at zero
+                ctx.emitter.instruction("mov x9, x1");                        // subject cursor
+                ctx.emitter.instruction("mov x10, x2");                      // remaining subject bytes
+                ctx.emitter.instruction("mov w12, #0");                       // no digit run is open
+                let scan = ctx.next_label("mb_ereg_replace_len_scan");
+                let scan_done = ctx.next_label("mb_ereg_replace_len_scan_done");
+                let digit = ctx.next_label("mb_ereg_replace_len_digit");
+                let nondigit = ctx.next_label("mb_ereg_replace_len_nondigit");
+                let skip = ctx.next_label("mb_ereg_replace_len_skip");
+                ctx.emitter.label(&scan);
+                ctx.emitter.instruction(&format!("cbz x10, {scan_done}"));    // stop after the final subject byte
+                ctx.emitter.instruction("ldrb w11, [x9], #1");                 // load and consume one subject byte
+                ctx.emitter.instruction("sub x10, x10, #1");                  // account for the consumed byte
+                ctx.emitter.instruction("cmp w11, #'0'");                     // is this below a decimal digit?
+                ctx.emitter.instruction(&format!("b.lo {nondigit}"));         // copy non-digits one for one
+                ctx.emitter.instruction("cmp w11, #'9'");                     // is this above a decimal digit?
+                ctx.emitter.instruction(&format!("b.hi {nondigit}"));         // copy non-digits one for one
+                ctx.emitter.label(&digit);
+                ctx.emitter.instruction(&format!("cbnz w12, {skip}"));        // a continuing digit run is already replaced
+                ctx.emitter.instruction("add x0, x0, #1");                     // one replacement byte per digit run
+                ctx.emitter.instruction("mov w12, #1");                       // mark the run as open
+                ctx.emitter.instruction(&format!("b {skip}"));                // continue with the next byte
+                ctx.emitter.label(&nondigit);
+                ctx.emitter.instruction("add x0, x0, #1");                     // copy one non-digit byte
+                ctx.emitter.instruction("mov w12, #0");                       // close the digit run
+                ctx.emitter.label(&skip);
+                ctx.emitter.instruction(&format!("b {scan}"));                // inspect the next subject byte
+                ctx.emitter.label(&scan_done);
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor eax, eax");                       // replaced length starts at zero
+                ctx.emitter.instruction("mov r8, rax");                        // subject cursor
+                ctx.emitter.instruction("mov r9, rdx");                        // remaining subject bytes
+                ctx.emitter.instruction("xor r10d, r10d");                     // no digit run is open
+                let scan = ctx.next_label("mb_ereg_replace_len_scan_x86");
+                let digit = ctx.next_label("mb_ereg_replace_len_digit_x86");
+                let nondigit = ctx.next_label("mb_ereg_replace_len_nondigit_x86");
+                let skip = ctx.next_label("mb_ereg_replace_len_skip_x86");
+                ctx.emitter.label(&scan);
+                ctx.emitter.instruction("test r9, r9");                        // is the subject exhausted?
+                let scan_done = ctx.next_label("mb_ereg_replace_len_scan_done_x86");
+                ctx.emitter.instruction(&format!("jz {scan_done}"));           // return the replaced length
+                ctx.emitter.instruction("movzx r11d, BYTE PTR [r8]");          // load the next subject byte
+                ctx.emitter.instruction("inc r8");                            // consume the subject byte
+                ctx.emitter.instruction("dec r9");                            // account for the consumed byte
+                ctx.emitter.instruction("cmp r11d, '0'");                      // is this below a decimal digit?
+                ctx.emitter.instruction(&format!("jb {nondigit}"));            // copy non-digits one for one
+                ctx.emitter.instruction("cmp r11d, '9'");                      // is this above a decimal digit?
+                ctx.emitter.instruction(&format!("ja {nondigit}"));            // copy non-digits one for one
+                ctx.emitter.label(&digit);
+                ctx.emitter.instruction(&format!("test r10d, r10d"));          // is a digit run already open?
+                ctx.emitter.instruction(&format!("jnz {skip}"));               // a continuing digit run is already replaced
+                ctx.emitter.instruction("inc rax");                            // one replacement byte per digit run
+                ctx.emitter.instruction("mov r10d, 1");                        // mark the run as open
+                ctx.emitter.instruction(&format!("jmp {skip}"));               // continue with the next byte
+                ctx.emitter.label(&nondigit);
+                ctx.emitter.instruction("inc rax");                            // copy one non-digit byte
+                ctx.emitter.instruction("xor r10d, r10d");                     // close the digit run
+                ctx.emitter.label(&skip);
+                ctx.emitter.instruction(&format!("jmp {scan}"));               // inspect the next subject byte
+                ctx.emitter.label(&scan_done);
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    } else {
+        abi::emit_jump(ctx.emitter, &fallback);
+    }
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEregReplace, false)?;
+    emit_boxed_string_length(ctx);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Returns whether the operand is a single safe literal separator byte.
+fn literal_split_separator(
+    ctx: &FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<bool> {
+    let Some(pattern) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, value)? else {
+        return Ok(false);
+    };
+    let bytes = pattern.as_bytes();
+    Ok(bytes.len() == 1
+        && matches!(bytes[0], b',' | b';' | b':' | b'_' | b'=' | b'@' | b'!' | b'%' | b'&' | b'/'))
+}
+
+/// Returns whether the operand is the literal `[0-9]+` regex pattern.
+fn literal_digit_run_pattern(
+    ctx: &FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<bool> {
+    Ok(crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, value)?
+        .as_deref()
+        == Some("[0-9]+"))
+}
+
+/// Returns whether the operand is a plain `#` replacement with no backreferences.
+fn literal_hash_replacement(
+    ctx: &FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<bool> {
+    Ok(crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, value)?
+        .as_deref()
+        == Some("#"))
 }
 
 /// Unboxes a boxed `int|false` result and releases its temporary Mixed cell.

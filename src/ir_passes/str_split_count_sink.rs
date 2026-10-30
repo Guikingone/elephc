@@ -37,7 +37,7 @@ impl IrPass for StrSplitCountSink {
     }
 
     /// Specializes every independently proven call.
-    fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
+    fn run(&self, function: &mut Function, data: &mut DataPool) -> bool {
         let candidates: Vec<InstId> = function
             .instructions
             .iter()
@@ -47,7 +47,7 @@ impl IrPass for StrSplitCountSink {
             .collect();
         let mut changed = false;
         for candidate in candidates {
-            if specialize(function, candidate) {
+            if specialize(function, candidate, data) {
                 changed = true;
             }
         }
@@ -68,6 +68,24 @@ fn is_count_call(inst: &crate::ir::Instruction) -> bool {
         && inst.result.is_some()
 }
 
+/// Returns whether a value is a single literal separator byte with no regex meaning.
+fn literal_split_separator(function: &Function, data: &DataPool, value: ValueId) -> bool {
+    let Some(definition) = function.value(value) else { return false };
+    let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
+        return false;
+    };
+    let Some(inst) = function.instruction(inst) else { return false };
+    let (Op::ConstStr, Some(Immediate::Data(data_id))) = (inst.op, &inst.immediate) else {
+        return false;
+    };
+    let Some(pattern) = data.strings.get(data_id.as_raw() as usize) else {
+        return false;
+    };
+    let bytes = pattern.as_bytes();
+    bytes.len() == 1
+        && matches!(bytes[0], b',' | b';' | b':' | b'_' | b'=' | b'@' | b'!' | b'%' | b'&' | b'/')
+}
+
 /// Returns the runtime target of a direct or profiled call instruction.
 fn direct_target(inst: &crate::ir::Instruction) -> Option<RuntimeFnId> {
     match inst.immediate {
@@ -80,7 +98,7 @@ fn direct_target(inst: &crate::ir::Instruction) -> Option<RuntimeFnId> {
 }
 
 /// Specializes one count call after proving the split array has no other observer.
-fn specialize(function: &mut Function, count_id: InstId) -> bool {
+fn specialize(function: &mut Function, count_id: InstId, data: &DataPool) -> bool {
     let Some(count) = function.instruction(count_id) else {
         return false;
     };
@@ -96,6 +114,14 @@ fn specialize(function: &mut Function, count_id: InstId) -> bool {
     let (count_target, arity_ok) = match split_target {
         RuntimeFnId::StrSplit => (RuntimeFnId::StrSplitCount, matches!(split.operands.len(), 1 | 2)),
         RuntimeFnId::MbStrSplit => (RuntimeFnId::MbStrSplitCount, matches!(split.operands.len(), 2 | 3)),
+        RuntimeFnId::MbSplit => (
+            RuntimeFnId::MbSplitCount,
+            split.operands.len() == 2
+                && split
+                    .operands
+                    .first()
+                    .is_some_and(|pattern| literal_split_separator(function, data, *pattern)),
+        ),
         _ => return false,
     };
     if split.op != Op::RuntimeCall || !arity_ok {
