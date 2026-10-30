@@ -41,6 +41,12 @@ pub(super) fn lower(
         | RuntimeFnId::MbSubstituteCharacterInt => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_setting_int(ctx, inst, target)
         }),
+        RuntimeFnId::MbHttpInputLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_http_input_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbRegexSetOptionsLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_regex_set_options_len(ctx, inst, target)
+        }),
         RuntimeFnId::MbGetInfoLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_get_info_len(ctx, inst, target)
         }),

@@ -801,12 +801,16 @@ pub enum RuntimeFnId {
     SharedIni,
     /// Reads recorded HTTP input identification and configured encoding names.
     MbHttpInput,
+    /// Allocation-free `strlen(mb_http_input(...))` for the identified encoding name.
+    MbHttpInputLen,
     /// Reads or changes the shared multibyte regex encoding.
     MbRegexEncoding,
     /// Raw `(int)mb_regex_encoding(...)` selected by the integer cast sink.
     MbRegexEncodingInt,
     /// Reads or changes the shared multibyte regex option defaults.
     MbRegexSetOptions,
+    /// Allocation-free `strlen(mb_regex_set_options(...))` for the previous option string.
+    MbRegexSetOptionsLen,
     Md5,
     NumberFormat,
     Ord,
@@ -997,6 +1001,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbEncodingAliasesCount => Some((1, Some(1))),
             RuntimeFnId::MbListEncodingsCount => Some((0, Some(0))),
             RuntimeFnId::MbGetInfoLen => Some((1, Some(1))),
+            RuntimeFnId::MbHttpInputLen | RuntimeFnId::MbRegexSetOptionsLen => Some((1, Some(1))),
             RuntimeFnId::MbInternalEncodingInt
             | RuntimeFnId::MbLanguageInt
             | RuntimeFnId::MbHttpOutputInt
@@ -1903,6 +1908,8 @@ impl RuntimeFnId {
             RuntimeFnId::MbEncodingAliasesCount => RuntimeFnId::MbEncodingAliases.effects(),
             RuntimeFnId::MbListEncodingsCount => RuntimeFnId::MbListEncodings.effects(),
             RuntimeFnId::MbGetInfoLen => RuntimeFnId::MbGetInfo.effects(),
+            RuntimeFnId::MbHttpInputLen => RuntimeFnId::MbHttpInput.effects(),
+            RuntimeFnId::MbRegexSetOptionsLen => RuntimeFnId::MbRegexSetOptions.effects(),
             RuntimeFnId::MbInternalEncodingInt => RuntimeFnId::MbInternalEncoding.effects(),
             RuntimeFnId::MbLanguageInt => RuntimeFnId::MbLanguage.effects(),
             RuntimeFnId::MbHttpOutputInt => RuntimeFnId::MbHttpOutput.effects(),
@@ -3726,9 +3733,11 @@ impl RuntimeFnId {
             RuntimeFnId::MbParseStr => "mb_parse_str",
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",
+            RuntimeFnId::MbHttpInputLen => "mb_http_input_len",
             RuntimeFnId::MbRegexEncoding => "mb_regex_encoding",
             RuntimeFnId::MbRegexEncodingInt => "mb_regex_encoding_int",
             RuntimeFnId::MbRegexSetOptions => "mb_regex_set_options",
+            RuntimeFnId::MbRegexSetOptionsLen => "mb_regex_set_options_len",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",

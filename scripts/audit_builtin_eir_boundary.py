@@ -95,6 +95,8 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "MbHttpOutputInt",
     "MbRegexEncodingInt",
     "MbSubstituteCharacterInt",
+    "MbHttpInputLen",
+    "MbRegexSetOptionsLen",
     "JsonEncodeStr",
     "JsonDecodeCount",
     "ArrayElementTypeCheck",

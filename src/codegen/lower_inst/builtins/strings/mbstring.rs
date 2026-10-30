@@ -288,6 +288,24 @@ pub(crate) fn lower_mb_setting_int(
     mbstring_fast::lower_setting_int(ctx, inst, source, helper, string_arg)
 }
 
+/// Lowers an allocation-free mbstring regex option length selected by the length sink.
+pub(crate) fn lower_mb_regex_set_options_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_regex_set_options_len(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring HTTP input length selected by the length sink.
+pub(crate) fn lower_mb_http_input_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_http_input_len(ctx, inst)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;

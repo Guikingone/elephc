@@ -1491,6 +1491,96 @@ pub(super) fn lower_list_encodings_count(
     Ok(())
 }
 
+/// Lowers `strlen(mb_regex_set_options(...))` through the allocation-free option length query.
+pub(super) fn lower_regex_set_options_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() == 1 {
+        let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 0, "mb_regex_set_options", pointer, length)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                         // pass the option pointer as the first C argument
+                ctx.emitter.instruction("mov x1, x2");                         // pass the option length as the second C argument
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                      // pass the option pointer as the first SysV argument
+                ctx.emitter.instruction("mov rsi, rdx");                      // pass the option length as the second SysV argument
+            }
+        }
+        ctx.emitter.bl_c("elephc_mbstring_regex_set_options_len_v1");
+        let fallback = ctx.next_label("mb_regex_set_options_len_fallback");
+        let done = ctx.next_label("mb_regex_set_options_len_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #0");                         // did the option parser accept the value?
+                ctx.emitter.instruction(&format!("b.lt {fallback}"));          // invalid options keep the bridge diagnostics
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                      // did the option parser accept the value?
+                ctx.emitter.instruction(&format!("js {fallback}"));            // invalid options keep the bridge diagnostics
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&fallback);
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbRegexSetOptions, false)?;
+        emit_string_length_and_release(ctx);
+        ctx.emitter.label(&done);
+        store_if_result(ctx, inst)?;
+        return Ok(());
+    }
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbRegexSetOptions, false)?;
+    emit_string_length_and_release(ctx);
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Lowers `strlen(mb_http_input(...))` through the allocation-free input length query.
+pub(super) fn lower_http_input_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() == 1 {
+        let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 0, "mb_http_input", pointer, length)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                         // pass the selector pointer as the first C argument
+                ctx.emitter.instruction("mov x1, x2");                         // pass the selector length as the second C argument
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                      // pass the selector pointer as the first SysV argument
+                ctx.emitter.instruction("mov rsi, rdx");                      // pass the selector length as the second SysV argument
+            }
+        }
+        ctx.emitter.bl_c("elephc_mbstring_http_input_len_v1");
+        let fallback = ctx.next_label("mb_http_input_len_fallback");
+        let done = ctx.next_label("mb_http_input_len_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #0");                         // did the selector resolve to one string?
+                ctx.emitter.instruction(&format!("b.lt {fallback}"));          // lists and invalid selectors keep the bridge
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                      // did the selector resolve to one string?
+                ctx.emitter.instruction(&format!("js {fallback}"));            // lists and invalid selectors keep the bridge
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&fallback);
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbHttpInput, false)?;
+        emit_boxed_string_length(ctx);
+        ctx.emitter.label(&done);
+        store_if_result(ctx, inst)?;
+        return Ok(());
+    }
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbHttpInput, false)?;
+    emit_boxed_string_length(ctx);
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
 /// Lowers `strlen(mb_get_info("internal_encoding"))` through the catalog length query.
 pub(super) fn lower_get_info_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() == 1 {

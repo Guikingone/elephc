@@ -460,10 +460,12 @@ echo (int)mb_substitute_character(0xFFFD), "|";
 echo mb_internal_encoding(), "|";
 echo mb_http_output(), "|";
 echo mb_regex_encoding(), "|";
+echo strlen((string)mb_regex_set_options("r")), "|";
+echo strlen((string)mb_http_input("G")), "|";
 echo "\n";
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "1|1|1|1|1|UTF-8|pass|UTF-8|\n");
+    assert_eq!(out.stdout, "1|1|1|1|1|UTF-8|pass|UTF-8|2|0|\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

@@ -80,10 +80,16 @@ fn specialize(function: &mut Function, length_id: InstId) -> bool {
     let Some((call_id, call)) = defining_instruction_with_id(function, string_value) else {
         return false;
     };
-    if call.op != Op::RuntimeCall
-        || direct_target(call) != Some(RuntimeFnId::MbStrimwidth)
-        || call.operands.len() != 5
-    {
+    let length_target = match direct_target(call) {
+        Some(RuntimeFnId::MbStrimwidth) if call.operands.len() == 5 => {
+            RuntimeFnId::MbStrimwidthLen
+        }
+        Some(RuntimeFnId::MbRegexSetOptions) if call.operands.len() == 1 => {
+            RuntimeFnId::MbRegexSetOptionsLen
+        }
+        _ => return false,
+    };
+    if call.op != Op::RuntimeCall {
         return false;
     }
     let mut releases = Vec::new();
@@ -114,12 +120,12 @@ fn specialize(function: &mut Function, length_id: InstId) -> bool {
         return false;
     };
     call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        RuntimeFnId::MbStrimwidthLen,
+        length_target,
     )));
     call.result_type = IrType::I64;
     call.result_php_type = PhpType::Int;
     call.result_ownership = Ownership::NonHeap;
-    call.effects = RuntimeFnId::MbStrimwidthLen.intrinsic_effects();
+    call.effects = length_target.intrinsic_effects();
     if let Some(value) = function.value_mut(string_value) {
         value.ir_type = IrType::I64;
         value.php_type = PhpType::Int;

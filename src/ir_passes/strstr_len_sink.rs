@@ -66,7 +66,7 @@ fn is_boxed_strstr(inst: &crate::ir::Instruction) -> bool {
         | RuntimeFnId::MbStrrchr
         | RuntimeFnId::MbStrrichr => inst.operands.len() == 4,
         RuntimeFnId::MbDetectEncoding | RuntimeFnId::MbChr => inst.operands.len() == 2,
-        RuntimeFnId::MbPreferredMimeName | RuntimeFnId::MbGetInfo => inst.operands.len() == 1,
+        RuntimeFnId::MbPreferredMimeName | RuntimeFnId::MbGetInfo | RuntimeFnId::MbHttpInput => inst.operands.len() == 1,
         RuntimeFnId::MbConvertEncoding | RuntimeFnId::MbEregReplace => inst.operands.len() == 3,
         _ => return false,
     };
@@ -169,6 +169,7 @@ fn length_variant(target: RuntimeFnId) -> Option<RuntimeFnId> {
         RuntimeFnId::MbDetectEncoding => Some(RuntimeFnId::MbDetectEncodingLen),
         RuntimeFnId::MbPreferredMimeName => Some(RuntimeFnId::MbPreferredMimeNameLen),
         RuntimeFnId::MbGetInfo => Some(RuntimeFnId::MbGetInfoLen),
+        RuntimeFnId::MbHttpInput => Some(RuntimeFnId::MbHttpInputLen),
         RuntimeFnId::MbChr => Some(RuntimeFnId::MbChrLen),
         RuntimeFnId::MbConvertEncoding => Some(RuntimeFnId::MbConvertEncodingLen),
         RuntimeFnId::MbEregReplace => Some(RuntimeFnId::MbEregReplaceLen),
