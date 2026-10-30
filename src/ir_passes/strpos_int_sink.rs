@@ -69,6 +69,11 @@ fn is_boxed_position(inst: &crate::ir::Instruction) -> bool {
         | RuntimeFnId::MbStrripos
         | RuntimeFnId::MbStrrpos => inst.operands.len() == 4,
         RuntimeFnId::MbOrd => inst.operands.len() == 2,
+        RuntimeFnId::MbInternalEncoding
+        | RuntimeFnId::MbLanguage
+        | RuntimeFnId::MbHttpOutput
+        | RuntimeFnId::MbRegexEncoding
+        | RuntimeFnId::MbSubstituteCharacter => inst.operands.len() == 1,
         _ => return false,
     };
     inst.op == Op::RuntimeCall
@@ -101,6 +106,11 @@ fn raw_variant(target: RuntimeFnId) -> Option<RuntimeFnId> {
         RuntimeFnId::MbStrripos => Some(RuntimeFnId::MbStrriposInt),
         RuntimeFnId::MbStrrpos => Some(RuntimeFnId::MbStrrposInt),
         RuntimeFnId::MbOrd => Some(RuntimeFnId::MbOrdInt),
+        RuntimeFnId::MbInternalEncoding => Some(RuntimeFnId::MbInternalEncodingInt),
+        RuntimeFnId::MbLanguage => Some(RuntimeFnId::MbLanguageInt),
+        RuntimeFnId::MbHttpOutput => Some(RuntimeFnId::MbHttpOutputInt),
+        RuntimeFnId::MbRegexEncoding => Some(RuntimeFnId::MbRegexEncodingInt),
+        RuntimeFnId::MbSubstituteCharacter => Some(RuntimeFnId::MbSubstituteCharacterInt),
         RuntimeFnId::Ip2long => Some(RuntimeFnId::Ip2longInt),
         _ => None,
     }

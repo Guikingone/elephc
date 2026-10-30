@@ -246,6 +246,48 @@ pub(crate) fn lower_mb_get_info_len(
     mbstring_fast::lower_get_info_len(ctx, inst)
 }
 
+/// Lowers a raw integer mbstring setting selected by the integer cast sink.
+pub(crate) fn lower_mb_setting_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    use crate::ir::RuntimeFnId;
+    let (source, helper, string_arg) = match target {
+        RuntimeFnId::MbInternalEncodingInt => (
+            RuntimeBuiltinId::MbInternalEncoding,
+            "elephc_mbstring_internal_encoding_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbLanguageInt => (
+            RuntimeBuiltinId::MbLanguage,
+            "elephc_mbstring_language_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbHttpOutputInt => (
+            RuntimeBuiltinId::MbHttpOutput,
+            "elephc_mbstring_http_output_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbRegexEncodingInt => (
+            RuntimeBuiltinId::MbRegexEncoding,
+            "elephc_mbstring_regex_encoding_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbSubstituteCharacterInt => (
+            RuntimeBuiltinId::MbSubstituteCharacter,
+            "elephc_mbstring_substitute_character_set_v1",
+            false,
+        ),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "raw mbstring setting lowering requires a setting target",
+            ))
+        }
+    };
+    mbstring_fast::lower_setting_int(ctx, inst, source, helper, string_arg)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;

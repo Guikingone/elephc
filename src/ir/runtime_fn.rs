@@ -749,8 +749,14 @@ pub enum RuntimeFnId {
     /// Allocation-free `strlen(mb_strrichr(...))` observed only through the string length.
     MbStrrichrLen,
     MbLanguage,
+    /// Raw `(int)mb_language(...)` selected by the integer cast sink.
+    MbLanguageInt,
     MbInternalEncoding,
+    /// Raw `(int)mb_internal_encoding(...)` selected by the integer cast sink.
+    MbInternalEncodingInt,
     MbHttpOutput,
+    /// Raw `(int)mb_http_output(...)` selected by the integer cast sink.
+    MbHttpOutputInt,
     MbEncodingAliases,
     /// Allocation-free `count(mb_encoding_aliases(...))` for a known encoding.
     MbEncodingAliasesCount,
@@ -762,6 +768,8 @@ pub enum RuntimeFnId {
     MbPreferredMimeNameLen,
     MbCheckEncoding,
     MbSubstituteCharacter,
+    /// Raw `(int)mb_substitute_character(...)` selected by the integer cast sink.
+    MbSubstituteCharacterInt,
     MbListEncodings,
     /// Allocation-free `count(mb_list_encodings())`.
     MbListEncodingsCount,
@@ -795,6 +803,8 @@ pub enum RuntimeFnId {
     MbHttpInput,
     /// Reads or changes the shared multibyte regex encoding.
     MbRegexEncoding,
+    /// Raw `(int)mb_regex_encoding(...)` selected by the integer cast sink.
+    MbRegexEncodingInt,
     /// Reads or changes the shared multibyte regex option defaults.
     MbRegexSetOptions,
     Md5,
@@ -987,6 +997,11 @@ impl RuntimeFnId {
             RuntimeFnId::MbEncodingAliasesCount => Some((1, Some(1))),
             RuntimeFnId::MbListEncodingsCount => Some((0, Some(0))),
             RuntimeFnId::MbGetInfoLen => Some((1, Some(1))),
+            RuntimeFnId::MbInternalEncodingInt
+            | RuntimeFnId::MbLanguageInt
+            | RuntimeFnId::MbHttpOutputInt
+            | RuntimeFnId::MbRegexEncodingInt
+            | RuntimeFnId::MbSubstituteCharacterInt => Some((1, Some(1))),
             RuntimeFnId::MbSplitCount => Some((2, Some(2))),
             RuntimeFnId::MbEregReplaceLen => Some((3, Some(3))),
             RuntimeFnId::MbChrLen => Some((2, Some(2))),
@@ -1888,6 +1903,11 @@ impl RuntimeFnId {
             RuntimeFnId::MbEncodingAliasesCount => RuntimeFnId::MbEncodingAliases.effects(),
             RuntimeFnId::MbListEncodingsCount => RuntimeFnId::MbListEncodings.effects(),
             RuntimeFnId::MbGetInfoLen => RuntimeFnId::MbGetInfo.effects(),
+            RuntimeFnId::MbInternalEncodingInt => RuntimeFnId::MbInternalEncoding.effects(),
+            RuntimeFnId::MbLanguageInt => RuntimeFnId::MbLanguage.effects(),
+            RuntimeFnId::MbHttpOutputInt => RuntimeFnId::MbHttpOutput.effects(),
+            RuntimeFnId::MbRegexEncodingInt => RuntimeFnId::MbRegexEncoding.effects(),
+            RuntimeFnId::MbSubstituteCharacterInt => RuntimeFnId::MbSubstituteCharacter.effects(),
             RuntimeFnId::MbSplitCount => RuntimeFnId::MbSplit.effects(),
             RuntimeFnId::MbEregReplaceLen => RuntimeFnId::MbEregReplace.effects(),
             RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
@@ -3670,8 +3690,11 @@ impl RuntimeFnId {
             RuntimeFnId::MbStrrchrLen => "mb_strrchr_len",
             RuntimeFnId::MbStrrichrLen => "mb_strrichr_len",
             RuntimeFnId::MbLanguage => "mb_language",
+            RuntimeFnId::MbLanguageInt => "mb_language_int",
             RuntimeFnId::MbInternalEncoding => "mb_internal_encoding",
+            RuntimeFnId::MbInternalEncodingInt => "mb_internal_encoding_int",
             RuntimeFnId::MbHttpOutput => "mb_http_output",
+            RuntimeFnId::MbHttpOutputInt => "mb_http_output_int",
             RuntimeFnId::MbEncodingAliases => "mb_encoding_aliases",
             RuntimeFnId::MbEncodingAliasesCount => "mb_encoding_aliases_count",
             RuntimeFnId::MbStrSplit => "mb_str_split",
@@ -3680,6 +3703,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbPreferredMimeNameLen => "mb_preferred_mime_name_len",
             RuntimeFnId::MbCheckEncoding => "mb_check_encoding",
             RuntimeFnId::MbSubstituteCharacter => "mb_substitute_character",
+            RuntimeFnId::MbSubstituteCharacterInt => "mb_substitute_character_int",
             RuntimeFnId::MbListEncodings => "mb_list_encodings",
             RuntimeFnId::MbListEncodingsCount => "mb_list_encodings_count",
             RuntimeFnId::MbDetectOrder => "mb_detect_order",
@@ -3703,6 +3727,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",
             RuntimeFnId::MbRegexEncoding => "mb_regex_encoding",
+            RuntimeFnId::MbRegexEncodingInt => "mb_regex_encoding_int",
             RuntimeFnId::MbRegexSetOptions => "mb_regex_set_options",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
