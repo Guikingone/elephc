@@ -100,6 +100,7 @@ pub(super) fn try_lower(
         }
         RuntimeBuiltinId::MbEncodeMimeheader => try_lower_mimeheader(ctx, inst),
         RuntimeBuiltinId::MbConvertKana => try_lower_convert_kana(ctx, inst),
+        RuntimeBuiltinId::MbOutputHandler => try_lower_output_handler(ctx, inst),
         RuntimeBuiltinId::MbInternalEncoding => try_lower_string_setting_bool(
             ctx,
             inst,
@@ -700,6 +701,50 @@ pub(super) fn lower_setting_int(
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers `mb_output_handler()` when the request converts UTF-8 to UTF-8 unchanged.
+fn try_lower_output_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if inst.operands.len() != 2
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+    {
+        return Ok(false);
+    }
+    ctx.emitter.bl_c("elephc_mbstring_output_utf8_passthrough_v1");
+    let fallback = ctx.next_label("mb_output_handler_fallback");
+    let done = ctx.next_label("mb_output_handler_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {fallback}"));           // other output encodings keep the bridge conversion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                          // does the request convert UTF-8 to UTF-8?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                // other output encodings keep the bridge conversion
+        }
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_output_handler", pointer, length)?;
+    // UTF-8 to UTF-8 output handling is value-preserving, so return the borrowed subject
+    // with one retained reference instead of copying its bytes.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the returned string pair across the retain
+            ctx.emitter.instruction("mov x0, x1");                             // pass the string payload to the retain helper
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                  // restore the retained string pair
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");               // preserve the returned string pair across the retain
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                // restore the retained string pair
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbOutputHandler, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
 }
 
 /// Lowers explicit-UTF-8 `mb_convert_kana($s, "K")` over half-width katakana.

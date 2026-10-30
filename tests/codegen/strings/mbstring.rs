@@ -509,6 +509,20 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the UTF-8-to-UTF-8 output-handler passthrough retains its subject without copying.
+#[test]
+fn test_mb_output_handler_utf8_passthrough() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_output_handler("héllo", 0), "|";
+echo bin2hex(mb_output_handler("\x80", 0)), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "héllo|80|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

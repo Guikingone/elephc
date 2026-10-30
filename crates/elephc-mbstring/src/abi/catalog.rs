@@ -172,6 +172,20 @@ pub unsafe extern "C" fn elephc_mbstring_http_input_len_v1(
     .unwrap_or(-1)
 }
 
+/// Reports whether the request converts UTF-8 to UTF-8, where `mb_output_handler()` is a copy.
+#[no_mangle]
+pub extern "C" fn elephc_mbstring_output_utf8_passthrough_v1() -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        super::REQUEST.with(|state| {
+            let state = state.borrow();
+            i32::from(
+                state.http_output().name() == "UTF-8" && state.internal_encoding().name() == "UTF-8",
+            )
+        })
+    }))
+    .unwrap_or(0)
+}
+
 /// Returns the number of canonical encodings exposed by `mb_list_encodings()`.
 #[no_mangle]
 pub extern "C" fn elephc_mbstring_list_encodings_count_v1() -> i64 {
