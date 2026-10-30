@@ -516,7 +516,11 @@ When a length-only observation reads a local assigned once from a compile-time
 ASCII literal, the EIR fold replaces case conversion, trimming, padding,
 slicing, width, encoding checks, counting, splitting, search positions, and
 search-length observations with their constant results, removing both the call
-and the now-dead subject load. Non-ASCII input,
+and the now-dead subject load. `iconv_strpos()`/`iconv_strrpos()` over ASCII
+literals under explicit UTF-8 fold to their character positions, and a
+`strlen(gzuncompress(gzcompress($literal)))` or raw-DEFLATE round trip folds to
+the literal's byte length. `token_name()` over a literal id or `T_*` constant is
+a compile-time catalog lookup. Non-ASCII input,
 unsupported encodings, and other regex maps or patterns fall back to the shared
 bridge, so PHP's Unicode and substitution behavior remains authoritative. Catalog
 count and `mb_get_info("internal_encoding")` queries use dedicated allocation-free
