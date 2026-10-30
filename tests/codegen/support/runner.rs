@@ -99,6 +99,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["hash"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_openssl",
+        package: "elephc-openssl",
+        php_extensions: &["openssl"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
         php_extensions: &["bcmath"],
@@ -1332,6 +1337,22 @@ fn test_link_plan(
     }
     if named.contains("elephc_xml") && !xml_pushed {
         push_xml_native_if_available(&mut plan);
+    }
+    // The cipher bridge declares libcrypto's provider/EVP symbols without linking
+    // them. The production path resolves `openssl-crypto` (and its `zlib`
+    // dependency) through `pipeline::backend`; the harness reads the same durable
+    // cache structurally. A fixture whose artifacts are missing skips before this.
+    if named.contains("elephc_openssl") {
+        if let Some(packages) = openssl_native_packages() {
+            for package in packages {
+                plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+            }
+            for package in packages {
+                for archive in &package.archives {
+                    plan.push(LinkItem::managed_archive(archive.clone(), package.name));
+                }
+            }
+        }
     }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));

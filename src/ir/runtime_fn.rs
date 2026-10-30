@@ -2291,7 +2291,7 @@ impl RuntimeFnId {
             | RuntimeFnId::OpensslDecrypt
             | RuntimeFnId::OpensslEncrypt
             | RuntimeFnId::OpensslGetCipherMethods => {
-                &[BuiltinRequirement::Bridge("elephc_crypto")]
+                &[BuiltinRequirement::Bridge("elephc_openssl")]
             }
             RuntimeFnId::Iconv
             | RuntimeFnId::IconvGetEncoding

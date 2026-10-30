@@ -1187,17 +1187,17 @@ pub(crate) fn emit_runtime_data_fixed(
     // Symmetric-cipher bridge slots. OpenSSL call sites publish these separately
     // from the hash family so hash-only programs never reference cipher symbols.
     out.push_str(&comm_directive(
-        "_elephc_crypto_cipher_iv_length_fn",
+        "_elephc_openssl_cipher_iv_length_fn",
         8,
         target,
     ));
     out.push_str(&comm_directive(
-        "_elephc_crypto_cipher_methods_fn",
+        "_elephc_openssl_cipher_methods_fn",
         8,
         target,
     ));
-    out.push_str(&comm_directive("_elephc_crypto_encrypt_fn", 8, target));
-    out.push_str(&comm_directive("_elephc_crypto_decrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_openssl_encrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_openssl_decrypt_fn", 8, target));
     // BCMath bridge slots are published only by `bc*` call sites. Shared runtime
     // helpers call through these slots so unrelated programs never reference the
     // optional elephc-bcmath archive.
