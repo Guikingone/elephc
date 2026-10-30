@@ -554,7 +554,9 @@ fn try_lower_string_setting_bool(
     source: RuntimeBuiltinId,
     helper: &str,
 ) -> Result<bool> {
-    if inst.operands.len() != 1 {
+    if inst.operands.len() != 1
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+    {
         return Ok(false);
     }
     let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
@@ -611,7 +613,12 @@ fn try_lower_substitute_character(
     inst: &Instruction,
     source: RuntimeBuiltinId,
 ) -> Result<bool> {
-    if inst.operands.len() != 1 {
+    if inst.operands.len() != 1
+        || !matches!(
+            ctx.value_php_type(inst.operands[0])?.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Float
+        )
+    {
         return Ok(false);
     }
     load_as_int(ctx, inst.operands[0], "mb_substitute_character")?;
