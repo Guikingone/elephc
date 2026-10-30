@@ -440,11 +440,17 @@ var_dump(inet_ntop('abc'));
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
+    let leading_zero = if cfg!(any(target_os = "macos", target_os = "ios")) {
+        "01.2.3.4=01020304;"
+    } else {
+        "01.2.3.4=F;"
+    };
     assert_eq!(
         out.stdout,
-        "127.0.0.1=7f000001;01.2.3.4=01020304;255.255.255.255=ffffffff;1.2.3=F;256.1.1.1=F;1.2.3.4.=F;1.2.3.4 =F;::1=00000000000000000000000000000001;2001:db8::1=20010db8000000000000000000000001;::ffff:192.0.2.128=00000000000000000000ffffc0000280;\n\
-::1;2001:db8::1;\n\
-bool(false)\n"
+        format!(
+            "127.0.0.1=7f000001;{}255.255.255.255=ffffffff;1.2.3=F;256.1.1.1=F;1.2.3.4.=F;1.2.3.4 =F;::1=00000000000000000000000000000001;2001:db8::1=20010db8000000000000000000000001;::ffff:192.0.2.128=00000000000000000000ffffc0000280;\n::1;2001:db8::1;\nbool(false)\n",
+            leading_zero
+        )
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
