@@ -78,6 +78,11 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     emitter.instruction("cmp w13, #255");                                       // does the octet still fit a byte?
     emitter.instruction("b.hi __rt_inet_pton_generic");                         // out-of-range octets use libc validation
     emitter.instruction("add x14, x14, #1");                                    // count this digit
+    emitter.instruction("cmp x14, #2");                                         // is this the second digit?
+    emitter.instruction("b.ne __rt_inet_pton_fast_no_leading_zero");            // only a two-digit octet can hide a leading zero
+    emitter.instruction("cmp x13, #10");                                        // a value below ten after two digits is a leading zero
+    emitter.instruction("b.lo __rt_inet_pton_generic");                         // let the platform's parser decide whether it accepts one
+    emitter.label("__rt_inet_pton_fast_no_leading_zero");
     emitter.instruction("cmp x14, #4");                                         // more than three digits?
     emitter.instruction("b.hs __rt_inet_pton_generic");                         // let libc accept or reject the long form
     emitter.instruction("add x9, x9, #1");                                      // advance the fast parser cursor
@@ -229,6 +234,11 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11d, 255");                                       // does the octet still fit a byte?
     emitter.instruction("ja __rt_inet_pton_generic_x86");                       // out-of-range octets use libc validation
     emitter.instruction("inc ecx");                                             // count this digit
+    emitter.instruction("cmp ecx, 2");                                          // is this the second digit?
+    emitter.instruction("jne __rt_inet_pton_fast_no_leading_zero_x86");         // only a two-digit octet can hide a leading zero
+    emitter.instruction("cmp r11d, 10");                                        // a value below ten after two digits is a leading zero
+    emitter.instruction("jb __rt_inet_pton_generic_x86");                       // let the platform's parser decide whether it accepts one
+    emitter.label("__rt_inet_pton_fast_no_leading_zero_x86");
     emitter.instruction("cmp ecx, 4");                                          // more than three digits?
     emitter.instruction("jae __rt_inet_pton_generic_x86");                      // let libc accept or reject the long form
     emitter.instruction("inc r8");                                              // advance the fast parser cursor

@@ -584,6 +584,8 @@ Lparse_url_component_error_x86:
     jmp __rt_parse_url_throw_component
 
 Lparse_url_array_x86:
+    cmp QWORD PTR [rbp - 200], 0
+    jne Lparse_url_count_x86
     mov rdi, 16
     mov rsi, 7
     call __rt_hash_new

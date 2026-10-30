@@ -67,6 +67,7 @@ fn test_inet_pton_keeps_ipv4_and_still_rejects_invalid_input() {
 foreach ([
     '127.0.0.1',
     '0.0.0.0',
+    '01.2.3.4',
     '255.255.255.255',
     '256.0.0.1',
     '1.2.3',
@@ -80,18 +81,27 @@ foreach ([
 }
 "#,
     );
+    let leading_zero = if cfg!(any(target_os = "macos", target_os = "ios")) {
+        "4:01020304\n"
+    } else {
+        "false\n"
+    };
     assert_eq!(
         out,
-        concat!(
-            "4:7f000001\n",
-            "4:00000000\n",
-            "4:ffffffff\n",
-            "false\n",
-            "false\n",
-            "false\n",
-            "false\n",
-            "false\n",
-            "false\n",
+        format!(
+            concat!(
+                "4:7f000001\n",
+                "4:00000000\n",
+                "{}",
+                "4:ffffffff\n",
+                "false\n",
+                "false\n",
+                "false\n",
+                "false\n",
+                "false\n",
+                "false\n",
+            ),
+            leading_zero
         )
     );
 }
