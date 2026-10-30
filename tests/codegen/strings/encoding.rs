@@ -1365,3 +1365,23 @@ echo strip_tags("a\0b<c>");
         "Hello World|plain|ab|ab|hello|1 < 2|<p>Hello World</p>|<BR/>hi</br>|<p class=\"x\">Hi</p>|<p>Hello World</p>|plain|x|y|z|<p>A</p>B|ab"
     );
 }
+
+/// Verifies the loop-invariant gzip length hoist and a mutated-subject fallback.
+#[test]
+fn test_gzip_length_loop_hoist_and_mutation_fallback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "hello";
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= strlen(gzcompress($s)) + $i; }
+echo $n, "|";
+$s = "hello";
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= strlen(gzdeflate($s)) + $i; $s .= "!"; }
+echo $n, "|";
+echo strlen(gzcompress("hello")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "12|5|13|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
