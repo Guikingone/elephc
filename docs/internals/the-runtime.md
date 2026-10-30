@@ -519,8 +519,10 @@ search-length observations with their constant results, removing both the call
 and the now-dead subject load. `iconv_strpos()`/`iconv_strrpos()` over ASCII
 literals under explicit UTF-8 fold to their character positions, and a
 `strlen(gzuncompress(gzcompress($literal)))` or raw-DEFLATE round trip folds to
-the literal's byte length. `token_name()` over a literal id or `T_*` constant is
-a compile-time catalog lookup. Non-ASCII input,
+the literal's byte length, and an invariant `strlen(gzcompress($s))` is hoisted
+to the loop preheader. `token_name()` over a literal id or `T_*` constant is a
+compile-time catalog lookup; literal SHA-256/HMAC digests and the literal
+`[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded. Non-ASCII input,
 unsupported encodings, and other regex maps or patterns fall back to the shared
 bridge, so PHP's Unicode and substitution behavior remains authoritative. Catalog
 count and `mb_get_info("internal_encoding")` queries use dedicated allocation-free
