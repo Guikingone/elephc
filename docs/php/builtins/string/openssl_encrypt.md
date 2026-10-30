@@ -2,7 +2,7 @@
 title: "openssl_encrypt()"
 description: "Encrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog."
 sidebar:
-  order: 922
+  order: 973
 ---
 
 ## openssl_encrypt()

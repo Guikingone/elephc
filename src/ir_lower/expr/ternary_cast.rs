@@ -112,6 +112,14 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     let value = lower_expr(ctx, inner);
     let source_type = ctx.builder.value_php_type(value.value);
     let source_repr = source_type.codegen_repr();
+    if matches!(target, CastType::Int | CastType::Float) {
+        if let Some(result) = object_operators::lower_object_cast(ctx, value, target, expr) {
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+            }
+            return result;
+        }
+    }
     // `(int)` over an integer is the identity: both are already I64 and the explicit cast
     // cannot warn or fail. A resource also has an Int codegen representation, but its PHP
     // cast is the display id, so it must keep the runtime conversion. `(int)` over a boolean
@@ -136,6 +144,7 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     // `(bool)` over a boolean is likewise the identity at the representation level.
     if matches!(target, CastType::Bool) && source_repr == PhpType::Bool {
         return value;
+    }
     }
     if matches!(target, CastType::Bool) {
         if let Some(result) = object_operators::lower_object_truthy(ctx, value, Some(expr.span)) {

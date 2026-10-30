@@ -2,7 +2,7 @@
 title: "openssl_get_cipher_methods()"
 description: "Returns PHP's OpenSSL 3.6.4 default-provider cipher method names."
 sidebar:
-  order: 923
+  order: 974
 ---
 
 ## openssl_get_cipher_methods()

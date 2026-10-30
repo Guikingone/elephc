@@ -2,7 +2,7 @@
 title: "openssl_decrypt()"
 description: "Decrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog."
 sidebar:
-  order: 921
+  order: 972
 ---
 
 ## openssl_decrypt()
