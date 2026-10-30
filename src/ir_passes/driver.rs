@@ -44,6 +44,7 @@ use super::strip_tags_len_sink::StripTagsLenSink;
 use super::strpos_int_sink::StrposIntSink;
 use super::base64_decode_len_sink::Base64DecodeLenSink;
 use super::mb_catalog_count_sink::MbCatalogCountSink;
+use super::mb_detect_order_single_sink::MbDetectOrderSingleSink;
 use super::mb_numericentity_len_sink::MbNumericentityLenSink;
 use super::mb_strimwidth_len_sink::MbStrimwidthLenSink;
 use super::strstr_len_sink::StrstrLenSink;
@@ -174,6 +175,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(StrSplitCountSink),
         Box::new(CountCharsCountSink),
         Box::new(MbCatalogCountSink),
+        Box::new(MbDetectOrderSingleSink),
         Box::new(MbNumericentityLenSink),
         Box::new(MbStrimwidthLenSink),
         Box::new(StrstrLenSink),

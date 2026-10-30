@@ -219,6 +219,15 @@ pub(crate) fn lower_mb_preferred_mime_name_len(
     mbstring_fast::lower_preferred_mime_name_len(ctx, inst)
 }
 
+/// Lowers the specialized one-element UTF-8 detection-order setter.
+pub(crate) fn lower_mb_detect_order_single(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_detect_order_single(ctx, inst, target)
+}
+
 /// Lowers an allocation-free mbstring alias count selected by the catalog count sink.
 pub(crate) fn lower_mb_encoding_aliases_count(
     ctx: &mut FunctionContext<'_>,

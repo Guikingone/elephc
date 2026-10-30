@@ -523,6 +523,23 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the literal UTF-8 detection-order specialization, the getter, and the invalid fallback.
+#[test]
+fn test_mb_detect_order_literal_fast_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+var_dump(mb_detect_order(["UTF-8"]));
+var_dump(mb_detect_order());
+try { mb_detect_order(["NOPE"]); } catch (ValueError $e) { echo "error\n"; }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\narray(1) {\n  [0]=>\n  string(5) \"UTF-8\"\n}\nerror\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

@@ -774,6 +774,8 @@ pub enum RuntimeFnId {
     /// Allocation-free `count(mb_list_encodings())`.
     MbListEncodingsCount,
     MbDetectOrder,
+    /// Sets the detection order from one compile-time UTF-8 literal.
+    MbDetectOrderSingle,
     MbDetectEncoding,
     /// Allocation-free `strlen(mb_detect_encoding(...))` for a single explicit encoding.
     MbDetectEncodingLen,
@@ -1000,6 +1002,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbPreferredMimeNameLen => Some((1, Some(1))),
             RuntimeFnId::MbEncodingAliasesCount => Some((1, Some(1))),
             RuntimeFnId::MbListEncodingsCount => Some((0, Some(0))),
+            RuntimeFnId::MbDetectOrderSingle => Some((1, Some(1))),
             RuntimeFnId::MbGetInfoLen => Some((1, Some(1))),
             RuntimeFnId::MbHttpInputLen | RuntimeFnId::MbRegexSetOptionsLen => Some((1, Some(1))),
             RuntimeFnId::MbInternalEncodingInt
@@ -1349,6 +1352,7 @@ impl RuntimeFnId {
             );
         }
         match self {
+            RuntimeFnId::MbDetectOrderSingle => RuntimeFnId::MbDetectOrder.effects(),
             // Persistent web requests retire the preceding ambient context owner on replacement.
             // Captured objects can run destructors, mutate globals, and throw during that release.
             RuntimeFnId::StreamContextCreate | RuntimeFnId::StreamContextSetDefault
@@ -2631,6 +2635,9 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        if matches!(self, RuntimeFnId::MbDetectOrderSingle) {
+            return BuiltinResultOwnership::Fresh;
+        }
         // Decoding always constructs an independent Mixed graph. String payloads are
         // persisted from decoder scratch; no result borrows the source argument pin.
         if matches!(self, RuntimeFnId::JsonDecode | RuntimeFnId::JsonEncodeStr) {
@@ -3714,6 +3721,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbListEncodings => "mb_list_encodings",
             RuntimeFnId::MbListEncodingsCount => "mb_list_encodings_count",
             RuntimeFnId::MbDetectOrder => "mb_detect_order",
+            RuntimeFnId::MbDetectOrderSingle => "mb_detect_order_single",
             RuntimeFnId::MbDetectEncoding => "mb_detect_encoding",
             RuntimeFnId::MbDetectEncodingLen => "mb_detect_encoding_len",
             RuntimeFnId::MbConvertEncoding => "mb_convert_encoding",

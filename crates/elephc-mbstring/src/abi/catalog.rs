@@ -13,7 +13,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::encoding::Encoding;
+use crate::encoding::{Encoding, EncodingList};
 
 /// Returns the number of public aliases for an encoding, or `-1` when it is unknown.
 ///
@@ -170,6 +170,42 @@ pub unsafe extern "C" fn elephc_mbstring_http_input_len_v1(
         }
     }))
     .unwrap_or(-1)
+}
+
+/// Sets the detection order from one validated UTF-8 array element.
+///
+/// The already-UTF-8 case skips list parsing and allocation, which is the common hot path for
+/// request-local code that repeatedly asserts its default detection order.
+///
+/// # Safety
+/// `name` must be null or point to `len` readable bytes for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_mbstring_detect_order_single_v1(
+    name: *const u8,
+    len: u64,
+) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        if len > isize::MAX as u64 || (len != 0 && name.is_null()) {
+            return 0;
+        }
+        let bytes = if len == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(name, len as usize)
+        };
+        super::REQUEST.with(|state| {
+            let mut state = state.borrow_mut();
+            if bytes.eq_ignore_ascii_case(b"UTF-8")
+                && state.detect_order().len() == 1
+                && state.detect_order()[0].name().eq_ignore_ascii_case("UTF-8")
+            {
+                return 1;
+            }
+            let list = [bytes.to_vec()];
+            i32::from(state.set_detect_order(EncodingList::Array(&list)).is_ok())
+        })
+    }))
+    .unwrap_or(0)
 }
 
 /// Reports whether the request converts UTF-8 to UTF-8, where `mb_output_handler()` is a copy.

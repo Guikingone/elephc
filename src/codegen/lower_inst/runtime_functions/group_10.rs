@@ -77,6 +77,9 @@ pub(super) fn lower(
         RuntimeFnId::MbOrdInt => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_ord_int(ctx, inst, target)
         }),
+        RuntimeFnId::MbDetectOrderSingle => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_detect_order_single(ctx, inst, target)
+        }),
         RuntimeFnId::MbDetectEncodingLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_detect_encoding_len(ctx, inst, target)
         }),

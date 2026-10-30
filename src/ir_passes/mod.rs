@@ -34,6 +34,7 @@ mod count_chars_count_sink;
 mod str_split_count_sink;
 mod base64_decode_len_sink;
 mod mb_catalog_count_sink;
+mod mb_detect_order_single_sink;
 mod mb_numericentity_len_sink;
 mod mb_strimwidth_len_sink;
 mod strstr_len_sink;

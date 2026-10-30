@@ -815,6 +815,54 @@ fn try_lower_mimeheader(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     Ok(true)
 }
 
+/// Lowers the specialized one-element UTF-8 `mb_detect_order()` setter.
+pub(super) fn lower_detect_order_single(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "mb_detect_order_single expected one operand",
+        ));
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_detect_order", pointer, length)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                             // pass the encoding pointer as the first C argument
+            ctx.emitter.instruction("mov x1, x2");                             // pass the encoding length as the second C argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                          // pass the encoding pointer as the first SysV argument
+            ctx.emitter.instruction("mov rsi, rdx");                          // pass the encoding length as the second SysV argument
+        }
+    }
+    ctx.emitter.bl_c("elephc_mbstring_detect_order_single_v1");
+    if inst.result_php_type.codegen_repr() == PhpType::Int {
+        // The integer-observed form returns PHP's boolean truthiness directly.
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("movzx rax, al");                          // clear the stale high bits of the boolean result
+        }
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                         // pass the boolean payload
+                ctx.emitter.instruction("mov x2, xzr");                        // boolean payloads have no high word
+                ctx.emitter.instruction("mov x0, #3");                         // runtime tag 3 = boolean
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                      // pass the boolean payload
+                ctx.emitter.instruction("xor esi, esi");                      // boolean payloads have no high word
+                ctx.emitter.instruction("mov eax, 3");                        // runtime tag 3 = boolean
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            }
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `mb_preferred_mime_name("UTF-8")` to the same persistent encoding literal.
 fn try_lower_preferred_mime_name(
     ctx: &mut FunctionContext<'_>,
