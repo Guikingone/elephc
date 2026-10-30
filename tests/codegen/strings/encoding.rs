@@ -460,6 +460,19 @@ echo (gzuncompress($packed) === $data ? "roundtrip-ok" : "roundtrip-fail");
     assert_eq!(out, "smaller|roundtrip-ok");
 }
 
+
+/// Repeats gzuncompress so the boxed output must be reclaimed instead of exhausting the heap.
+#[test]
+fn test_gzuncompress_repeated_calls_release_the_output() {
+    let out = compile_and_run(r#"<?php
+$packed = gzcompress("hello");
+$sum = 0;
+for ($i = 0; $i < 2000; $i++) { $sum += strlen(gzuncompress($packed)); }
+echo $sum;
+"#);
+    assert_eq!(out, "10000");
+}
+
 /// Verifies compiled PHP output for gzuncompress invalid is false.
 #[test]
 fn test_gzuncompress_invalid_is_false() {
