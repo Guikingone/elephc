@@ -506,6 +506,18 @@ reader invocation. Rust does not interpret native array layouts. The target-awar
 reader owns indexed strides, hash iteration, Mixed unboxing, and nullable-container
 normalization.
 
+Generated code also borrows read-only string and array operands for the common
+explicit-UTF-8 text operations and emits allocation-free ASCII/UTF-8 helpers for
+case conversion, trimming, padding, slicing, search, splitting, codepoints,
+scrubbing, detection, latin-1 conversion, decimal numeric entities, and the
+literal `,` split and `[0-9]+`/`#` replacement patterns. Non-ASCII input,
+unsupported encodings, and other regex maps or patterns fall back to the shared
+bridge, so PHP's Unicode and substitution behavior remains authoritative. Catalog
+count and `mb_get_info("internal_encoding")` queries use dedicated allocation-free
+C ABI entry points. The bridge identity header bit marks strings that actually
+acquired INI metadata, letting `__rt_heap_free` skip the metadata callback for the
+ordinary strings that never did.
+
 The Rust encoding catalog is one immutable static slice. Codec selection and
 encoding lookup share its metadata and embedded byte tables, rather than
 instantiating the complete `const` catalog at multiple use sites. Regenerating
