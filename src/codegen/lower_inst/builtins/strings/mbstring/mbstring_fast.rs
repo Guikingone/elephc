@@ -1557,6 +1557,18 @@ pub(super) fn lower_encoding_aliases_count(
     inst: &Instruction,
 ) -> Result<()> {
     if inst.operands.len() == 1 {
+        if let Some(name) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+            ctx,
+            inst.operands[0],
+        )? {
+            if name.eq_ignore_ascii_case("UTF-8") {
+                // The shared catalog has exactly one public alias for UTF-8; the bridge unit
+                // tests assert that catalog entry, so a drift fails there before this constant.
+                abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+                store_if_result(ctx, inst)?;
+                return Ok(());
+            }
+        }
         let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 0, "mb_encoding_aliases", pointer, length)?;
         match ctx.emitter.target.arch {
@@ -1601,7 +1613,10 @@ pub(super) fn lower_list_encodings_count(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    ctx.emitter.bl_c("elephc_mbstring_list_encodings_count_v1");
+    // `mb_list_encodings()` enumerates the immutable shared catalog, whose count is fixed at
+    // compile time. The bridge catalog test asserts the same 79 entries, so a catalog change
+    // fails there before this immediate can drift.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 79);
     store_if_result(ctx, inst)?;
     Ok(())
 }
