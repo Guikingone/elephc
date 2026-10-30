@@ -258,7 +258,7 @@ fn fold_header_count(function: &mut Function, data: &DataPool, count_id: InstId)
 }
 
 /// Removes the temporary slot stores, push/pop owners and acquired value plumbing for one call.
-fn neutralize_call_staging(function: &mut Function, call_id: InstId) {
+pub(super) fn neutralize_call_staging(function: &mut Function, call_id: InstId) {
     let Some(call) = function.instruction(call_id) else {
         return;
     };
@@ -353,7 +353,7 @@ fn through_acquire(function: &Function, value: ValueId) -> Option<ValueId> {
 }
 
 /// Neutralizes now-unused local loads after staging is removed.
-fn cleanup_dead_loads(function: &mut Function) {
+pub(super) fn cleanup_dead_loads(function: &mut Function) {
     let uses = function.value_use_counts();
     let dead: Vec<InstId> = function
         .instructions

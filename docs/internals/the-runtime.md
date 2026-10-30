@@ -523,7 +523,8 @@ the literal's byte length, and an invariant `strlen(gzcompress($s))` is hoisted
 to the loop preheader. `token_name()` over a literal id or `T_*` constant is a
 compile-time catalog lookup; literal iconv MIME-word lengths and single-header
 counts, plus the default `iconv_get_encoding("internal_encoding")` length, fold
-once their call staging is proven removable; literal SHA-256/HMAC digests and the literal
+once their call staging is proven removable; literal AES-CBC encrypt lengths and
+matching encrypt/decrypt round trips fold to the PKCS#7/base64 or plaintext length; literal SHA-256/HMAC digests and the literal
 `[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded,
 including the `start`/`length` or matched-bytes elements of the `pos`/`regs`/`getregs`
 arrays when every read is a known element access.

@@ -263,3 +263,21 @@ echo $cbc_tag;
         )
     );
 }
+
+/// Verifies the literal AES-CBC length folds and the raw-data fallback.
+#[test]
+fn test_openssl_cbc_length_folds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$plain = "hello"; $iv = "1234567890123456";
+echo strlen(openssl_encrypt($plain, "aes-128-cbc", "key", 0, $iv)), "|";
+$cipher = openssl_encrypt($plain, "aes-128-cbc", "key", 0, $iv);
+echo strlen(openssl_decrypt($cipher, "aes-128-cbc", "key", 0, $iv)), "|";
+echo strlen(openssl_encrypt("", "aes-256-cbc", "", 0, $iv)), "|";
+$raw = openssl_encrypt($plain, "aes-128-cbc", "key", OPENSSL_RAW_DATA, $iv);
+echo strlen($raw), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "24|5|24|16|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
