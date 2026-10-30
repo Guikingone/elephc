@@ -479,3 +479,25 @@ fn test_empty_comments_in_interpolation_parse_in_eval_and_dynamic_includes() {
     );
     assert_eq!(out, "eval:v|v|v\ninclude:v|v|v\n");
 }
+
+/// Verifies the literal SHA-256 and HMAC-SHA-256 folds while a runtime-built input stays on
+/// the crypto bridge.
+#[test]
+fn test_hash_constant_fold_and_dynamic_fallback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "abc";
+$key = "key";
+echo hash("sha256", $s), "|";
+echo hash_hmac("sha256", $s, $key), "|";
+echo hash("sha256", "abc" . $argc), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad|\
+9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab|\
+dbfcfd0d87220f629339bd3adcf452d083fde3246625fb3a93e314f833e20d37|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

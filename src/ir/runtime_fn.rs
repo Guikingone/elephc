@@ -2891,6 +2891,13 @@ impl RuntimeFnId {
                 // so the default `MayAliasArguments` bucket would only keep an owned subject
                 // temporary alive for the boxed result's whole lifetime.
                 | RuntimeFnId::Base64Decode
+                // The crypto bridge allocates independent digest strings and hash contexts.
+                | RuntimeFnId::Hash
+                | RuntimeFnId::HashCopy
+                | RuntimeFnId::HashFile
+                | RuntimeFnId::HashFinal
+                | RuntimeFnId::HashHmac
+                | RuntimeFnId::HashInit
                 // Compression allocates independent output storage, including failure cells.
                 | RuntimeFnId::Gzcompress
                 | RuntimeFnId::Gzdeflate
