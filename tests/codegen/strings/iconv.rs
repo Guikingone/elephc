@@ -361,3 +361,23 @@ var_export($set('internal_encoding', 'UTF-8'), true);",
         format!("5|{cafe}|éll|2|false|4|Subject: =?UTF-8?B?UHLDvGZ1bmc=?=|a|1|UTF-8|true")
     );
 }
+
+/// Verifies constant-local `iconv_strpos()`/`iconv_strrpos()` folds and their fallbacks.
+///
+/// The folded cases use explicit UTF-8 ASCII operands; a miss, a non-ASCII haystack, and a
+/// nonzero offset must stay on the iconv bridge and keep PHP's exact result.
+#[test]
+fn test_iconv_position_constant_folds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$hay = "abcdef";
+echo iconv_strpos($hay, "cd", 0, "UTF-8"), "|";
+echo iconv_strrpos("abcabc", "bc", "UTF-8"), "|";
+echo var_export(iconv_strpos("abcdef", "zz", 0, "UTF-8"), true), "|";
+echo iconv_strpos("héllo", "l", 0, "UTF-8"), "|";
+echo iconv_strpos("abcdef", "cd", 1, "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2|4|false|2|2|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

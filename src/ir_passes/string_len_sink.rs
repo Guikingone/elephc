@@ -695,6 +695,14 @@ pub(super) fn const_local_string(
     data: &DataPool,
     value: ValueId,
 ) -> Option<(String, InstId)> {
+    let (_, load) = defining_instruction_with_id(function, value)?;
+    // A bridge call stages an owned string argument through one Acquire; that identity
+    // operation does not make the local's value dynamic.
+    let value = if load.op == Op::Acquire && load.operands.len() == 1 {
+        load.operands[0]
+    } else {
+        value
+    };
     let (load_id, load) = defining_instruction_with_id(function, value)?;
     let (value, require_load) = if load.op == Op::LoadLocal {
         let Some(Immediate::LocalSlot(slot)) = load.immediate else {

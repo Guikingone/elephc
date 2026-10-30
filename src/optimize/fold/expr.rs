@@ -526,6 +526,23 @@ fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
     if let Some(folded) = try_fold_mb_literal(&canonical, args) {
         return Some(folded);
     }
+    // `token_name()` only maps the stable tokenizer constant catalog. A literal identifier or
+    // the matching `T_*` constant is therefore a compile-time lookup; punctuation and unknown
+    // ids keep PHP's "UNKNOWN". Resolving `ConstRef` here also catches `token_name(T_ECHO)`,
+    // whose constant is not lowered to an integer until after the first fold pass.
+    if canonical == "token_name" && args.len() == 1 {
+        let id = match &args[0].kind {
+            ExprKind::IntLiteral(id) => Some(*id),
+            ExprKind::ConstRef(name) => {
+                token_constant_value(name.as_canonical().trim_start_matches('\\'))
+            }
+            _ => None,
+        };
+        if let Some(id) = id {
+            let name = token_constant_name(id).unwrap_or("UNKNOWN");
+            return Some(ExprKind::StringLiteral(name.to_string()));
+        }
+    }
     // Expand a literal repeat so a later scalar read (for example `mb_strlen($s, "UTF-8")`)
     // can use the exact byte length instead of calling the runtime for a known string.
     if canonical == "str_repeat" && args.len() == 2 {
@@ -563,7 +580,44 @@ fn try_fold_mb_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
         ExprKind::StringLiteral(ref value) => Some(value.as_str()),
         _ => None,
     };
+    let int = |index: usize| match args.get(index)?.kind {
+        ExprKind::IntLiteral(value) => Some(value),
+        _ => None,
+    };
     match canonical {
+        // `iconv_strpos()` counts characters, so only ASCII operands keep the byte index equal
+        // to the PHP-visible result. A literal zero offset avoids PHP's negative-offset and
+        // out-of-range diagnostics; a miss stays on the runtime path so `false` is exact.
+        "iconv_strpos" if args.len() == 4 => {
+            let haystack = string(0)?;
+            let needle = string(1)?;
+            if int(2)? != 0
+                || !string(3)?.eq_ignore_ascii_case("UTF-8")
+                || !haystack.is_ascii()
+                || !needle.is_ascii()
+                || needle.is_empty()
+            {
+                return None;
+            }
+            haystack
+                .find(needle)
+                .map(|position| ExprKind::IntLiteral(position as i64))
+        }
+        // `iconv_strrpos()` has no offset; the same ASCII and encoding restrictions apply.
+        "iconv_strrpos" if args.len() == 3 => {
+            let haystack = string(0)?;
+            let needle = string(1)?;
+            if !string(2)?.eq_ignore_ascii_case("UTF-8")
+                || !haystack.is_ascii()
+                || !needle.is_ascii()
+                || needle.is_empty()
+            {
+                return None;
+            }
+            haystack
+                .rfind(needle)
+                .map(|position| ExprKind::IntLiteral(position as i64))
+        }
         "mb_decode_mimeheader" if args.len() == 1 => {
             let encoded = string(0)?;
             let decoded = decode_mime_b_word(encoded)?;
@@ -650,4 +704,41 @@ fn decode_base64(payload: &str) -> Option<Vec<u8>> {
         if padding < 1 { output.push((values[2] << 6) | values[3]); }
     }
     Some(output)
+}
+
+/// Resolves a tokenizer constant name to its integer id in the shared contract catalog.
+fn token_constant_value(name: &str) -> Option<i64> {
+    use elephc_builtin_contract::{ConstValue, PhpModule};
+    elephc_builtin_contract::constants()
+        .iter()
+        .find_map(|constant| {
+            if constant.module != PhpModule::Tokenizer || constant.name != name {
+                return None;
+            }
+            match constant.value {
+                ConstValue::Int(value) => Some(value),
+                _ => None,
+            }
+        })
+}
+
+/// Returns the canonical tokenizer name for a literal token id, matching the engine's last-wins
+/// catalog insertion order and excluding the historical PAAMAYIM alias.
+fn token_constant_name(id: i64) -> Option<&'static str> {
+    use elephc_builtin_contract::{ConstValue, PhpModule};
+    elephc_builtin_contract::constants()
+        .iter()
+        .rev()
+        .find_map(|constant| {
+            if constant.module != PhpModule::Tokenizer
+                || !constant.name.starts_with("T_")
+                || constant.name == "T_PAAMAYIM_NEKUDOTAYIM"
+            {
+                return None;
+            }
+            match constant.value {
+                ConstValue::Int(value) if value == id => Some(constant.name),
+                _ => None,
+            }
+        })
 }
