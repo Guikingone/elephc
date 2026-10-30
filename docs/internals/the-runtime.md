@@ -514,8 +514,9 @@ base64 MIME encoding, half-width katakana conversion, and the UTF-8 output-handl
 passthrough, plus the literal `,` split and `[0-9]+`/`#` replacement patterns.
 When a length-only observation reads a local assigned once from a compile-time
 ASCII literal, the EIR fold replaces case conversion, trimming, padding,
-slicing, width, encoding checks, counting, and splitting with their constant
-results, removing both the call and the now-dead subject load. Non-ASCII input,
+slicing, width, encoding checks, counting, splitting, search positions, and
+search-length observations with their constant results, removing both the call
+and the now-dead subject load. Non-ASCII input,
 unsupported encodings, and other regex maps or patterns fall back to the shared
 bridge, so PHP's Unicode and substitution behavior remains authoritative. Catalog
 count and `mb_get_info("internal_encoding")` queries use dedicated allocation-free
