@@ -91,3 +91,27 @@ for ($i = 0; $i < 32; $i++) {
         assert_eq!(output.stdout, format!("NULL\n{}", "Option \"Q\" is not supported\n".repeat(32)), "eval={eval}");
     }
 }
+
+/// Verifies the literal digit-run progressive state fold and its no-match path.
+#[test]
+fn test_mb_ereg_search_literal_state_fold() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+mb_ereg_search_init("abc123", "[0-9]+");
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+mb_ereg_search_init("abc123", "[0-9]+");
+mb_ereg_search_setpos(3);
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+mb_ereg_search_init("abc", "[0-9]+");
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nint(6)\nint(3)\nbool(true)\nint(6)\nbool(false)\nint(3)\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
