@@ -677,7 +677,7 @@ fn trimmed_ascii_len(subject: &[u8], mask: &[u8], left: bool, right: bool) -> i6
 }
 
 /// Returns a `ConstStr` value, tracing one `Acquire` in front of it.
-fn const_string_value(function: &Function, data: &DataPool, value: ValueId) -> Option<String> {
+pub(super) fn const_string_value(function: &Function, data: &DataPool, value: ValueId) -> Option<String> {
     let value = match defining_instruction(function, value) {
         Some(inst) if inst.op == Op::Acquire && inst.operands.len() == 1 => inst.operands[0],
         _ => value,
@@ -690,7 +690,7 @@ fn const_string_value(function: &Function, data: &DataPool, value: ValueId) -> O
 }
 
 /// Returns an immutable literal local's value and its load instruction.
-fn const_local_string(
+pub(super) fn const_local_string(
     function: &Function,
     data: &DataPool,
     value: ValueId,

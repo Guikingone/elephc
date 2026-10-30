@@ -68,6 +68,10 @@ fn is_candidate(inst: &crate::ir::Instruction) -> bool {
                 inst.operands.len() == 2
             }
             RuntimeFnId::MbSubstrCount | RuntimeFnId::MbStrSplitCount => inst.operands.len() == 3,
+            RuntimeFnId::MbStrposInt
+            | RuntimeFnId::MbStrrposInt
+            | RuntimeFnId::MbStriposInt
+            | RuntimeFnId::MbStrriposInt => inst.operands.len() == 4,
             _ => false,
         }
 }
@@ -133,10 +137,13 @@ fn fold(function: &mut Function, data: &DataPool, call_id: InstId) -> bool {
     let Some(subject_load) = call.operands.first().copied() else {
         return false;
     };
-    let encoding_operand = if matches!(target, RuntimeFnId::MbSubstrCount | RuntimeFnId::MbStrSplitCount) {
-        call.operands[2]
-    } else {
-        call.operands[1]
+    let encoding_operand = match target {
+        RuntimeFnId::MbSubstrCount | RuntimeFnId::MbStrSplitCount => call.operands[2],
+        RuntimeFnId::MbStrposInt
+        | RuntimeFnId::MbStrrposInt
+        | RuntimeFnId::MbStriposInt
+        | RuntimeFnId::MbStrriposInt => call.operands[3],
+        _ => call.operands[1],
     };
     let Some((_, encoding_inst)) = defining_instruction_with_id(function, encoding_operand) else {
         return false;
@@ -196,27 +203,38 @@ fn fold(function: &mut Function, data: &DataPool, call_id: InstId) -> bool {
     let Some(subject) = const_stored_string(function, data, stored) else {
         return false;
     };
+    let subject_bytes = crate::string_bytes::literal_bytes(subject);
     let length = match target {
-        RuntimeFnId::MbStrlen => subject.chars().count() as i64,
+        RuntimeFnId::MbStrlen => {
+            let Some(valid) = std::str::from_utf8(&subject_bytes).ok() else {
+                return false;
+            };
+            valid.chars().count() as i64
+        }
         RuntimeFnId::MbStrwidth => {
-            if !subject.is_ascii() {
+            if !subject_bytes.is_ascii() {
                 return false;
             }
-            subject.len() as i64
+            subject_bytes.len() as i64
         }
-        RuntimeFnId::MbCheckEncoding => 1,
+        RuntimeFnId::MbCheckEncoding => i64::from(std::str::from_utf8(&subject_bytes).is_ok()),
         RuntimeFnId::MbSubstrCount => {
             let Some(needle) = const_stored_string(function, data, call.operands[1]) else {
                 return false;
             };
-            if !subject.is_ascii() || !needle.is_ascii() || needle.is_empty() {
+            let needle = crate::string_bytes::literal_bytes(needle);
+            if !subject_bytes.is_ascii() || !needle.is_ascii() || needle.is_empty() {
                 return false;
             }
             let mut count = 0i64;
             let mut offset = 0usize;
-            while let Some(found) = subject[offset..].find(needle) {
-                count += 1;
-                offset += found + needle.len();
+            while offset + needle.len() <= subject_bytes.len() {
+                if subject_bytes[offset..].starts_with(&needle) {
+                    count += 1;
+                    offset += needle.len();
+                } else {
+                    offset += 1;
+                }
             }
             count
         }
@@ -224,11 +242,54 @@ fn fold(function: &mut Function, data: &DataPool, call_id: InstId) -> bool {
             let Some(chunk) = const_i64(function, call.operands[1]) else {
                 return false;
             };
-            if !subject.is_ascii() || chunk <= 0 {
+            if !subject_bytes.is_ascii() || chunk <= 0 {
                 return false;
             }
             let chunk = chunk as usize;
-            subject.len().div_ceil(chunk) as i64
+            subject_bytes.len().div_ceil(chunk) as i64
+        }
+        RuntimeFnId::MbStrposInt
+        | RuntimeFnId::MbStrrposInt
+        | RuntimeFnId::MbStriposInt
+        | RuntimeFnId::MbStrriposInt => {
+            let Some(needle) = const_stored_string(function, data, call.operands[1]) else {
+                return false;
+            };
+            let needle = crate::string_bytes::literal_bytes(needle);
+            let Some(offset) = const_i64(function, call.operands[2]) else {
+                return false;
+            };
+            if !subject_bytes.is_ascii() || !needle.is_ascii() || needle.is_empty() || offset < 0 {
+                return false;
+            }
+            let reverse = matches!(target, RuntimeFnId::MbStrrposInt | RuntimeFnId::MbStrriposInt);
+            if reverse && offset != 0 {
+                return false;
+            }
+            let offset = offset as usize;
+            let insensitive = matches!(target, RuntimeFnId::MbStriposInt | RuntimeFnId::MbStrriposInt);
+            let haystack = if insensitive {
+                subject_bytes.to_ascii_lowercase()
+            } else {
+                subject_bytes.clone()
+            };
+            let needle = if insensitive {
+                needle.to_ascii_lowercase()
+            } else {
+                needle
+            };
+            if offset > haystack.len() {
+                return false;
+            }
+            let found = if reverse {
+                haystack.windows(needle.len()).rposition(|window| window == needle.as_slice())
+            } else {
+                haystack[offset..]
+                    .windows(needle.len())
+                    .position(|window| window == needle.as_slice())
+                    .map(|position| position + offset)
+            };
+            found.map_or(0, |position| position as i64)
         }
         _ => return false,
     };

@@ -47,6 +47,7 @@ use super::mb_catalog_count_sink::MbCatalogCountSink;
 use super::mb_detect_order_single_sink::MbDetectOrderSingleSink;
 use super::mb_numericentity_len_sink::MbNumericentityLenSink;
 use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
+use super::mb_strstr_len_const_sink::MbStrstrLenConstSink;
 use super::mb_strimwidth_len_sink::MbStrimwidthLenSink;
 use super::strstr_len_sink::StrstrLenSink;
 use super::array_map_sum_add_int_sink::ArrayMapSumAddIntSink;
@@ -181,6 +182,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(MbNumericentityLenSink),
         Box::new(MbStrimwidthLenSink),
         Box::new(StrstrLenSink),
+        Box::new(MbStrstrLenConstSink),
         Box::new(Base64DecodeLenSink),
         Box::new(SqrtAddIntSink),
         Box::new(JsonEncodeLenSink),
