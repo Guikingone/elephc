@@ -605,6 +605,25 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies that omitted optional mbstring arguments never take the constant-local fold.
+#[test]
+fn test_mb_constant_local_fold_optional_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "abcdef";
+echo strlen(mb_substr($s, 1, 2)), "|";
+echo strlen(mb_trim("  hi  ")), "|";
+echo strlen(mb_ltrim("  hi  ")), "|";
+echo strlen(mb_str_pad("x", 3)), "|";
+echo strlen(mb_convert_case($s, MB_CASE_TITLE)), "|";
+echo strlen(mb_ucfirst($s)), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2|2|4|3|6|6|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

@@ -377,6 +377,43 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         .or(mb_trim_length)
         .or(mb_pad_length)
         .or(mb_slice_length);
+    // Any mbstring producer that did not match its exact optional-argument shape must stay
+    // on the runtime path; the remaining rewrite arm is reserved for base64 encoding.
+    let is_mb_target = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(
+                RuntimeFnId::MbStrtoupper
+                    | RuntimeFnId::MbStrtolower
+                    | RuntimeFnId::MbUcfirst
+                    | RuntimeFnId::MbLcfirst
+                    | RuntimeFnId::MbConvertCase
+                    | RuntimeFnId::MbTrim
+                    | RuntimeFnId::MbLtrim
+                    | RuntimeFnId::MbRtrim
+                    | RuntimeFnId::MbStrPad
+                    | RuntimeFnId::MbSubstr
+                    | RuntimeFnId::MbStrcut
+            ) | RuntimeCallTarget::ProfiledFunction {
+                target:
+                    RuntimeFnId::MbStrtoupper
+                    | RuntimeFnId::MbStrtolower
+                    | RuntimeFnId::MbUcfirst
+                    | RuntimeFnId::MbLcfirst
+                    | RuntimeFnId::MbConvertCase
+                    | RuntimeFnId::MbTrim
+                    | RuntimeFnId::MbLtrim
+                    | RuntimeFnId::MbRtrim
+                    | RuntimeFnId::MbStrPad
+                    | RuntimeFnId::MbSubstr
+                    | RuntimeFnId::MbStrcut,
+                ..
+            }
+        ))
+    );
+    if is_mb_target && mb_length.is_none() {
+        return false;
+    }
     let Some((length, releases)) = analyze_uses(function, result) else {
         return false;
     };
