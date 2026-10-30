@@ -543,6 +543,28 @@ fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
             return Some(ExprKind::StringLiteral(name.to_string()));
         }
     }
+    // A callback that always returns the same replacement is equivalent to the string form
+    // when the closure has no captures or side effects and the replacement contains no
+    // backreference syntax. Reusing `mb_ereg_replace()` also selects its native fast path.
+    if canonical == "mb_ereg_replace_callback"
+        && matches!(args.len(), 3 | 4)
+        && !active_fold_user_function_exists("mb_ereg_replace")
+    {
+        if let Some(replacement) = constant_callback_replacement(&args[1]) {
+            let mut rewritten = vec![
+                args[0].clone(),
+                Expr::new(ExprKind::StringLiteral(replacement.to_string()), args[1].span),
+                args[2].clone(),
+            ];
+            if let Some(options) = args.get(3) {
+                rewritten.push(options.clone());
+            }
+            return Some(ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified("mb_ereg_replace"),
+                args: rewritten,
+            });
+        }
+    }
     // Expand a literal repeat so a later scalar read (for example `mb_strlen($s, "UTF-8")`)
     // can use the exact byte length instead of calling the runtime for a known string.
     if canonical == "str_repeat" && args.len() == 2 {
@@ -568,6 +590,42 @@ fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
         _ => return None,
     };
     super::casts::try_fold_cast(&target, &args[0])
+}
+
+/// Returns the constant string returned by a capture-free, side-effect-free callback.
+///
+/// Backslashes and dollar signs are rejected because `mb_ereg_replace()` interprets them as
+/// replacement backreferences, while the callback returns them literally.
+fn constant_callback_replacement(callback: &Expr) -> Option<&str> {
+    let ExprKind::Closure {
+        body,
+        captures,
+        capture_refs,
+        by_ref_return,
+        ..
+    } = &callback.kind
+    else {
+        return None;
+    };
+    if !captures.is_empty() || !capture_refs.is_empty() || *by_ref_return {
+        return None;
+    }
+    let [
+        crate::parser::ast::Stmt {
+            kind: crate::parser::ast::StmtKind::Return(Some(value)),
+            ..
+        },
+    ] = body.as_slice()
+    else {
+        return None;
+    };
+    let ExprKind::StringLiteral(replacement) = &value.kind else {
+        return None;
+    };
+    if replacement.contains('\\') || replacement.contains('$') {
+        return None;
+    }
+    Some(replacement)
 }
 
 /// Folds the small literal mbstring regex and MIME forms whose PHP result is deterministic.
