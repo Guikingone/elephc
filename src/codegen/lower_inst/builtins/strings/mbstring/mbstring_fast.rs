@@ -95,6 +95,9 @@ pub(super) fn try_lower(
         RuntimeBuiltinId::MbConvertEncoding => {
             try_lower_convert_encoding(ctx, inst, operation)
         }
+        RuntimeBuiltinId::MbPreferredMimeName => {
+            try_lower_preferred_mime_name(ctx, inst)
+        }
         _ => Ok(false),
     }
 }
@@ -508,6 +511,30 @@ pub(super) fn lower_ord_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers `mb_preferred_mime_name("UTF-8")` to the same persistent encoding literal.
+fn try_lower_preferred_mime_name(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    if inst.operands.len() != 1 {
+        return Ok(false);
+    }
+    let Some(name) =
+        crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, inst.operands[0])?
+    else {
+        return Ok(false);
+    };
+    if !name.eq_ignore_ascii_case("UTF-8") {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_preferred_mime_name", pointer, length)?;
+    // The preferred MIME name for UTF-8 is its canonical spelling, a persistent literal.
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_owned_string");
+    store_if_result(ctx, inst)?;
+    Ok(true)
 }
 
 /// Lowers explicit `mb_convert_encoding($s, "ISO-8859-1", "UTF-8")` through a byte converter.
@@ -1197,6 +1224,29 @@ fn literal_hash_replacement(
     Ok(crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, value)?
         .as_deref()
         == Some("#"))
+}
+
+/// Lowers `strlen(mb_preferred_mime_name(...))` for the canonical UTF-8 spelling.
+pub(super) fn lower_preferred_mime_name_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() == 1 {
+        if let Some(name) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+            ctx,
+            inst.operands[0],
+        )? {
+            if name.eq_ignore_ascii_case("UTF-8") {
+                abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 5);
+                store_if_result(ctx, inst)?;
+                return Ok(());
+            }
+        }
+    }
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbPreferredMimeName, false)?;
+    emit_boxed_string_length(ctx);
+    store_if_result(ctx, inst)?;
+    Ok(())
 }
 
 /// Unboxes a boxed `int|false` result and releases its temporary Mixed cell.

@@ -210,6 +210,15 @@ pub(crate) fn lower_mb_ereg_replace_len(
     mbstring_fast::lower_ereg_replace_len(ctx, inst)
 }
 
+/// Lowers an allocation-free preferred MIME name length selected by the length sink.
+pub(crate) fn lower_mb_preferred_mime_name_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_preferred_mime_name_len(ctx, inst)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;

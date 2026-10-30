@@ -31,6 +31,9 @@ pub(super) fn lower(
         | RuntimeFnId::MbStrrichrLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strstr_len(ctx, inst, target)
         }),
+        RuntimeFnId::MbPreferredMimeNameLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_preferred_mime_name_len(ctx, inst, target)
+        }),
         RuntimeFnId::MbSplitCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_split_count(ctx, inst, target)
         }),

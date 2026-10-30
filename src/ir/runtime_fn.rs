@@ -756,6 +756,8 @@ pub enum RuntimeFnId {
     /// Allocation-free `count(mb_str_split(...))` observed only through the array count.
     MbStrSplitCount,
     MbPreferredMimeName,
+    /// Allocation-free `strlen(mb_preferred_mime_name(...))` for known encodings.
+    MbPreferredMimeNameLen,
     MbCheckEncoding,
     MbSubstituteCharacter,
     MbListEncodings,
@@ -975,6 +977,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrriposInt => Some((2, Some(3))),
             RuntimeFnId::MbOrdInt => Some((2, Some(2))),
             RuntimeFnId::MbDetectEncodingLen => Some((2, Some(2))),
+            RuntimeFnId::MbPreferredMimeNameLen => Some((1, Some(1))),
             RuntimeFnId::MbSplitCount => Some((2, Some(2))),
             RuntimeFnId::MbEregReplaceLen => Some((3, Some(3))),
             RuntimeFnId::MbChrLen => Some((2, Some(2))),
@@ -1872,6 +1875,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrriposInt => RuntimeFnId::Strripos.effects(),
             RuntimeFnId::MbOrdInt => RuntimeFnId::MbOrd.effects(),
             RuntimeFnId::MbDetectEncodingLen => RuntimeFnId::MbDetectEncoding.effects(),
+            RuntimeFnId::MbPreferredMimeNameLen => RuntimeFnId::MbPreferredMimeName.effects(),
             RuntimeFnId::MbSplitCount => RuntimeFnId::MbSplit.effects(),
             RuntimeFnId::MbEregReplaceLen => RuntimeFnId::MbEregReplace.effects(),
             RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
@@ -3660,6 +3664,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbStrSplit => "mb_str_split",
             RuntimeFnId::MbStrSplitCount => "mb_str_split_count",
             RuntimeFnId::MbPreferredMimeName => "mb_preferred_mime_name",
+            RuntimeFnId::MbPreferredMimeNameLen => "mb_preferred_mime_name_len",
             RuntimeFnId::MbCheckEncoding => "mb_check_encoding",
             RuntimeFnId::MbSubstituteCharacter => "mb_substitute_character",
             RuntimeFnId::MbListEncodings => "mb_list_encodings",

@@ -66,6 +66,7 @@ fn is_boxed_strstr(inst: &crate::ir::Instruction) -> bool {
         | RuntimeFnId::MbStrrchr
         | RuntimeFnId::MbStrrichr => inst.operands.len() == 4,
         RuntimeFnId::MbDetectEncoding | RuntimeFnId::MbChr => inst.operands.len() == 2,
+        RuntimeFnId::MbPreferredMimeName => inst.operands.len() == 1,
         RuntimeFnId::MbConvertEncoding | RuntimeFnId::MbEregReplace => inst.operands.len() == 3,
         _ => return false,
     };
@@ -166,6 +167,7 @@ fn length_variant(target: RuntimeFnId) -> Option<RuntimeFnId> {
         RuntimeFnId::MbStrrchr => Some(RuntimeFnId::MbStrrchrLen),
         RuntimeFnId::MbStrrichr => Some(RuntimeFnId::MbStrrichrLen),
         RuntimeFnId::MbDetectEncoding => Some(RuntimeFnId::MbDetectEncodingLen),
+        RuntimeFnId::MbPreferredMimeName => Some(RuntimeFnId::MbPreferredMimeNameLen),
         RuntimeFnId::MbChr => Some(RuntimeFnId::MbChrLen),
         RuntimeFnId::MbConvertEncoding => Some(RuntimeFnId::MbConvertEncodingLen),
         RuntimeFnId::MbEregReplace => Some(RuntimeFnId::MbEregReplaceLen),
