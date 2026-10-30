@@ -19,6 +19,33 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::MbStrposInt
+        | RuntimeFnId::MbStriposInt
+        | RuntimeFnId::MbStrrposInt
+        | RuntimeFnId::MbStrriposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_position_int(ctx, inst, target)
+        }),
+        RuntimeFnId::MbStrstrLen
+        | RuntimeFnId::MbStristrLen
+        | RuntimeFnId::MbStrrchrLen
+        | RuntimeFnId::MbStrrichrLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strstr_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbStrSplitCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_str_split_count(ctx, inst, target)
+        }),
+        RuntimeFnId::MbOrdInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_ord_int(ctx, inst, target)
+        }),
+        RuntimeFnId::MbDetectEncodingLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_detect_encoding_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbChrLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_chr_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbStrimwidthLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strimwidth_len(ctx, inst, target)
+        }),
         RuntimeFnId::MbStrlen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(
                 ctx, inst, target.mbstring_operation().expect("mbstring runtime operation"),

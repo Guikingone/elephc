@@ -56,16 +56,33 @@ impl IrPass for StrstrLenSink {
 
 /// Returns whether `inst` is a two/three-operand `strstr()` call producing `string|false`.
 fn is_boxed_strstr(inst: &crate::ir::Instruction) -> bool {
+    let Some(target) = direct_target(inst) else {
+        return false;
+    };
+    let arity_ok = match target {
+        RuntimeFnId::Strstr => matches!(inst.operands.len(), 2 | 3),
+        RuntimeFnId::MbStrstr
+        | RuntimeFnId::MbStristr
+        | RuntimeFnId::MbStrrchr
+        | RuntimeFnId::MbStrrichr => inst.operands.len() == 4,
+        RuntimeFnId::MbDetectEncoding | RuntimeFnId::MbChr => inst.operands.len() == 2,
+        _ => return false,
+    };
     inst.op == Op::RuntimeCall
-        && matches!(
-            inst.immediate,
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                RuntimeFnId::Strstr
-            )))
-        )
-        && matches!(inst.operands.len(), 2 | 3)
+        && arity_ok
         && inst.result.is_some()
         && inst.result_php_type.codegen_repr() == PhpType::Mixed
+}
+
+/// Returns the runtime target of a direct or profiled call instruction.
+fn direct_target(inst: &crate::ir::Instruction) -> Option<RuntimeFnId> {
+    match inst.immediate {
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(target)
+                | RuntimeCallTarget::ProfiledFunction { target, .. },
+        )) => Some(target),
+        _ => None,
+    }
 }
 
 /// Specializes one candidate after proving its complete use graph.
@@ -97,6 +114,15 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
         }
     }
 
+    let Some(current) = function
+        .instruction(candidate)
+        .and_then(direct_target)
+    else {
+        return false;
+    };
+    let Some(length_target) = length_variant(current) else {
+        return false;
+    };
     let Some(call) = function.instruction_mut(candidate) else {
         return false;
     };
@@ -104,12 +130,12 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
         call.operands[index] = source;
     }
     call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        RuntimeFnId::StrstrLen,
+        length_target,
     )));
     call.result_type = IrType::I64;
     call.result_php_type = PhpType::Int;
     call.result_ownership = Ownership::NonHeap;
-    call.effects = RuntimeFnId::StrstrLen.intrinsic_effects();
+    call.effects = length_target.intrinsic_effects();
     if let Some(value) = function.value_mut(result) {
         value.ir_type = IrType::I64;
         value.php_type = PhpType::Int;
@@ -128,6 +154,20 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
         }
     }
     true
+}
+
+/// Returns the allocation-free length variant for one boxed substring search.
+fn length_variant(target: RuntimeFnId) -> Option<RuntimeFnId> {
+    match target {
+        RuntimeFnId::Strstr => Some(RuntimeFnId::StrstrLen),
+        RuntimeFnId::MbStrstr => Some(RuntimeFnId::MbStrstrLen),
+        RuntimeFnId::MbStristr => Some(RuntimeFnId::MbStristrLen),
+        RuntimeFnId::MbStrrchr => Some(RuntimeFnId::MbStrrchrLen),
+        RuntimeFnId::MbStrrichr => Some(RuntimeFnId::MbStrrichrLen),
+        RuntimeFnId::MbDetectEncoding => Some(RuntimeFnId::MbDetectEncodingLen),
+        RuntimeFnId::MbChr => Some(RuntimeFnId::MbChrLen),
+        _ => None,
+    }
 }
 
 /// Retires the lifetime pin and hidden slot that keep a `strstr()` string operand alive.

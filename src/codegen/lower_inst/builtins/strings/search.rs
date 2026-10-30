@@ -43,7 +43,7 @@ pub(crate) fn lower_string_position(
     runtime_label: &str,
     direction: StringPositionDirection,
 ) -> Result<()> {
-    lower_string_position_mode(ctx, inst, name, runtime_label, direction, true)
+    lower_string_position_mode(ctx, inst, name, runtime_label, direction, true, true)
 }
 
 /// Lowers the raw `(int)strpos()`-family result selected by the cast sink.
@@ -54,7 +54,29 @@ pub(crate) fn lower_string_position_int(
     runtime_label: &str,
     direction: StringPositionDirection,
 ) -> Result<()> {
-    lower_string_position_mode(ctx, inst, name, runtime_label, direction, false)
+    lower_string_position_mode(ctx, inst, name, runtime_label, direction, false, true)
+}
+
+/// Lowers a borrow-only raw `strpos()`-family call without storing the integer result.
+pub(super) fn lower_string_position_int_no_store(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    direction: StringPositionDirection,
+) -> Result<()> {
+    lower_string_position_mode(ctx, inst, name, runtime_label, direction, false, false)
+}
+
+/// Lowers a borrow-only `strpos()`-family call without storing the boxed result.
+pub(super) fn lower_string_position_no_store(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    direction: StringPositionDirection,
+) -> Result<()> {
+    lower_string_position_mode(ctx, inst, name, runtime_label, direction, true, false)
 }
 
 /// Shared search lowering; `boxed` selects the PHP int|false cell or the raw integer.
@@ -65,12 +87,13 @@ fn lower_string_position_mode(
     runtime_label: &str,
     direction: StringPositionDirection,
     boxed: bool,
+    store: bool,
 ) -> Result<()> {
     if inst.operands.len() == 2 {
         load_binary_string_args(ctx, inst, name)?;
         abi::emit_call_label(ctx.emitter, runtime_label);
         finish_search_result(ctx, name, boxed);
-        return store_if_result(ctx, inst);
+        return if store { store_if_result(ctx, inst) } else { Ok(()) };
     }
     if inst.operands.len() != 3 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -86,7 +109,7 @@ fn lower_string_position_mode(
     abi::emit_pop_reg(ctx.emitter, string_position_base_reg(ctx));
     emit_string_position_rebase(ctx, name);
     finish_search_result(ctx, name, boxed);
-    store_if_result(ctx, inst)
+    if store { store_if_result(ctx, inst) } else { Ok(()) }
 }
 
 /// Returns the scratch register that carries a `strpos()`-family search's base offset.
@@ -682,6 +705,26 @@ pub(crate) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
 pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_strstr_mode(ctx, inst, "__rt_strpos", true, false)
+}
+
+/// Lowers a borrow-only `strstr()`-family search without storing the boxed result.
+pub(super) fn lower_strstr_no_store(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    runtime_label: &str,
+) -> Result<()> {
+    lower_strstr_mode(ctx, inst, runtime_label, false, true)
+}
+
+/// Shared `strstr()`-family search and substring reconstruction.
+fn lower_strstr_mode(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    runtime_label: &str,
+    store: bool,
+    owned_string_box: bool,
+) -> Result<()> {
     if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
             "strstr expected 2 or 3 args, got {}",
@@ -711,11 +754,11 @@ pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     materialize_truthy_flag(ctx, inst, 2, "strstr")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_strstr_aarch64(ctx, inst, &labels)?,
-        Arch::X86_64 => lower_strstr_x86_64(ctx, inst, &labels)?,
+        Arch::AArch64 => lower_strstr_aarch64(ctx, inst, runtime_label, owned_string_box, &labels)?,
+        Arch::X86_64 => lower_strstr_x86_64(ctx, inst, runtime_label, owned_string_box, &labels)?,
     }
     ctx.emitter.label(&labels.end);
-    store_if_result(ctx, inst)
+    if store { store_if_result(ctx, inst) } else { Ok(()) }
 }
 
 /// Lowers `strlen(strstr(...))` through the allocation-free length helper.
@@ -913,6 +956,8 @@ pub(super) fn lower_str_repeat_x86_64(ctx: &mut FunctionContext<'_>, inst: &Inst
 pub(super) fn lower_strstr_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    runtime_label: &str,
+    owned_string_box: bool,
     labels: &StrstrLabels,
 ) -> Result<()> {
     load_string_arg_to_regs(ctx, inst, 0, "strstr", "x1", "x2")?;
@@ -922,7 +967,7 @@ pub(super) fn lower_strstr_aarch64(
     ctx.emitter.instruction("mov x4, x2");                                      // pass the needle length as the secondary string argument
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack into primary string argument registers
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack while strpos() returns the match offset
-    abi::emit_call_label(ctx.emitter, "__rt_strpos");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack for substring reconstruction
     ctx.emitter.instruction("ldr x9, [sp], #16");                               // reload the parked $before_needle flag now that every call is done
     ctx.emitter.instruction("cmp x0, #0");                                      // check whether strpos() returned a valid match offset
@@ -935,7 +980,12 @@ pub(super) fn lower_strstr_aarch64(
     ctx.emitter.label(&labels.prefix);
     ctx.emitter.instruction("mov x2, x0");                                      // keep the haystack pointer and cut the length at the match offset
     ctx.emitter.label(&labels.box_match);
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    if owned_string_box {
+        abi::emit_call_label(ctx.emitter, "__rt_str_dup_owned");
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_owned_string");
+    } else {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    }
     ctx.emitter.instruction(&format!("b {}", labels.end));                      // skip the miss arm once the substring is boxed
     ctx.emitter.label(&labels.miss);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -947,6 +997,8 @@ pub(super) fn lower_strstr_aarch64(
 pub(super) fn lower_strstr_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    runtime_label: &str,
+    owned_string_box: bool,
     labels: &StrstrLabels,
 ) -> Result<()> {
     load_string_arg_to_regs(ctx, inst, 0, "strstr", "rax", "rdx")?;
@@ -960,7 +1012,7 @@ pub(super) fn lower_strstr_x86_64(
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the haystack length as the second SysV string argument
     ctx.emitter.instruction("mov rdx, r8");                                     // pass the needle pointer as the third SysV string argument
     ctx.emitter.instruction("mov rcx, r9");                                     // pass the needle length as the fourth SysV string argument
-    abi::emit_call_label(ctx.emitter, "__rt_strpos");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     ctx.emitter.instruction("mov r8, rax");                                     // preserve the signed match offset while restoring the haystack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
     abi::emit_pop_reg(ctx.emitter, "r9");                                       // reload the parked $before_needle flag now that every call is done
@@ -974,7 +1026,12 @@ pub(super) fn lower_strstr_x86_64(
     ctx.emitter.label(&labels.prefix);
     ctx.emitter.instruction("mov rdx, r8");                                     // keep the haystack pointer and cut the length at the match offset
     ctx.emitter.label(&labels.box_match);
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    if owned_string_box {
+        abi::emit_call_label(ctx.emitter, "__rt_str_dup_owned");
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_owned_string");
+    } else {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    }
     ctx.emitter.instruction(&format!("jmp {}", labels.end));                    // skip the miss arm once the substring is boxed
     ctx.emitter.label(&labels.miss);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

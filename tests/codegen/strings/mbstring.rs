@@ -387,6 +387,29 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the allocation-free codepoint, detection, width, split, scrub, and search sinks.
+#[test]
+fn test_mb_ascii_search_and_length_sink_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo (int)mb_ord("A", "UTF-8"), "|";
+echo strlen(mb_chr(65, "UTF-8")), "|";
+echo strlen(mb_chr(0x20AC, "UTF-8")), "|";
+echo mb_detect_encoding("héllo", "UTF-8"), "|";
+echo strlen(mb_strimwidth("The quick brown fox jumps over the lazy dog", 0, 10, "...", "UTF-8")), "|";
+echo count(mb_str_split("abcdefghij", 2, "UTF-8")), "|";
+echo strlen(mb_scrub("héllo", "UTF-8")), "|";
+echo (int)mb_strpos("abcdef", "cd", 0, "UTF-8"), "|";
+echo (int)mb_strripos("abcABC", "a", 0, "UTF-8"), "|";
+echo strlen(mb_strstr("abcdef", "cd", false, "UTF-8")), "|";
+echo strlen(mb_strrichr("abcABC", "a", false, "UTF-8")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "65|1|3|UTF-8|10|5|6|2|3|4|3|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

@@ -68,6 +68,17 @@ fn is_count_call(inst: &crate::ir::Instruction) -> bool {
         && inst.result.is_some()
 }
 
+/// Returns the runtime target of a direct or profiled call instruction.
+fn direct_target(inst: &crate::ir::Instruction) -> Option<RuntimeFnId> {
+    match inst.immediate {
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(target)
+                | RuntimeCallTarget::ProfiledFunction { target, .. },
+        )) => Some(target),
+        _ => None,
+    }
+}
+
 /// Specializes one count call after proving the split array has no other observer.
 fn specialize(function: &mut Function, count_id: InstId) -> bool {
     let Some(count) = function.instruction(count_id) else {
@@ -79,15 +90,15 @@ fn specialize(function: &mut Function, count_id: InstId) -> bool {
     let Some((split_id, split)) = defining_instruction_with_id(function, split_value) else {
         return false;
     };
-    if split.op != Op::RuntimeCall
-        || !matches!(
-            split.immediate,
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                RuntimeFnId::StrSplit
-            )))
-        )
-        || !matches!(split.operands.len(), 1 | 2)
-    {
+    let Some(split_target) = direct_target(split) else {
+        return false;
+    };
+    let (count_target, arity_ok) = match split_target {
+        RuntimeFnId::StrSplit => (RuntimeFnId::StrSplitCount, matches!(split.operands.len(), 1 | 2)),
+        RuntimeFnId::MbStrSplit => (RuntimeFnId::MbStrSplitCount, matches!(split.operands.len(), 2 | 3)),
+        _ => return false,
+    };
+    if split.op != Op::RuntimeCall || !arity_ok {
         return false;
     }
     let mut operands = split.operands.clone();
@@ -102,13 +113,13 @@ fn specialize(function: &mut Function, count_id: InstId) -> bool {
         return false;
     };
     count.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        RuntimeFnId::StrSplitCount,
+        count_target,
     )));
     count.operands = operands;
     count.result_type = IrType::I64;
     count.result_php_type = PhpType::Int;
     count.result_ownership = Ownership::NonHeap;
-    count.effects = RuntimeFnId::StrSplitCount.intrinsic_effects();
+    count.effects = count_target.intrinsic_effects();
     for id in std::iter::once(split_id).chain(removable) {
         if let Some(inst) = function.instruction_mut(id) {
             neutralize_to_nop(inst);

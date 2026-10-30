@@ -209,6 +209,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_from_owned_string(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);

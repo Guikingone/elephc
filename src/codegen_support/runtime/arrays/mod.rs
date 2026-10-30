@@ -571,7 +571,7 @@ pub use mixed_cast_array::emit_mixed_cast_array;
 pub use mixed_clone::emit_mixed_clone;
 pub use mixed_reference::emit_mixed_reference;
 /// Emit Mixed from value conversion helper.
-pub use mixed_from_value::emit_mixed_from_value;
+pub use mixed_from_value::{emit_mixed_from_owned_string, emit_mixed_from_value};
 /// Emit Mixed instanceof check helper.
 pub use mixed_instanceof::emit_mixed_instanceof;
 pub use mixed_cast_bool::emit_mixed_cast_bool;

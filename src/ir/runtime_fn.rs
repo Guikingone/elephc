@@ -703,6 +703,8 @@ pub enum RuntimeFnId {
     MbUcfirst,
     MbLcfirst,
     MbStrimwidth,
+    /// Allocation-free `strlen(mb_strimwidth(...))` observed only through the string length.
+    MbStrimwidthLen,
     MbSubstr,
     MbStrcut,
     MbScrub,
@@ -713,26 +715,50 @@ pub enum RuntimeFnId {
     MbConvertKana,
     MbSubstrCount,
     MbOrd,
+    /// Raw `(int)mb_ord()` observed only through an integer cast.
+    MbOrdInt,
     MbChr,
+    /// Allocation-free `strlen(mb_chr(...))` observed only through the string length.
+    MbChrLen,
     MbStrpos,
     MbStripos,
     MbStrrpos,
     MbStrripos,
+    /// Raw `(int)mb_strpos()` observed only through an integer cast; absent matches become zero.
+    MbStrposInt,
+    /// Raw `(int)mb_stripos()` observed only through an integer cast; absent matches become zero.
+    MbStriposInt,
+    /// Raw `(int)mb_strrpos()` observed only through an integer cast; absent matches become zero.
+    MbStrrposInt,
+    /// Raw `(int)mb_strripos()` observed only through an integer cast; absent matches become zero.
+    MbStrriposInt,
     MbStrstr,
     MbStristr,
     MbStrrchr,
     MbStrrichr,
+    /// Allocation-free `strlen(mb_strstr(...))` observed only through the string length.
+    MbStrstrLen,
+    /// Allocation-free `strlen(mb_stristr(...))` observed only through the string length.
+    MbStristrLen,
+    /// Allocation-free `strlen(mb_strrchr(...))` observed only through the string length.
+    MbStrrchrLen,
+    /// Allocation-free `strlen(mb_strrichr(...))` observed only through the string length.
+    MbStrrichrLen,
     MbLanguage,
     MbInternalEncoding,
     MbHttpOutput,
     MbEncodingAliases,
     MbStrSplit,
+    /// Allocation-free `count(mb_str_split(...))` observed only through the array count.
+    MbStrSplitCount,
     MbPreferredMimeName,
     MbCheckEncoding,
     MbSubstituteCharacter,
     MbListEncodings,
     MbDetectOrder,
     MbDetectEncoding,
+    /// Allocation-free `strlen(mb_detect_encoding(...))` for a single explicit encoding.
+    MbDetectEncodingLen,
     /// Converts strings and recursive arrays through the shared mbstring engine.
     MbConvertEncoding,
     MbEncodeNumericentity,
@@ -937,10 +963,23 @@ impl RuntimeFnId {
             RuntimeFnId::StriposInt => Some((2, Some(3))),
             RuntimeFnId::StrrposInt => Some((2, Some(3))),
             RuntimeFnId::StrriposInt => Some((2, Some(3))),
+            RuntimeFnId::MbOrdInt => Some((2, Some(2))),
+            RuntimeFnId::MbDetectEncodingLen => Some((2, Some(2))),
+            RuntimeFnId::MbChrLen => Some((2, Some(2))),
+            RuntimeFnId::MbStrimwidthLen => Some((5, Some(5))),
+            RuntimeFnId::MbStrposInt
+            | RuntimeFnId::MbStriposInt
+            | RuntimeFnId::MbStrrposInt
+            | RuntimeFnId::MbStrriposInt
+            | RuntimeFnId::MbStrstrLen
+            | RuntimeFnId::MbStristrLen
+            | RuntimeFnId::MbStrrchrLen
+            | RuntimeFnId::MbStrrichrLen => Some((4, Some(4))),
             RuntimeFnId::StrstrLen => Some((2, Some(3))),
             RuntimeFnId::ChunkSplitLen => Some((3, Some(3))),
             RuntimeFnId::Bin2HexLen => Some((1, Some(1))),
             RuntimeFnId::StrSplitCount => Some((1, Some(2))),
+            RuntimeFnId::MbStrSplitCount => Some((2, Some(3))),
             RuntimeFnId::Base64DecodedLen => Some((1, Some(2))),
             RuntimeFnId::ParseUrlCount => Some((1, Some(1))),
             RuntimeFnId::CountCharsDistinct => Some((1, Some(1))),
@@ -1816,6 +1855,19 @@ impl RuntimeFnId {
             RuntimeFnId::StriposInt => RuntimeFnId::Stripos.effects(),
             RuntimeFnId::StrrposInt => RuntimeFnId::Strrpos.effects(),
             RuntimeFnId::StrriposInt => RuntimeFnId::Strripos.effects(),
+            RuntimeFnId::MbOrdInt => RuntimeFnId::MbOrd.effects(),
+            RuntimeFnId::MbDetectEncodingLen => RuntimeFnId::MbDetectEncoding.effects(),
+            RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
+            RuntimeFnId::MbStrimwidthLen => RuntimeFnId::MbStrimwidth.effects(),
+            // The raw mbstring position keeps the bridge search's offset/encoding validation.
+            RuntimeFnId::MbStrposInt => RuntimeFnId::MbStrpos.effects(),
+            RuntimeFnId::MbStriposInt => RuntimeFnId::MbStripos.effects(),
+            RuntimeFnId::MbStrrposInt => RuntimeFnId::MbStrrpos.effects(),
+            RuntimeFnId::MbStrriposInt => RuntimeFnId::MbStrripos.effects(),
+            RuntimeFnId::MbStrstrLen => RuntimeFnId::MbStrstr.effects(),
+            RuntimeFnId::MbStristrLen => RuntimeFnId::MbStristr.effects(),
+            RuntimeFnId::MbStrrchrLen => RuntimeFnId::MbStrrchr.effects(),
+            RuntimeFnId::MbStrrichrLen => RuntimeFnId::MbStrrichr.effects(),
             // The length-only search keeps strstr()'s coercions and search effects.
             RuntimeFnId::StrstrLen => RuntimeFnId::Strstr.effects(),
             // The length-only split keeps chunk_split()'s validation and allocation fatal.
@@ -1824,6 +1876,7 @@ impl RuntimeFnId {
             RuntimeFnId::Bin2HexLen => E::from_bits_retain(E::MAY_FATAL.bits()),
             // The count-only split keeps str_split()'s length validation and coercion.
             RuntimeFnId::StrSplitCount => RuntimeFnId::StrSplit.effects(),
+            RuntimeFnId::MbStrSplitCount => RuntimeFnId::MbStrSplit.effects(),
             // The length-only decoder keeps base64_decode()'s strict rejection semantics.
             RuntimeFnId::Base64DecodedLen => RuntimeFnId::Base64Decode.effects(),
             // The count-only parser keeps parse_url()'s invalid-URL/error effects.
@@ -3548,6 +3601,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbUcfirst => "mb_ucfirst",
             RuntimeFnId::MbLcfirst => "mb_lcfirst",
             RuntimeFnId::MbStrimwidth => "mb_strimwidth",
+            RuntimeFnId::MbStrimwidthLen => "mb_strimwidth_len",
             RuntimeFnId::MbSubstr => "mb_substr",
             RuntimeFnId::MbStrcut => "mb_strcut",
             RuntimeFnId::MbScrub => "mb_scrub",
@@ -3558,26 +3612,38 @@ impl RuntimeFnId {
             RuntimeFnId::MbConvertKana => "mb_convert_kana",
             RuntimeFnId::MbSubstrCount => "mb_substr_count",
             RuntimeFnId::MbOrd => "mb_ord",
+            RuntimeFnId::MbOrdInt => "mb_ord_int",
             RuntimeFnId::MbChr => "mb_chr",
+            RuntimeFnId::MbChrLen => "mb_chr_len",
             RuntimeFnId::MbStrpos => "mb_strpos",
             RuntimeFnId::MbStripos => "mb_stripos",
             RuntimeFnId::MbStrrpos => "mb_strrpos",
             RuntimeFnId::MbStrripos => "mb_strripos",
+            RuntimeFnId::MbStrposInt => "mb_strpos_int",
+            RuntimeFnId::MbStriposInt => "mb_stripos_int",
+            RuntimeFnId::MbStrrposInt => "mb_strrpos_int",
+            RuntimeFnId::MbStrriposInt => "mb_strripos_int",
             RuntimeFnId::MbStrstr => "mb_strstr",
             RuntimeFnId::MbStristr => "mb_stristr",
             RuntimeFnId::MbStrrchr => "mb_strrchr",
             RuntimeFnId::MbStrrichr => "mb_strrichr",
+            RuntimeFnId::MbStrstrLen => "mb_strstr_len",
+            RuntimeFnId::MbStristrLen => "mb_stristr_len",
+            RuntimeFnId::MbStrrchrLen => "mb_strrchr_len",
+            RuntimeFnId::MbStrrichrLen => "mb_strrichr_len",
             RuntimeFnId::MbLanguage => "mb_language",
             RuntimeFnId::MbInternalEncoding => "mb_internal_encoding",
             RuntimeFnId::MbHttpOutput => "mb_http_output",
             RuntimeFnId::MbEncodingAliases => "mb_encoding_aliases",
             RuntimeFnId::MbStrSplit => "mb_str_split",
+            RuntimeFnId::MbStrSplitCount => "mb_str_split_count",
             RuntimeFnId::MbPreferredMimeName => "mb_preferred_mime_name",
             RuntimeFnId::MbCheckEncoding => "mb_check_encoding",
             RuntimeFnId::MbSubstituteCharacter => "mb_substitute_character",
             RuntimeFnId::MbListEncodings => "mb_list_encodings",
             RuntimeFnId::MbDetectOrder => "mb_detect_order",
             RuntimeFnId::MbDetectEncoding => "mb_detect_encoding",
+            RuntimeFnId::MbDetectEncodingLen => "mb_detect_encoding_len",
             RuntimeFnId::MbConvertEncoding => "mb_convert_encoding",
             RuntimeFnId::MbConvertVariables => "mb_convert_variables",
             RuntimeFnId::MbEncodeNumericentity => "mb_encode_numericentity",

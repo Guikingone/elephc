@@ -33,6 +33,7 @@ mod strpos_int_sink;
 mod count_chars_count_sink;
 mod str_split_count_sink;
 mod base64_decode_len_sink;
+mod mb_strimwidth_len_sink;
 mod strstr_len_sink;
 mod array_sum_loop;
 mod boxed_narrowing;

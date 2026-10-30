@@ -58,6 +58,113 @@ pub(crate) fn lower_mb_strlen(
     lower_mbstring(ctx, inst, operation)
 }
 
+/// Lowers a raw integer mbstring search selected by the position cast sink.
+pub(crate) fn lower_mb_position_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    use crate::ir::RuntimeFnId;
+    let (source, name, label, direction) = match target {
+        RuntimeFnId::MbStrposInt => (
+            RuntimeBuiltinId::MbStrpos,
+            "mb_strpos",
+            "__rt_strpos",
+            super::StringPositionDirection::Forward,
+        ),
+        RuntimeFnId::MbStriposInt => (
+            RuntimeBuiltinId::MbStripos,
+            "mb_stripos",
+            "__rt_stripos",
+            super::StringPositionDirection::Forward,
+        ),
+        RuntimeFnId::MbStrrposInt => (
+            RuntimeBuiltinId::MbStrrpos,
+            "mb_strrpos",
+            "__rt_strrpos",
+            super::StringPositionDirection::Reverse,
+        ),
+        RuntimeFnId::MbStrriposInt => (
+            RuntimeBuiltinId::MbStrripos,
+            "mb_strripos",
+            "__rt_strripos",
+            super::StringPositionDirection::Reverse,
+        ),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "raw mbstring position lowering requires an mbstring position target",
+            ))
+        }
+    };
+    mbstring_fast::lower_position_int(ctx, inst, source, name, label, direction)
+}
+
+/// Lowers a raw integer mbstring substring-search length selected by the length sink.
+pub(crate) fn lower_mb_strstr_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    use crate::ir::RuntimeFnId;
+    let (source, mode) = match target {
+        RuntimeFnId::MbStrstrLen => (RuntimeBuiltinId::MbStrstr, 0),
+        RuntimeFnId::MbStristrLen => (RuntimeBuiltinId::MbStristr, 1),
+        RuntimeFnId::MbStrrchrLen => (RuntimeBuiltinId::MbStrrchr, 2),
+        RuntimeFnId::MbStrrichrLen => (RuntimeBuiltinId::MbStrrichr, 3),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "raw mbstring search-length lowering requires an mbstring length target",
+            ))
+        }
+    };
+    mbstring_fast::lower_strstr_len(ctx, inst, source, mode)
+}
+
+/// Lowers an allocation-free mbstring split count selected by the split count sink.
+pub(crate) fn lower_mb_str_split_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_str_split_count(ctx, inst)
+}
+
+/// Lowers a raw integer mbstring codepoint selected by the position cast sink.
+pub(crate) fn lower_mb_ord_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_ord_int(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring encoding-detection length selected by the length sink.
+pub(crate) fn lower_mb_detect_encoding_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_detect_encoding_len(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring codepoint length selected by the length sink.
+pub(crate) fn lower_mb_chr_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_chr_len(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring trim-width length selected by the length sink.
+pub(crate) fn lower_mb_strimwidth_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_strimwidth_len(ctx, inst)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;

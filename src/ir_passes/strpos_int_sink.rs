@@ -6,7 +6,8 @@
 //! - The EIR fixed-point pass driver after the length and math sinks.
 //!
 //! Key details:
-//! - Applies to `strpos`, `stripos`, `strrpos`, `strripos` and `ip2long`; the work still runs with
+//! - Applies to `strpos`, `stripos`, `strrpos`, `strripos`, their mbstring variants, and
+//!   `ip2long`; the work still runs with
 //!   its original arguments, coercions, offset validation and warnings. Only the result
 //!   representation changes from `int|false` to `int`.
 //! - A not-found or invalid sentinel becomes zero, exactly like PHP's `(int)false`.
@@ -63,6 +64,11 @@ fn is_boxed_position(inst: &crate::ir::Instruction) -> bool {
         | RuntimeFnId::Strpos
         | RuntimeFnId::Strripos
         | RuntimeFnId::Strrpos => matches!(inst.operands.len(), 2 | 3),
+        RuntimeFnId::MbStripos
+        | RuntimeFnId::MbStrpos
+        | RuntimeFnId::MbStrripos
+        | RuntimeFnId::MbStrrpos => inst.operands.len() == 4,
+        RuntimeFnId::MbOrd => inst.operands.len() == 2,
         _ => return false,
     };
     inst.op == Op::RuntimeCall
@@ -90,6 +96,11 @@ fn raw_variant(target: RuntimeFnId) -> Option<RuntimeFnId> {
         RuntimeFnId::Strpos => Some(RuntimeFnId::StrposInt),
         RuntimeFnId::Strripos => Some(RuntimeFnId::StrriposInt),
         RuntimeFnId::Strrpos => Some(RuntimeFnId::StrrposInt),
+        RuntimeFnId::MbStripos => Some(RuntimeFnId::MbStriposInt),
+        RuntimeFnId::MbStrpos => Some(RuntimeFnId::MbStrposInt),
+        RuntimeFnId::MbStrripos => Some(RuntimeFnId::MbStrriposInt),
+        RuntimeFnId::MbStrrpos => Some(RuntimeFnId::MbStrrposInt),
+        RuntimeFnId::MbOrd => Some(RuntimeFnId::MbOrdInt),
         RuntimeFnId::Ip2long => Some(RuntimeFnId::Ip2longInt),
         _ => None,
     }
