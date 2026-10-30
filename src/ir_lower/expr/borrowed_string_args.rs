@@ -163,6 +163,7 @@ fn borrowable_string_read_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbHttpInput
             | RuntimeFnId::MbSplit
             | RuntimeFnId::MbEregReplace
+            | RuntimeFnId::MbEregSearchInit
     )
 }
 

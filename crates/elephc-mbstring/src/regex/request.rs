@@ -65,6 +65,11 @@ struct Data {
     position: usize,
     pattern: Option<Rc<Regex>>,
     matched: Option<Match>,
+    /// The progressive pattern is the dedicated `[0-9]+` form initialized by the fast ABI.
+    simple_pattern: bool,
+    /// Native encoding identity and options that validated the retained simple subject.
+    simple_encoding: u32,
+    simple_options: Options,
 }
 
 /// One thread-confined mbregex session shared by every operation in a request.
@@ -147,6 +152,7 @@ impl Session {
                     }
                 }
                 data.cache.insert(pattern.to_vec(), Cached { encoding: encoding.id, options, regex: regex.clone() });
+                data.simple_pattern = false;
                 Ok(Some(regex))
             }
             Err(RegexError::Pattern(message)) => { warning(function, &message, emit); Ok(None) }

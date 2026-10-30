@@ -20,6 +20,7 @@ use crate::state::State;
 
 mod arguments;
 mod catalog;
+mod ereg_search;
 mod check;
 mod conversion;
 mod detect;

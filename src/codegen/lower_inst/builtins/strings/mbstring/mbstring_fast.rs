@@ -128,6 +128,10 @@ pub(super) fn try_lower(
         RuntimeBuiltinId::MbSubstituteCharacter => {
             try_lower_substitute_character(ctx, inst, operation)
         }
+        RuntimeBuiltinId::MbEregSearchInit => try_lower_ereg_search_init(ctx, inst),
+        RuntimeBuiltinId::MbEregSearch => try_lower_ereg_search_step(ctx, inst),
+        RuntimeBuiltinId::MbEregSearchGetpos => lower_ereg_search_getpos(ctx, inst),
+        RuntimeBuiltinId::MbEregSearchSetpos => try_lower_ereg_search_setpos(ctx, inst),
         _ => Ok(false),
     }
 }
@@ -566,6 +570,7 @@ fn try_lower_string_setting_bool(
         }
     }
     ctx.emitter.bl_c(helper);
+    zero_extend_c_i32(ctx);
     let fallback = ctx.next_label("mb_setting_fallback");
     let done = ctx.next_label("mb_setting_done");
     match ctx.emitter.target.arch {
@@ -617,6 +622,7 @@ fn try_lower_substitute_character(
         }
     }
     ctx.emitter.bl_c("elephc_mbstring_substitute_character_set_v1");
+    zero_extend_c_i32(ctx);
     let fallback = ctx.next_label("mb_substitute_fallback");
     let done = ctx.next_label("mb_substitute_done");
     match ctx.emitter.target.arch {
@@ -646,6 +652,120 @@ fn try_lower_substitute_character(
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&fallback);
     super::lower_mbstring_impl(ctx, inst, source, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers `mb_ereg_search_init()` for the literal ASCII `[0-9]+` pattern.
+fn try_lower_ereg_search_init(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if inst.operands.len() != 2
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+        || crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+            ctx,
+            inst.operands[1],
+        )?
+        .as_deref()
+            != Some("[0-9]+")
+    {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_ereg_search_init", pointer, length)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                             // pass the subject pointer as the first C argument
+            ctx.emitter.instruction("mov x1, x2");                             // pass the subject length as the second C argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                          // pass the subject pointer as the first SysV argument
+            ctx.emitter.instruction("mov rsi, rdx");                          // pass the subject length as the second SysV argument
+        }
+    }
+    ctx.emitter.bl_c("elephc_mbstring_ereg_search_init_simple_v1");
+    let fallback = ctx.next_label("mb_ereg_search_init_fallback");
+    let done = ctx.next_label("mb_ereg_search_init_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp w0, #0");                              // inspect the signed C i32 status
+            ctx.emitter.instruction(&format!("b.lt {fallback}"));              // bridge preserves unexpected diagnostics
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                          // did the dedicated initializer fail?
+            ctx.emitter.instruction(&format!("js {fallback}"));                // bridge preserves unexpected diagnostics
+        }
+    }
+    zero_extend_c_i32(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEregSearchInit, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers the no-argument `mb_ereg_search()` progressive step.
+fn try_lower_ereg_search_step(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if !inst.operands.is_empty() {
+        return Ok(false);
+    }
+    ctx.emitter.bl_c("elephc_mbstring_ereg_search_step_v1");
+    let fallback = ctx.next_label("mb_ereg_search_fallback");
+    let done = ctx.next_label("mb_ereg_search_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp w0, #0");                              // inspect the signed C i32 status
+            ctx.emitter.instruction(&format!("b.lt {fallback}"));              // bridge preserves unexpected diagnostics
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                          // did the dedicated search fail?
+            ctx.emitter.instruction(&format!("js {fallback}"));                // bridge preserves unexpected diagnostics
+        }
+    }
+    zero_extend_c_i32(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEregSearch, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers the no-argument `mb_ereg_search_getpos()` read.
+fn lower_ereg_search_getpos(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if !inst.operands.is_empty() {
+        return Ok(false);
+    }
+    ctx.emitter.bl_c("elephc_mbstring_ereg_search_getpos_v1");
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers `mb_ereg_search_setpos()` through the shared session setter.
+fn try_lower_ereg_search_setpos(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if inst.operands.len() != 1 {
+        return Ok(false);
+    }
+    load_as_int(ctx, inst.operands[0], "mb_ereg_search_setpos")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                              // pass the position as the first SysV argument
+    }
+    ctx.emitter.bl_c("elephc_mbstring_ereg_search_setpos_v1");
+    zero_extend_c_i32(ctx);
+    let fallback = ctx.next_label("mb_ereg_search_setpos_fallback");
+    let done = ctx.next_label("mb_ereg_search_setpos_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {fallback}"));           // out-of-range positions need PHP's ValueError
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                          // did the position fit the retained subject?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                // out-of-range positions need PHP's ValueError
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEregSearchSetpos, false)?;
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(true)
@@ -682,6 +802,7 @@ pub(super) fn lower_setting_int(
             }
         }
         ctx.emitter.bl_c(helper);
+        zero_extend_c_i32(ctx);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction(&format!("cbz x0, {fallback}"));      // invalid settings keep the bridge diagnostics
@@ -711,6 +832,7 @@ fn try_lower_output_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         return Ok(false);
     }
     ctx.emitter.bl_c("elephc_mbstring_output_utf8_passthrough_v1");
+    zero_extend_c_i32(ctx);
     let fallback = ctx.next_label("mb_output_handler_fallback");
     let done = ctx.next_label("mb_output_handler_done");
     match ctx.emitter.target.arch {
@@ -815,6 +937,13 @@ fn try_lower_mimeheader(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     Ok(true)
 }
 
+/// Zero-extends a C `i32` result on AArch64 before generated code treats it as an `x` register.
+fn zero_extend_c_i32(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::AArch64 {
+        ctx.emitter.instruction("mov w0, w0");                                 // clear the unspecified high half of a C i32 result
+    }
+}
+
 /// Lowers the specialized one-element UTF-8 `mb_detect_order()` setter.
 pub(super) fn lower_detect_order_single(
     ctx: &mut FunctionContext<'_>,
@@ -839,6 +968,7 @@ pub(super) fn lower_detect_order_single(
         }
     }
     ctx.emitter.bl_c("elephc_mbstring_detect_order_single_v1");
+    zero_extend_c_i32(ctx);
     if inst.result_php_type.codegen_repr() == PhpType::Int {
         // The integer-observed form returns PHP's boolean truthiness directly.
         if ctx.emitter.target.arch == Arch::X86_64 {

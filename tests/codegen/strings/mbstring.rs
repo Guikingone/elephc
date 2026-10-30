@@ -554,6 +554,28 @@ try { mb_detect_order(["NOPE"]); } catch (ValueError $e) { echo "error\n"; }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the dedicated progressive-search init/step/position path and invalid-subject fallback.
+#[test]
+fn test_mb_ereg_search_native_state_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+var_dump(mb_ereg_search_init("abc123", "[0-9]+"));
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search_setpos(3));
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search_init("\x80", "[0-9]+"));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nint(6)\nbool(true)\nint(3)\nbool(true)\nint(6)\nbool(false)\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

@@ -49,6 +49,43 @@ impl Session {
         data.subject = Some(Rc::new(Subject::new(subject)));
         data.position = if valid { 0 } else { subject.len() };
         data.matched = None;
+        data.simple_pattern = false;
+        Ok(valid)
+    }
+
+    /// Reinitializes the progressive subject for the dedicated `[0-9]+` path.
+    ///
+    /// Repeating `mb_ereg_search_init()` with the same subject, encoding, and options is the
+    /// common request-local loop shape. The retained subject is already an owned copy, so the
+    /// fast path only compares its bytes and resets the progressive cursor without recompiling
+    /// the pattern or allocating a second subject.
+    pub fn initialize_simple(&self, subject: &[u8]) -> Result<bool, RegexError> {
+        let options = self.options();
+        let encoding = self.encoding();
+        {
+            let data = self.data.borrow();
+            if data.simple_pattern
+                && data.simple_encoding == encoding.id
+                && data.simple_options == options
+                && data
+                    .subject
+                    .as_ref()
+                    .is_some_and(|retained| &retained[..] == subject)
+            {
+                drop(data);
+                let mut data = self.data.borrow_mut();
+                data.position = 0;
+                data.matched = None;
+                return Ok(true);
+            }
+        }
+        let valid = self.initialize(subject, Some(b"[0-9]+"), None, &mut |_| {})?;
+        if valid {
+            let mut data = self.data.borrow_mut();
+            data.simple_pattern = true;
+            data.simple_encoding = encoding.id;
+            data.simple_options = options;
+        }
         Ok(valid)
     }
 
@@ -60,7 +97,9 @@ impl Session {
         if let Some(pattern) = pattern {
             let regex = self.compile(pattern, options, function, emit)?;
             let found = regex.is_some();
-            self.data.borrow_mut().pattern = regex;
+            let mut data = self.data.borrow_mut();
+            data.pattern = regex;
+            data.simple_pattern = false;
             if !found { return Ok(None); }
         }
         let (pattern, subject, position) = {
