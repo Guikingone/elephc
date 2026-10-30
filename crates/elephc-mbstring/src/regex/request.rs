@@ -67,9 +67,6 @@ struct Data {
     matched: Option<Match>,
     /// The progressive pattern is the dedicated `[0-9]+` form initialized by the fast ABI.
     simple_pattern: bool,
-    /// Native encoding identity and options that validated the retained simple subject.
-    simple_encoding: u32,
-    simple_options: Options,
 }
 
 /// One thread-confined mbregex session shared by every operation in a request.
@@ -84,7 +81,9 @@ impl Session {
     pub fn set_encoding(&self, name: &[u8]) -> MbResult<()> {
         let encoding = RegexEncoding::lookup(name).ok_or_else(||
             MbError::argument_value("mb_regex_encoding", 1, "encoding", "must be a valid encoding, ", name, " given"))?;
-        self.data.borrow_mut().encoding = encoding;
+        let mut data = self.data.borrow_mut();
+        data.encoding = encoding;
+        data.simple_pattern = false;
         Ok(())
     }
 
@@ -94,6 +93,7 @@ impl Session {
         let mut data = self.data.borrow_mut();
         data.default_encoding = RegexEncoding::default_for_ini(name).unwrap_or_default();
         if let Some(encoding) = RegexEncoding::lookup(name) { data.encoding = encoding; }
+        data.simple_pattern = false;
     }
 
     /// Returns the current default options without changing cached or progressive patterns.
@@ -102,7 +102,9 @@ impl Session {
     /// Publishes validated options and returns the previous default, as mb_regex_set_options does.
     pub fn set_options(&self, input: &[u8]) -> MbResult<Options> {
         let options = Options::parse(input, false)?;
-        Ok(std::mem::replace(&mut self.data.borrow_mut().options, options))
+        let mut data = self.data.borrow_mut();
+        data.simple_pattern = false;
+        Ok(std::mem::replace(&mut data.options, options))
     }
 
     /// Releases request-owned patterns, captures, and subjects while retaining PHP's worker option defaults.

@@ -60,20 +60,14 @@ impl Session {
     /// fast path only compares its bytes and resets the progressive cursor without recompiling
     /// the pattern or allocating a second subject.
     pub fn initialize_simple(&self, subject: &[u8]) -> Result<bool, RegexError> {
-        let options = self.options();
-        let encoding = self.encoding();
         {
-            let data = self.data.borrow();
+            let mut data = self.data.borrow_mut();
             if data.simple_pattern
-                && data.simple_encoding == encoding.id
-                && data.simple_options == options
                 && data
                     .subject
                     .as_ref()
                     .is_some_and(|retained| &retained[..] == subject)
             {
-                drop(data);
-                let mut data = self.data.borrow_mut();
                 data.position = 0;
                 data.matched = None;
                 return Ok(true);
@@ -81,10 +75,7 @@ impl Session {
         }
         let valid = self.initialize(subject, Some(b"[0-9]+"), None, &mut |_| {})?;
         if valid {
-            let mut data = self.data.borrow_mut();
-            data.simple_pattern = true;
-            data.simple_encoding = encoding.id;
-            data.simple_options = options;
+            self.data.borrow_mut().simple_pattern = true;
         }
         Ok(valid)
     }
