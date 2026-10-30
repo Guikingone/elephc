@@ -52,6 +52,7 @@ use super::gz_literal_roundtrip_len_sink::GzLiteralRoundtripLenSink;
 use super::hash_const_sink::HashConstSink;
 use super::iconv_position_const_sink::IconvPositionConstSink;
 use super::mb_convert_variables_len_sink::MbConvertVariablesLenSink;
+use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
 use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
 use super::mb_strstr_len_const_sink::MbStrstrLenConstSink;
 use super::mb_strimwidth_len_sink::MbStrimwidthLenSink;
@@ -190,6 +191,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(HashConstSink),
         Box::new(IconvPositionConstSink),
         Box::new(MbConvertVariablesLenSink),
+        Box::new(MbParseStrLiteralSink),
         Box::new(MbStrlenConstLocalSink),
         Box::new(MbNumericentityLenSink),
         Box::new(MbStrimwidthLenSink),
