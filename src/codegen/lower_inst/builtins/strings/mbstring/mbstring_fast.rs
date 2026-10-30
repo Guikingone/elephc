@@ -1304,6 +1304,43 @@ pub(super) fn lower_list_encodings_count(
     Ok(())
 }
 
+/// Lowers `strlen(mb_get_info("internal_encoding"))` through the catalog length query.
+pub(super) fn lower_get_info_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() == 1 {
+        if let Some(selector) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+            ctx,
+            inst.operands[0],
+        )? {
+            if selector.eq_ignore_ascii_case("internal_encoding") {
+                ctx.emitter.bl_c("elephc_mbstring_internal_encoding_length_v1");
+                let fallback = ctx.next_label("mb_get_info_len_fallback");
+                let done = ctx.next_label("mb_get_info_len_done");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("cmp x0, #0");                 // did the catalog return a valid length?
+                        ctx.emitter.instruction(&format!("b.lt {fallback}"));  // unknown selectors keep the bridge
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("test rax, rax");              // did the catalog return a valid length?
+                        ctx.emitter.instruction(&format!("js {fallback}"));    // unknown selectors keep the bridge
+                    }
+                }
+                abi::emit_jump(ctx.emitter, &done);
+                ctx.emitter.label(&fallback);
+                super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbGetInfo, false)?;
+                emit_boxed_string_length(ctx);
+                ctx.emitter.label(&done);
+                store_if_result(ctx, inst)?;
+                return Ok(());
+            }
+        }
+    }
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbGetInfo, false)?;
+    emit_boxed_string_length(ctx);
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
 /// Unboxes a boxed `int|false` result and releases its temporary Mixed cell.
 fn emit_unbox_boxed_int(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {

@@ -787,6 +787,8 @@ pub enum RuntimeFnId {
     MbOutputHandler,
     /// Reads the shared request information as a scalar or heterogeneous array.
     MbGetInfo,
+    /// Allocation-free `strlen(mb_get_info("internal_encoding"))`.
+    MbGetInfoLen,
     /// Internal prelude access to shared INI state with protected diagnostic reentry.
     SharedIni,
     /// Reads recorded HTTP input identification and configured encoding names.
@@ -984,6 +986,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbPreferredMimeNameLen => Some((1, Some(1))),
             RuntimeFnId::MbEncodingAliasesCount => Some((1, Some(1))),
             RuntimeFnId::MbListEncodingsCount => Some((0, Some(0))),
+            RuntimeFnId::MbGetInfoLen => Some((1, Some(1))),
             RuntimeFnId::MbSplitCount => Some((2, Some(2))),
             RuntimeFnId::MbEregReplaceLen => Some((3, Some(3))),
             RuntimeFnId::MbChrLen => Some((2, Some(2))),
@@ -1884,6 +1887,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbPreferredMimeNameLen => RuntimeFnId::MbPreferredMimeName.effects(),
             RuntimeFnId::MbEncodingAliasesCount => RuntimeFnId::MbEncodingAliases.effects(),
             RuntimeFnId::MbListEncodingsCount => RuntimeFnId::MbListEncodings.effects(),
+            RuntimeFnId::MbGetInfoLen => RuntimeFnId::MbGetInfo.effects(),
             RuntimeFnId::MbSplitCount => RuntimeFnId::MbSplit.effects(),
             RuntimeFnId::MbEregReplaceLen => RuntimeFnId::MbEregReplace.effects(),
             RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
@@ -3692,6 +3696,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbEncodeMimeheader => "mb_encode_mimeheader",
             RuntimeFnId::MbOutputHandler => "mb_output_handler",
             RuntimeFnId::MbGetInfo => "mb_get_info",
+            RuntimeFnId::MbGetInfoLen => "mb_get_info_len",
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
             RuntimeFnId::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             RuntimeFnId::MbParseStr => "mb_parse_str",

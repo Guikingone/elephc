@@ -38,6 +38,15 @@ pub unsafe extern "C" fn elephc_mbstring_encoding_aliases_count_v1(
     .unwrap_or(-1)
 }
 
+/// Returns the byte length of the current internal encoding name.
+#[no_mangle]
+pub extern "C" fn elephc_mbstring_internal_encoding_length_v1() -> i64 {
+    catch_unwind(AssertUnwindSafe(|| {
+        super::REQUEST.with(|state| state.borrow().internal_encoding().name().len() as i64)
+    }))
+    .unwrap_or(-1)
+}
+
 /// Returns the number of canonical encodings exposed by `mb_list_encodings()`.
 #[no_mangle]
 pub extern "C" fn elephc_mbstring_list_encodings_count_v1() -> i64 {

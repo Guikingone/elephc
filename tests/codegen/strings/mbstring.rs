@@ -436,12 +436,13 @@ echo (int)mb_strrpos("abcdef", "cd", 0, "UTF-8"), "|";
 echo count(mb_encoding_aliases("UTF-8")), "|";
 echo count(mb_list_encodings()), "|";
 echo strlen(mb_preferred_mime_name("UTF-8")), "|";
+echo strlen(mb_get_info("internal_encoding")), "|";
 echo "\n";
 "##);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(
         out.stdout,
-        "21|&#8364;|3|13|héllo|3|3|1|3|2|8|abc#def#|6|4|2|2|1|79|5|\n"
+        "21|&#8364;|3|13|héllo|3|3|1|3|2|8|abc#def#|6|4|2|2|1|79|5|5|\n"
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

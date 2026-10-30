@@ -34,6 +34,9 @@ pub(super) fn lower(
         RuntimeFnId::MbEncodingAliasesCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_encoding_aliases_count(ctx, inst, target)
         }),
+        RuntimeFnId::MbGetInfoLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_get_info_len(ctx, inst, target)
+        }),
         RuntimeFnId::MbListEncodingsCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_list_encodings_count(ctx, inst, target)
         }),

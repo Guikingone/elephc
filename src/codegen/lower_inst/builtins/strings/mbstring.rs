@@ -237,6 +237,15 @@ pub(crate) fn lower_mb_list_encodings_count(
     mbstring_fast::lower_list_encodings_count(ctx, inst)
 }
 
+/// Lowers an allocation-free mbstring info length selected by the length sink.
+pub(crate) fn lower_mb_get_info_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_get_info_len(ctx, inst)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;
