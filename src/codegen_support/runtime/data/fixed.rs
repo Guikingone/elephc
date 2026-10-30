@@ -1752,6 +1752,11 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _ucwords_default_seps\n_ucwords_default_seps:\n    .byte 32, 9, 13, 10, 12, 11\n",
     );
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
+    // Half-width katakana U+FF61..U+FF9D mapped to their full-width UTF-8 triples, in
+    // codepoint order. `__rt_mb_convert_kana_k_utf8` indexes one triple per accepted
+    // character; voiced sound marks are rejected because they combine with the previous
+    // character and must stay on the shared bridge.
+    out.push_str(".globl _mb_halfwidth_kana_tbl\n_mb_halfwidth_kana_tbl:\n    .byte 227, 128, 130, 227, 128, 140, 227, 128, 141, 227, 128, 129, 227, 131, 187, 227, 131, 178, 227, 130, 161, 227, 130, 163, 227, 130, 165, 227, 130, 167, 227, 130, 169, 227, 131, 163, 227, 131, 165, 227, 131, 167, 227, 131, 131, 227, 131, 188, 227, 130, 162, 227, 130, 164, 227, 130, 166, 227, 130, 168, 227, 130, 170, 227, 130, 171, 227, 130, 173, 227, 130, 175, 227, 130, 177, 227, 130, 179, 227, 130, 181, 227, 130, 183, 227, 130, 185, 227, 130, 187, 227, 130, 189, 227, 130, 191, 227, 131, 129, 227, 131, 132, 227, 131, 134, 227, 131, 136, 227, 131, 138, 227, 131, 139, 227, 131, 140, 227, 131, 141, 227, 131, 142, 227, 131, 143, 227, 131, 146, 227, 131, 149, 227, 131, 152, 227, 131, 155, 227, 131, 158, 227, 131, 159, 227, 131, 160, 227, 131, 161, 227, 131, 162, 227, 131, 164, 227, 131, 166, 227, 131, 168, 227, 131, 169, 227, 131, 170, 227, 131, 171, 227, 131, 172, 227, 131, 173, 227, 131, 175, 227, 131, 179\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 
     // php-src's `base64_reverse_table`, transposed from its signed `short` entries onto

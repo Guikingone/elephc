@@ -99,6 +99,7 @@ pub(super) fn try_lower(
             try_lower_preferred_mime_name(ctx, inst)
         }
         RuntimeBuiltinId::MbEncodeMimeheader => try_lower_mimeheader(ctx, inst),
+        RuntimeBuiltinId::MbConvertKana => try_lower_convert_kana(ctx, inst),
         RuntimeBuiltinId::MbInternalEncoding => try_lower_string_setting_bool(
             ctx,
             inst,
@@ -699,6 +700,44 @@ pub(super) fn lower_setting_int(
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers explicit-UTF-8 `mb_convert_kana($s, "K")` over half-width katakana.
+fn try_lower_convert_kana(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if inst.operands.len() != 3
+        || !super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+    {
+        return Ok(false);
+    }
+    let Some(mode) =
+        crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, inst.operands[1])?
+    else {
+        return Ok(false);
+    };
+    if mode != "K" {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_convert_kana", pointer, length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_convert_kana_k_utf8");
+    let fallback = ctx.next_label("mb_convert_kana_fallback");
+    let done = ctx.next_label("mb_convert_kana_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {fallback}"));           // a null result means the converter declined the value
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                          // did the converter accept the value?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                // a null result means the converter declined the value
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbConvertKana, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
 }
 
 /// Lowers one non-ASCII UTF-8 `mb_encode_mimeheader()` value through the MIME base64 wrapper.

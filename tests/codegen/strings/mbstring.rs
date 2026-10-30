@@ -491,6 +491,24 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the `K` half-width katakana converter, including the voiced-mark bridge fallback.
+#[test]
+fn test_mb_convert_kana_halfwidth_fast_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_convert_kana("ｱｲｳｴｵ", "K", "UTF-8"), "|";
+echo mb_convert_kana("ｱｲ abc", "K", "UTF-8"), "|";
+echo mb_convert_kana("アイウエオ", "K", "UTF-8"), "|";
+echo mb_convert_kana("aｱb", "K", "UTF-8"), "|";
+echo mb_convert_kana("ｱﾞ", "K", "UTF-8"), "|";
+echo mb_convert_kana("｡｢｣､･ｦｰ", "K", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "アイウエオ|アイ abc|アイウエオ|aアb|ア゛|。「」、・ヲー|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.
