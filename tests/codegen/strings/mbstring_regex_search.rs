@@ -115,3 +115,24 @@ var_dump(mb_ereg_search_getpos());
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies the literal progressive array-element folds for pos, regs, and getregs.
+#[test]
+fn test_mb_ereg_search_array_element_fold() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+mb_ereg_search_init("abc123", "[0-9]+");
+$pos = mb_ereg_search_pos();
+echo $pos[0], ":", $pos[1], "|";
+mb_ereg_search_init("abc123", "[0-9]+");
+$regs = mb_ereg_search_regs();
+echo strlen($regs[0]), "|";
+mb_ereg_search_init("abc123", "[0-9]+");
+mb_ereg_search_regs();
+$get = mb_ereg_search_getregs();
+echo $get[0], "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3:3|3|123|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

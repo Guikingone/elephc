@@ -35,6 +35,7 @@ mod str_split_count_sink;
 mod base64_decode_len_sink;
 mod mb_catalog_count_sink;
 mod mb_detect_order_single_sink;
+mod ereg_search_array_result_sink;
 mod ereg_search_literal_state_sink;
 mod gz_len_hoist;
 mod gz_literal_roundtrip_len_sink;

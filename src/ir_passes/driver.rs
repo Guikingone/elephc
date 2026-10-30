@@ -46,6 +46,7 @@ use super::base64_decode_len_sink::Base64DecodeLenSink;
 use super::mb_catalog_count_sink::MbCatalogCountSink;
 use super::mb_detect_order_single_sink::MbDetectOrderSingleSink;
 use super::mb_numericentity_len_sink::MbNumericentityLenSink;
+use super::ereg_search_array_result_sink::EregSearchArrayResultSink;
 use super::ereg_search_literal_state_sink::EregSearchLiteralStateSink;
 use super::gz_len_hoist::GzLenHoist;
 use super::gz_literal_roundtrip_len_sink::GzLiteralRoundtripLenSink;
@@ -185,6 +186,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(CountCharsCountSink),
         Box::new(MbCatalogCountSink),
         Box::new(MbDetectOrderSingleSink),
+        Box::new(EregSearchArrayResultSink),
         Box::new(EregSearchLiteralStateSink),
         Box::new(GzLiteralRoundtripLenSink),
         Box::new(GzLenHoist),

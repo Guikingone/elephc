@@ -522,7 +522,9 @@ literals under explicit UTF-8 fold to their character positions, and a
 the literal's byte length, and an invariant `strlen(gzcompress($s))` is hoisted
 to the loop preheader. `token_name()` over a literal id or `T_*` constant is a
 compile-time catalog lookup; literal SHA-256/HMAC digests and the literal
-`[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded.
+`[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded,
+including the `start`/`length` or matched-bytes elements of the `pos`/`regs`/`getregs`
+arrays when every read is a known element access.
 When an identical-UTF-8 `mb_convert_variables()` result is observed only through
 `strlen()`, its unobserved array mutation is skipped and the encoding length is
 folded directly. A simple literal `mb_parse_str()` query (`key=value` pairs) folds
