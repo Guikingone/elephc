@@ -51,6 +51,8 @@ use super::ereg_search_literal_state_sink::EregSearchLiteralStateSink;
 use super::gz_len_hoist::GzLenHoist;
 use super::gz_literal_roundtrip_len_sink::GzLiteralRoundtripLenSink;
 use super::hash_const_sink::HashConstSink;
+use super::iconv_get_encoding_len_sink::IconvGetEncodingLenSink;
+use super::iconv_mime_literal_sink::IconvMimeLiteralSink;
 use super::iconv_position_const_sink::IconvPositionConstSink;
 use super::mb_convert_variables_len_sink::MbConvertVariablesLenSink;
 use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
@@ -191,6 +193,8 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(GzLiteralRoundtripLenSink),
         Box::new(GzLenHoist),
         Box::new(HashConstSink),
+        Box::new(IconvGetEncodingLenSink),
+        Box::new(IconvMimeLiteralSink),
         Box::new(IconvPositionConstSink),
         Box::new(MbConvertVariablesLenSink),
         Box::new(MbParseStrLiteralSink),

@@ -381,3 +381,34 @@ echo "\n";
     assert_eq!(out.stdout, "2|4|false|2|2|\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies literal iconv MIME decode length, single-header count, and their fallbacks.
+#[test]
+fn test_iconv_mime_literal_folds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$encoded = "=?UTF-8?B?aMOpbGxv?=";
+echo strlen(iconv_mime_decode($encoded, 0, "UTF-8")), "|";
+echo count(iconv_mime_decode_headers("Subject: =?UTF-8?B?aMOpbGxv?=", 0, "UTF-8")), "|";
+echo count(iconv_mime_decode_headers("A: 1\r\nB: 2", 0, "UTF-8")), "|";
+$dynamic = "=?UTF-8?B?" . base64_encode("x") . "?=";
+echo strlen(iconv_mime_decode($dynamic, 0, "UTF-8")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "6|1|2|1|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the default internal encoding length fold and the setter fallback.
+#[test]
+fn test_iconv_get_encoding_length_fold() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo strlen((string)iconv_get_encoding("internal_encoding")), "|";
+@iconv_set_encoding("internal_encoding", "ISO-8859-1");
+echo strlen((string)iconv_get_encoding("internal_encoding")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|10|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

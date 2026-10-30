@@ -721,7 +721,7 @@ fn try_fold_mb_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
 }
 
 /// Decodes one RFC 2047 UTF-8 base64 encoded word, or returns `None` for any other form.
-fn decode_mime_b_word(encoded: &str) -> Option<String> {
+pub(crate) fn decode_mime_b_word(encoded: &str) -> Option<String> {
     const PREFIX: &str = "=?UTF-8?B?";
     if encoded.len() < PREFIX.len() + 2 { return None; }
     if !encoded.is_char_boundary(PREFIX.len()) || !encoded.is_char_boundary(encoded.len() - 2) {
