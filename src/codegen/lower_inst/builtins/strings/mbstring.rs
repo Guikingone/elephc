@@ -219,6 +219,24 @@ pub(crate) fn lower_mb_preferred_mime_name_len(
     mbstring_fast::lower_preferred_mime_name_len(ctx, inst)
 }
 
+/// Lowers an allocation-free mbstring alias count selected by the catalog count sink.
+pub(crate) fn lower_mb_encoding_aliases_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_encoding_aliases_count(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring encoding list count selected by the catalog count sink.
+pub(crate) fn lower_mb_list_encodings_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_list_encodings_count(ctx, inst)
+}
+
 /// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
 fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
     let mut value = value;

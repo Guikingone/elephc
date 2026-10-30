@@ -150,6 +150,7 @@ fn borrowable_string_read_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbEncodeNumericentity
             | RuntimeFnId::MbDecodeNumericentity
             | RuntimeFnId::MbPreferredMimeName
+            | RuntimeFnId::MbEncodingAliases
             | RuntimeFnId::MbSplit
             | RuntimeFnId::MbEregReplace
     )

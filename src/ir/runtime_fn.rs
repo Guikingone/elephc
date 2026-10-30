@@ -752,6 +752,8 @@ pub enum RuntimeFnId {
     MbInternalEncoding,
     MbHttpOutput,
     MbEncodingAliases,
+    /// Allocation-free `count(mb_encoding_aliases(...))` for a known encoding.
+    MbEncodingAliasesCount,
     MbStrSplit,
     /// Allocation-free `count(mb_str_split(...))` observed only through the array count.
     MbStrSplitCount,
@@ -761,6 +763,8 @@ pub enum RuntimeFnId {
     MbCheckEncoding,
     MbSubstituteCharacter,
     MbListEncodings,
+    /// Allocation-free `count(mb_list_encodings())`.
+    MbListEncodingsCount,
     MbDetectOrder,
     MbDetectEncoding,
     /// Allocation-free `strlen(mb_detect_encoding(...))` for a single explicit encoding.
@@ -978,6 +982,8 @@ impl RuntimeFnId {
             RuntimeFnId::MbOrdInt => Some((2, Some(2))),
             RuntimeFnId::MbDetectEncodingLen => Some((2, Some(2))),
             RuntimeFnId::MbPreferredMimeNameLen => Some((1, Some(1))),
+            RuntimeFnId::MbEncodingAliasesCount => Some((1, Some(1))),
+            RuntimeFnId::MbListEncodingsCount => Some((0, Some(0))),
             RuntimeFnId::MbSplitCount => Some((2, Some(2))),
             RuntimeFnId::MbEregReplaceLen => Some((3, Some(3))),
             RuntimeFnId::MbChrLen => Some((2, Some(2))),
@@ -1876,6 +1882,8 @@ impl RuntimeFnId {
             RuntimeFnId::MbOrdInt => RuntimeFnId::MbOrd.effects(),
             RuntimeFnId::MbDetectEncodingLen => RuntimeFnId::MbDetectEncoding.effects(),
             RuntimeFnId::MbPreferredMimeNameLen => RuntimeFnId::MbPreferredMimeName.effects(),
+            RuntimeFnId::MbEncodingAliasesCount => RuntimeFnId::MbEncodingAliases.effects(),
+            RuntimeFnId::MbListEncodingsCount => RuntimeFnId::MbListEncodings.effects(),
             RuntimeFnId::MbSplitCount => RuntimeFnId::MbSplit.effects(),
             RuntimeFnId::MbEregReplaceLen => RuntimeFnId::MbEregReplace.effects(),
             RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
@@ -3661,6 +3669,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbInternalEncoding => "mb_internal_encoding",
             RuntimeFnId::MbHttpOutput => "mb_http_output",
             RuntimeFnId::MbEncodingAliases => "mb_encoding_aliases",
+            RuntimeFnId::MbEncodingAliasesCount => "mb_encoding_aliases_count",
             RuntimeFnId::MbStrSplit => "mb_str_split",
             RuntimeFnId::MbStrSplitCount => "mb_str_split_count",
             RuntimeFnId::MbPreferredMimeName => "mb_preferred_mime_name",
@@ -3668,6 +3677,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbCheckEncoding => "mb_check_encoding",
             RuntimeFnId::MbSubstituteCharacter => "mb_substitute_character",
             RuntimeFnId::MbListEncodings => "mb_list_encodings",
+            RuntimeFnId::MbListEncodingsCount => "mb_list_encodings_count",
             RuntimeFnId::MbDetectOrder => "mb_detect_order",
             RuntimeFnId::MbDetectEncoding => "mb_detect_encoding",
             RuntimeFnId::MbDetectEncodingLen => "mb_detect_encoding_len",

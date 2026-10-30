@@ -1249,6 +1249,61 @@ pub(super) fn lower_preferred_mime_name_len(
     Ok(())
 }
 
+/// Lowers `count(mb_encoding_aliases(...))` through the allocation-free catalog query.
+pub(super) fn lower_encoding_aliases_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() == 1 {
+        let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 0, "mb_encoding_aliases", pointer, length)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                         // pass the encoding pointer as the first C argument
+                ctx.emitter.instruction("mov x1, x2");                         // pass the encoding length as the second C argument
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                      // pass the encoding pointer as the first SysV argument
+                ctx.emitter.instruction("mov rsi, rdx");                      // pass the encoding length as the second SysV argument
+            }
+        }
+        ctx.emitter.bl_c("elephc_mbstring_encoding_aliases_count_v1");
+        let fallback = ctx.next_label("mb_encoding_aliases_count_fallback");
+        let done = ctx.next_label("mb_encoding_aliases_count_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #0");                         // did the catalog recognize the encoding?
+                ctx.emitter.instruction(&format!("b.lt {fallback}"));          // unknown encodings keep the bridge diagnostics
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                      // did the catalog recognize the encoding?
+                ctx.emitter.instruction(&format!("js {fallback}"));            // unknown encodings keep the bridge diagnostics
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&fallback);
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEncodingAliases, false)?;
+        emit_array_length_and_release(ctx);
+        ctx.emitter.label(&done);
+        store_if_result(ctx, inst)?;
+        return Ok(());
+    }
+    super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbEncodingAliases, false)?;
+    emit_array_length_and_release(ctx);
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Lowers `count(mb_list_encodings())` through the allocation-free catalog query.
+pub(super) fn lower_list_encodings_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ctx.emitter.bl_c("elephc_mbstring_list_encodings_count_v1");
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
 /// Unboxes a boxed `int|false` result and releases its temporary Mixed cell.
 fn emit_unbox_boxed_int(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {

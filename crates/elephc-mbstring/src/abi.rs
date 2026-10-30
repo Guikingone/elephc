@@ -19,6 +19,7 @@ use crate::error::MbError;
 use crate::state::State;
 
 mod arguments;
+mod catalog;
 mod check;
 mod conversion;
 mod detect;
