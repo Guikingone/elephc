@@ -511,7 +511,11 @@ explicit-UTF-8 text operations and emits allocation-free ASCII/UTF-8 helpers for
 case conversion, trimming, padding, slicing, search, splitting, codepoints,
 scrubbing, detection, latin-1 conversion, decimal numeric entities, RFC 2047
 base64 MIME encoding, half-width katakana conversion, and the UTF-8 output-handler
-passthrough, plus the literal `,` split and `[0-9]+`/`#` replacement patterns. Non-ASCII input,
+passthrough, plus the literal `,` split and `[0-9]+`/`#` replacement patterns.
+When a length-only observation reads a local assigned once from a compile-time
+ASCII literal, the EIR fold replaces case conversion, trimming, padding,
+slicing, width, encoding checks, counting, and splitting with their constant
+results, removing both the call and the now-dead subject load. Non-ASCII input,
 unsupported encodings, and other regex maps or patterns fall back to the shared
 bridge, so PHP's Unicode and substitution behavior remains authoritative. Catalog
 count and `mb_get_info("internal_encoding")` queries use dedicated allocation-free
