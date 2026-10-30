@@ -50,6 +50,7 @@ use super::ereg_search_array_result_sink::EregSearchArrayResultSink;
 use super::ereg_search_literal_state_sink::EregSearchLiteralStateSink;
 use super::gz_len_hoist::GzLenHoist;
 use super::gz_literal_roundtrip_len_sink::GzLiteralRoundtripLenSink;
+use super::hash_algos_count_hoist::HashAlgosCountHoist;
 use super::hash_const_sink::HashConstSink;
 use super::iconv_get_encoding_len_sink::IconvGetEncodingLenSink;
 use super::iconv_mime_literal_sink::IconvMimeLiteralSink;
@@ -194,6 +195,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(EregSearchLiteralStateSink),
         Box::new(GzLiteralRoundtripLenSink),
         Box::new(GzLenHoist),
+        Box::new(HashAlgosCountHoist),
         Box::new(HashConstSink),
         Box::new(IconvGetEncodingLenSink),
         Box::new(IconvMimeLiteralSink),

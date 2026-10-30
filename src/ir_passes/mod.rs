@@ -39,6 +39,7 @@ mod ereg_search_array_result_sink;
 mod ereg_search_literal_state_sink;
 mod gz_len_hoist;
 mod gz_literal_roundtrip_len_sink;
+mod hash_algos_count_hoist;
 mod hash_const_sink;
 mod iconv_get_encoding_len_sink;
 mod iconv_mime_literal_sink;

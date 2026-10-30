@@ -501,3 +501,29 @@ dbfcfd0d87220f629339bd3adcf452d083fde3246625fb3a93e314f833e20d37|\n"
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies the complete PHP hash catalog and legacy algorithm digests match PHP.
+#[test]
+fn test_hash_algos_full_catalog_and_legacy_digests() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo count(hash_algos()), "|";
+echo hash("tiger192,3", "abc"), "|";
+echo hash("haval256,5", "abc"), "|";
+echo hash("gost-crypto", "abc"), "|";
+echo hash("snefru256", "abc"), "|";
+echo hash("murmur3f", "abc"), "|";
+echo hash("xxh128", "abc"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "60|2aab1484e8c158f2bfb8c5ff41b57a525129131c957b5f93|\
+976cd6254c337969e5913b158392a2921af16fca51f5601d486e0a9de01156e7|\
+b285056dbf18d7392d7677369524dd14747459ed8143997e163b2986f92fd42c|\
+7d033205647a2af3dc8339f6cb25643c33ebc622d32979c4b612b02c4903031b|\
+b4963f3f3fad78673ba2744126ca2d52|\
+06b05ab6733a618578af5f94892f3950|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

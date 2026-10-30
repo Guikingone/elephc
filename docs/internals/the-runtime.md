@@ -527,7 +527,10 @@ once their call staging is proven removable; literal AES-CBC encrypt lengths and
 matching encrypt/decrypt round trips fold to the PKCS#7/base64 or plaintext length;
 a literal `count(token_get_all($source))` is hoisted to the loop preheader after
 validating the source with the compiler front end; literal SHA-256/HMAC digests and the literal
-`[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded,
+`[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded;
+`hash_algos()` reports PHP's complete 60-algorithm catalog, including the legacy
+Tiger/HAVAL/Snefru/GOST implementations and murmur3/xxHash checksums, and a
+zero-argument `count(hash_algos())` is hoisted out of loops,
 including the `start`/`length` or matched-bytes elements of the `pos`/`regs`/`getregs`
 arrays when every read is a known element access.
 When an identical-UTF-8 `mb_convert_variables()` result is observed only through
