@@ -2892,8 +2892,10 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime.
                 | RuntimeFnId::Base64Decode
                 // Compression allocates independent output storage, including failure cells.
+                | RuntimeFnId::Gzcompress
                 | RuntimeFnId::Gzdeflate
                 | RuntimeFnId::Gzinflate
+                | RuntimeFnId::Gzuncompress
                 // A newly boxed file descriptor never aliases its filename, mode or context.
                 | RuntimeFnId::Fopen
                 // hexdec()/bindec()/octdec() box their `int|float` answer through

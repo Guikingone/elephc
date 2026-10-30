@@ -473,6 +473,28 @@ echo $sum;
     assert_eq!(out, "10000");
 }
 
+/// Verifies the constant-local one-argument gzip round-trip length fold and its fallbacks.
+///
+/// The compressed value must be produced once in the entry block from a literal; the optional
+/// `max_length` and a runtime-built input must keep the real decompression path.
+#[test]
+fn test_gzip_literal_roundtrip_length_fold() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$z = gzcompress("hello");
+$d = gzdeflate("wörld");
+echo strlen(gzuncompress($z)), "|";
+echo strlen(gzinflate($d)), "|";
+echo strlen(gzuncompress($z, 64)), "|";
+$late = "hello" . $argc;
+echo strlen(gzuncompress(gzcompress($late))), "|";
+echo bin2hex(gzuncompress($z)) === bin2hex("hello") ? "hex-ok" : "hex-bad", "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|6|5|6|hex-ok|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies compiled PHP output for gzuncompress invalid is false.
 #[test]
 fn test_gzuncompress_invalid_is_false() {
