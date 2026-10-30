@@ -145,7 +145,6 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     if matches!(target, CastType::Bool) && source_repr == PhpType::Bool {
         return value;
     }
-    }
     if matches!(target, CastType::Bool) {
         if let Some(result) = object_operators::lower_object_truthy(ctx, value, Some(expr.span)) {
             release_binary_operand_temporary(ctx, value, expr.span);

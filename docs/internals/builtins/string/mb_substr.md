@@ -2,7 +2,7 @@
 title: "mb_substr() - internals"
 description: "Compiler internals for mb_substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 913
+  order: 964
 ---
 
 ## `mb_substr()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_substr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_substr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:721](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L721) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

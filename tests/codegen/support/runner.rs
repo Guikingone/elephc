@@ -1367,8 +1367,6 @@ fn test_link_plan(
             push_gmp_native_archives(&mut plan, package);
         }
     }
-        }
-    }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));
     }

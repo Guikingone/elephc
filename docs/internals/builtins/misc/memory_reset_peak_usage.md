@@ -2,7 +2,7 @@
 title: "memory_reset_peak_usage() - internals"
 description: "Compiler internals for memory_reset_peak_usage(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 656
+  order: 707
 ---
 
 ## `memory_reset_peak_usage()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/memory_reset_peak_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/memory_reset_peak_usage.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:721](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L721) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

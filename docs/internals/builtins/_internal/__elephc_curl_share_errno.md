@@ -2,7 +2,7 @@
 title: "__elephc_curl_share_errno() - internals"
 description: "Compiler internals for __elephc_curl_share_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1153
+  order: 1204
 ---
 
 ## `__elephc_curl_share_errno()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_share_errno.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_share_errno.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:721](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L721) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

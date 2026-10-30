@@ -2,7 +2,7 @@
 title: "gc_collect_cycles() - internals"
 description: "Compiler internals for gc_collect_cycles(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 630
+  order: 681
 ---
 
 ## `gc_collect_cycles()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gc_collect_cycles.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc_collect_cycles.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:721](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L721) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

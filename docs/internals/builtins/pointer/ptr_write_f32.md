@@ -2,7 +2,7 @@
 title: "ptr_write_f32() - internals"
 description: "Compiler internals for ptr_write_f32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 766
+  order: 817
 ---
 
 ## `ptr_write_f32()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_write_f32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write_f32.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:721](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L721) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -2,7 +2,7 @@
 title: "pcntl_waitid() - internals"
 description: "Compiler internals for pcntl_waitid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 689
+  order: 740
 ---
 
 ## `pcntl_waitid()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_waitid.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_waitid.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:721](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L721) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

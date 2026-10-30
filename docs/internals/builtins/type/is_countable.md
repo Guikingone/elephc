@@ -2,7 +2,7 @@
 title: "is_countable() - internals"
 description: "Compiler internals for is_countable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 986
+  order: 1037
 ---
 
 ## `is_countable()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_countable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_countable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:721](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L721) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
