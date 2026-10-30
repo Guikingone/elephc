@@ -519,11 +519,14 @@ fn fold_callable_target(target: CallableTarget) -> CallableTarget {
 /// function shadowing the global name, a namespaced call, or an explicit base argument keeps the
 /// call for runtime evaluation.
 fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
-    if args.len() != 1 {
-        return None;
-    }
     let canonical = crate::names::php_symbol_key(name.as_canonical().trim_start_matches('\\'));
     if active_fold_user_function_exists(&canonical) {
+        return None;
+    }
+    if let Some(folded) = try_fold_mb_literal(&canonical, args) {
+        return Some(folded);
+    }
+    if args.len() != 1 {
         return None;
     }
     let target = match canonical.as_str() {
@@ -533,4 +536,103 @@ fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
         _ => return None,
     };
     super::casts::try_fold_cast(&target, &args[0])
+}
+
+/// Folds the small literal mbstring regex and MIME forms whose PHP result is deterministic.
+///
+/// The patterns are matched byte-for-byte and only ASCII subjects are accepted, so UTF-8 case
+/// folding, multibyte regex semantics, and header folding never need to be reproduced here.
+/// Unsupported patterns, dynamic arguments, and non-ASCII regex subjects stay on the bridge.
+fn try_fold_mb_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
+    let string = |index: usize| match args.get(index)?.kind {
+        ExprKind::StringLiteral(ref value) => Some(value.as_str()),
+        _ => None,
+    };
+    match canonical {
+        "mb_decode_mimeheader" if args.len() == 1 => {
+            let encoded = string(0)?;
+            let decoded = decode_mime_b_word(encoded)?;
+            Some(ExprKind::StringLiteral(decoded))
+        }
+        "mb_ereg" if args.len() == 2 => {
+            if string(0)? != "[0-9]+" { return None; }
+            let subject = string(1)?;
+            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_digit())))
+        }
+        "mb_ereg_match" if args.len() == 2 => {
+            if string(0)? != "[0-9A-Za-z]+" { return None; }
+            let subject = string(1)?;
+            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_alphanumeric())))
+        }
+        "mb_eregi" if args.len() == 2 => {
+            if string(0)? != "[A-Z]+" { return None; }
+            let subject = string(1)?;
+            if !subject.is_ascii() { return None; }
+            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_alphabetic())))
+        }
+        "mb_eregi_replace" if args.len() == 3 => {
+            if string(0)? != "[A-Z]+" { return None; }
+            let replacement = string(1)?;
+            let subject = string(2)?;
+            if !subject.is_ascii() || replacement.bytes().any(|byte| matches!(byte, b'\\' | b'$')) {
+                return None;
+            }
+            let mut output = String::with_capacity(subject.len());
+            let mut in_run = false;
+            for byte in subject.bytes() {
+                if byte.is_ascii_alphabetic() {
+                    if !in_run { output.push_str(replacement); in_run = true; }
+                } else {
+                    output.push(byte as char);
+                    in_run = false;
+                }
+            }
+            Some(ExprKind::StringLiteral(output))
+        }
+        _ => None,
+    }
+}
+
+/// Decodes one RFC 2047 UTF-8 base64 encoded word, or returns `None` for any other form.
+fn decode_mime_b_word(encoded: &str) -> Option<String> {
+    const PREFIX: &str = "=?UTF-8?B?";
+    if encoded.len() < PREFIX.len() + 2 { return None; }
+    if !encoded.is_char_boundary(PREFIX.len()) || !encoded.is_char_boundary(encoded.len() - 2) {
+        return None;
+    }
+    if !encoded[..PREFIX.len()].eq_ignore_ascii_case(PREFIX) || !encoded[encoded.len() - 2..].eq_ignore_ascii_case("?=") {
+        return None;
+    }
+    let payload = &encoded[PREFIX.len()..encoded.len() - 2];
+    let bytes = decode_base64(payload)?;
+    String::from_utf8(bytes).ok()
+}
+
+/// Decodes canonical base64 without whitespace, rejecting malformed padding.
+fn decode_base64(payload: &str) -> Option<Vec<u8>> {
+    let bytes = payload.as_bytes();
+    if bytes.is_empty() || bytes.len() % 4 != 0 { return None; }
+    let mut output = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let mut values = [0u8; 4];
+        let mut padding = 0usize;
+        for (index, &byte) in chunk.iter().enumerate() {
+            values[index] = match byte {
+                b'A'..=b'Z' => byte - b'A',
+                b'a'..=b'z' => byte - b'a' + 26,
+                b'0'..=b'9' => byte - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => { padding += 1; 0 }
+                _ => return None,
+            };
+            if byte == b'=' && index < 2 { return None; }
+        }
+        if padding == 2 && (chunk[2] != b'=' || chunk[3] != b'=') { return None; }
+        if padding == 1 && chunk[3] != b'=' { return None; }
+        output.push((values[0] << 2) | (values[1] >> 4));
+        if padding < 2 { output.push((values[1] << 4) | (values[2] >> 2)); }
+        if padding < 1 { output.push((values[2] << 6) | values[3]); }
+    }
+    Some(output)
 }
