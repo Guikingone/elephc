@@ -576,6 +576,35 @@ var_dump(mb_ereg_search_init("\x80", "[0-9]+"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// Verifies the constant-local length folds and the non-ASCII fallbacks they must leave alone.
+#[test]
+fn test_mb_constant_local_length_folds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = str_repeat("abcdefgh", 16);
+$t = "   hello world   ";
+$w = "The quick brown fox";
+$e = "héllo wörld";
+$n = str_repeat("a", 100);
+$p = "abcdefghijklmnopqrst";
+echo mb_strlen($s, "UTF-8"), "|";
+echo strlen(mb_strtoupper($s, "UTF-8")), "|";
+echo strlen(mb_convert_case($s, MB_CASE_TITLE, "UTF-8")), "|";
+echo strlen(mb_trim($t, " \n\r\t\v\0", "UTF-8")), "|";
+echo mb_strwidth($w, "UTF-8"), "|";
+echo mb_check_encoding($e, "UTF-8") ? "1" : "0", "|";
+echo mb_substr_count($n, "a", "UTF-8"), "|";
+echo count(mb_str_split($p, 2, "UTF-8")), "|";
+echo strlen(mb_str_pad("x", 32, "-", STR_PAD_RIGHT, "UTF-8")), "|";
+echo mb_substr($p, 10, 5, "UTF-8"), "|";
+echo strlen(mb_strcut($s, 10, 20, "UTF-8")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "128|128|128|11|19|1|100|10|32|klmno|20|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

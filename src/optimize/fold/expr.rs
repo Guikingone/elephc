@@ -526,6 +526,21 @@ fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
     if let Some(folded) = try_fold_mb_literal(&canonical, args) {
         return Some(folded);
     }
+    // Expand a literal repeat so a later scalar read (for example `mb_strlen($s, "UTF-8")`)
+    // can use the exact byte length instead of calling the runtime for a known string.
+    if canonical == "str_repeat" && args.len() == 2 {
+        if let (ExprKind::StringLiteral(source), ExprKind::IntLiteral(count)) =
+            (&args[0].kind, &args[1].kind)
+        {
+            if *count >= 0 {
+                if let Some(length) = source.len().checked_mul(*count as usize) {
+                    if length <= 1024 * 1024 {
+                        return Some(ExprKind::StringLiteral(source.repeat(*count as usize)));
+                    }
+                }
+            }
+        }
+    }
     if args.len() != 1 {
         return None;
     }

@@ -37,6 +37,21 @@ pub(crate) fn lower_mb_strlen(
         && inst.operands.len() == 2
         && explicit_utf8_encoding(ctx, inst.operands[1])?
     {
+        // An ASCII subject has one UTF-8 codepoint per byte, so fold the count even when
+        // the literal only became visible after constant propagation.
+        if let Some(subject) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+            ctx,
+            inst.operands[0],
+        )? {
+            if subject.is_ascii() {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    abi::int_result_reg(ctx.emitter),
+                    subject.len() as i64,
+                );
+                return store_if_result(ctx, inst);
+            }
+        }
         let (ptr_reg, len_reg) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 0, "mb_strlen", ptr_reg, len_reg)?;
         abi::emit_call_label(ctx.emitter, "__rt_mb_strlen_utf8");

@@ -22,7 +22,7 @@ use crate::ir::{
 use crate::types::PhpType;
 
 use super::driver::IrPass;
-use super::rewrite::{defining_instruction, neutralize_to_nop};
+use super::rewrite::{count_value_uses, defining_instruction, neutralize_to_nop};
 
 /// Largest folded repeat length; larger results keep the real allocation path.
 const MAX_FOLDED_REPEAT: usize = 16 * 1024 * 1024;
@@ -88,6 +88,36 @@ fn is_length_observable_call(inst: &crate::ir::Instruction) -> bool {
             RuntimeFnId::Ucfirst | RuntimeFnId::Lcfirst | RuntimeFnId::Ucwords,
         ))) => matches!(inst.operands.len(), 1 | 2),
         Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::MbStrtoupper
+                | RuntimeFnId::MbStrtolower
+                | RuntimeFnId::MbUcfirst
+                | RuntimeFnId::MbLcfirst
+                | RuntimeFnId::MbConvertCase,
+        )))
+        | Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::MbTrim
+                | RuntimeFnId::MbLtrim
+                | RuntimeFnId::MbRtrim
+                | RuntimeFnId::MbStrPad
+                | RuntimeFnId::MbSubstr
+                | RuntimeFnId::MbStrcut,
+        )))
+        | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+            target:
+                RuntimeFnId::MbStrtoupper
+                | RuntimeFnId::MbStrtolower
+                | RuntimeFnId::MbUcfirst
+                | RuntimeFnId::MbLcfirst
+                | RuntimeFnId::MbConvertCase
+                | RuntimeFnId::MbTrim
+                | RuntimeFnId::MbLtrim
+                | RuntimeFnId::MbRtrim
+                | RuntimeFnId::MbStrPad
+                | RuntimeFnId::MbSubstr
+                | RuntimeFnId::MbStrcut,
+            ..
+        })) => matches!(inst.operands.len(), 2 | 3 | 4 | 5),
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
             RuntimeFnId::ChunkSplit,
         ))) => inst.operands.len() == 3,
         _ => false,
@@ -146,6 +176,46 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
             RuntimeFnId::ChunkSplit
         )))
     ) && call.operands.len() == 3;
+    let is_mb_case = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(
+                RuntimeFnId::MbStrtoupper
+                    | RuntimeFnId::MbStrtolower
+                    | RuntimeFnId::MbUcfirst
+                    | RuntimeFnId::MbLcfirst
+                    | RuntimeFnId::MbConvertCase
+            ) | RuntimeCallTarget::ProfiledFunction {
+                target:
+                    RuntimeFnId::MbStrtoupper
+                    | RuntimeFnId::MbStrtolower
+                    | RuntimeFnId::MbUcfirst
+                    | RuntimeFnId::MbLcfirst
+                    | RuntimeFnId::MbConvertCase,
+                ..
+            }
+        ))
+    );
+    let mb_case_length = if is_mb_case {
+        let Some(encoding_operand) = call.operands.last().copied() else {
+            return false;
+        };
+        let Some(encoding) = const_string_value(function, data, encoding_operand) else {
+            return false;
+        };
+        if !encoding.eq_ignore_ascii_case("UTF-8") {
+            return false;
+        }
+        let Some((subject, _load)) = const_local_string(function, data, operand) else {
+            return false;
+        };
+        if !subject.is_ascii() {
+            return false;
+        }
+        Some(subject.len() as i64)
+    } else {
+        None
+    };
     let chunk_split_operands = is_chunk_split.then(|| call.operands.clone());
     let is_repeat = matches!(
         call.immediate,
@@ -176,12 +246,154 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
     } else {
         None
     };
+    let is_mb_trim = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(
+                RuntimeFnId::MbTrim | RuntimeFnId::MbLtrim | RuntimeFnId::MbRtrim
+            ) | RuntimeCallTarget::ProfiledFunction {
+                target: RuntimeFnId::MbTrim | RuntimeFnId::MbLtrim | RuntimeFnId::MbRtrim,
+                ..
+            }
+        ))
+    );
+    let mb_trim_length = if is_mb_trim && call.operands.len() == 3 {
+        let Some(encoding) = const_string_value(function, data, call.operands[2]) else {
+            return false;
+        };
+        if !encoding.eq_ignore_ascii_case("UTF-8") {
+            return false;
+        }
+        let Some((subject, _)) = const_local_string(function, data, operand) else {
+            return false;
+        };
+        let Some((mask, _)) = const_local_string(function, data, call.operands[1]) else {
+            return false;
+        };
+        if !subject.is_ascii() || !mask.is_ascii() {
+            return false;
+        }
+        let trim_left = matches!(
+            call.immediate,
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::MbTrim | RuntimeFnId::MbLtrim)
+                    | RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::MbTrim | RuntimeFnId::MbLtrim,
+                        ..
+                    }
+            ))
+        );
+        let trim_right = matches!(
+            call.immediate,
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::MbTrim | RuntimeFnId::MbRtrim)
+                    | RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::MbTrim | RuntimeFnId::MbRtrim,
+                        ..
+                    }
+            ))
+        );
+        Some(trimmed_ascii_len(subject.as_bytes(), mask.as_bytes(), trim_left, trim_right))
+    } else {
+        None
+    };
+    let is_mb_pad = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(RuntimeFnId::MbStrPad)
+                | RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::MbStrPad,
+                    ..
+                }
+        ))
+    ) && call.operands.len() == 5;
+    let mb_pad_length = if is_mb_pad {
+        let Some(encoding) = const_string_value(function, data, call.operands[4]) else {
+            return false;
+        };
+        if !encoding.eq_ignore_ascii_case("UTF-8") {
+            return false;
+        }
+        let Some((subject, _)) = const_local_string(function, data, operand) else {
+            return false;
+        };
+        let Some((pad, _)) = const_local_string(function, data, call.operands[2]) else {
+            return false;
+        };
+        let Some(width) = const_i64(function, call.operands[1]) else {
+            return false;
+        };
+        if !subject.is_ascii() || !pad.is_ascii() || width < 0 {
+            return false;
+        }
+        let length = if pad.is_empty() {
+            subject.len()
+        } else {
+            subject.len().max(width as usize)
+        };
+        Some(length as i64)
+    } else {
+        None
+    };
+    let is_mb_slice = matches!(
+        call.immediate,
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(RuntimeFnId::MbSubstr | RuntimeFnId::MbStrcut)
+                | RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::MbSubstr | RuntimeFnId::MbStrcut,
+                    ..
+                }
+        ))
+    ) && call.operands.len() == 4;
+    let mb_slice_length = if is_mb_slice {
+        let Some(encoding) = const_string_value(function, data, call.operands[3]) else {
+            return false;
+        };
+        if !encoding.eq_ignore_ascii_case("UTF-8") {
+            return false;
+        }
+        let Some((subject, _)) = const_local_string(function, data, operand) else {
+            return false;
+        };
+        let Some(start) = const_i64(function, call.operands[1]) else {
+            return false;
+        };
+        let Some(length) = const_i64(function, call.operands[2]) else {
+            return false;
+        };
+        if !subject.is_ascii() || start < 0 || length < 0 {
+            return false;
+        }
+        let start = start as usize;
+        if start > subject.len() {
+            return false;
+        }
+        let available = subject.len() - start;
+        Some(available.min(length as usize) as i64)
+    } else {
+        None
+    };
+    let mb_length = mb_case_length
+        .or(mb_trim_length)
+        .or(mb_pad_length)
+        .or(mb_slice_length);
     let Some((length, releases)) = analyze_uses(function, result) else {
         return false;
     };
 
     // Rewrite the length observer in place, then retire the unobserved producer.
-    if is_md5 || is_repeat {
+    if let Some(length_value) = mb_length {
+        let Some(length) = function.instruction_mut(length) else {
+            return false;
+        };
+        length.op = Op::ConstI64;
+        length.operands.clear();
+        length.immediate = Some(Immediate::I64(length_value));
+        length.result_type = IrType::I64;
+        length.result_php_type = PhpType::Int;
+        length.result_ownership = Ownership::NonHeap;
+        length.effects = Op::ConstI64.default_effects();
+    } else if is_md5 || is_repeat {
         let Some(length) = function.instruction_mut(length) else {
             return false;
         };
@@ -263,6 +475,15 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
     for release in releases {
         if let Some(inst) = function.instruction_mut(release) {
             neutralize_to_nop(inst);
+        }
+    }
+    if mb_length.is_some() && count_value_uses(function).get(&operand).copied().unwrap_or(0) == 0 {
+        if let Some((load_id, load)) = defining_instruction_with_id(function, operand) {
+            if load.op == Op::LoadLocal {
+                if let Some(load) = function.instruction_mut(load_id) {
+                    neutralize_to_nop(load);
+                }
+            }
         }
     }
     true
@@ -395,4 +616,84 @@ fn analyze_uses(function: &Function, result: ValueId) -> Option<(InstId, Vec<Ins
         }
     }
     Some((length?, releases))
+}
+
+/// Computes PHP's byte-set trim length for an ASCII subject and mask.
+fn trimmed_ascii_len(subject: &[u8], mask: &[u8], left: bool, right: bool) -> i64 {
+    let mut set = [false; 256];
+    for &byte in mask {
+        set[byte as usize] = true;
+    }
+    let mut begin = 0;
+    let mut end = subject.len();
+    if left {
+        while begin < end && set[subject[begin] as usize] {
+            begin += 1;
+        }
+    }
+    if right {
+        while end > begin && set[subject[end - 1] as usize] {
+            end -= 1;
+        }
+    }
+    (end - begin) as i64
+}
+
+/// Returns a `ConstStr` value, tracing one `Acquire` in front of it.
+fn const_string_value(function: &Function, data: &DataPool, value: ValueId) -> Option<String> {
+    let value = match defining_instruction(function, value) {
+        Some(inst) if inst.op == Op::Acquire && inst.operands.len() == 1 => inst.operands[0],
+        _ => value,
+    };
+    let (_, inst) = defining_instruction_with_id(function, value)?;
+    let (Op::ConstStr, Some(Immediate::Data(data_id))) = (inst.op, &inst.immediate) else {
+        return None;
+    };
+    data.strings.get(data_id.as_raw() as usize).cloned()
+}
+
+/// Returns an immutable literal local's value and its load instruction.
+fn const_local_string(
+    function: &Function,
+    data: &DataPool,
+    value: ValueId,
+) -> Option<(String, InstId)> {
+    let (load_id, load) = defining_instruction_with_id(function, value)?;
+    let (value, require_load) = if load.op == Op::LoadLocal {
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+            return None;
+        };
+        let entry = function.blocks.first()?;
+        let mut stored = None;
+        for (raw, inst) in function.instructions.iter().enumerate() {
+            let id = InstId::from_raw(raw as u32);
+            let touches_slot = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot);
+            if !touches_slot {
+                continue;
+            }
+            match inst.op {
+                Op::StoreLocal if inst.operands.len() == 1 => {
+                    if !entry.instructions.contains(&id) || stored.replace(inst.operands[0]).is_some() {
+                        return None;
+                    }
+                }
+                Op::LoadLocal | Op::ReleaseLocalSlot => {}
+                _ => return None,
+            }
+        }
+        (stored?, true)
+    } else {
+        (value, false)
+    };
+    let string = const_string_value(function, data, value)?;
+    Some((string, if require_load { load_id } else { InstId::from_raw(u32::MAX) }))
+}
+
+/// Returns the defining instruction and identifier for one SSA value.
+fn defining_instruction_with_id(function: &Function, value: ValueId) -> Option<(InstId, &crate::ir::Instruction)> {
+    let definition = function.value(value)?;
+    let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
+        return None;
+    };
+    Some((inst, function.instruction(inst)?))
 }
