@@ -73,6 +73,24 @@ pub unsafe extern "C" fn elephc_mbstring_internal_encoding_set_v1(
     name: *const u8,
     len: u64,
 ) -> i32 {
+    // Re-applying the already-explicit UTF-8 default is a no-op; keep it out of the panic
+    // boundary and the encoding parser because request-local code asserts it in hot loops.
+    if len <= isize::MAX as u64 && (len == 0 || !name.is_null()) {
+        let bytes = if len == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(name, len as usize) }
+        };
+        let unchanged = super::REQUEST.with(|state| {
+            let state = state.borrow();
+            state.internal_is_explicit()
+                && state.internal_encoding().name().eq_ignore_ascii_case("UTF-8")
+                && bytes.eq_ignore_ascii_case(b"UTF-8")
+        });
+        if unchanged {
+            return 1;
+        }
+    }
     catch_unwind(AssertUnwindSafe(|| unsafe {
         set_string_setting(name, len, |bytes| {
             super::REQUEST.with(|state| state.borrow_mut().set_internal_encoding(bytes).is_ok())

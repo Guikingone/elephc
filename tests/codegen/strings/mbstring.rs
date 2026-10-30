@@ -510,6 +510,20 @@ echo "\n";
 }
 
 
+
+/// Repeats the explicit UTF-8 internal-encoding setter so the no-op fast path is exercised.
+#[test]
+fn test_mb_internal_encoding_repeated_setter() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$ok = true;
+for ($i = 0; $i < 100; $i++) { $ok = $ok && mb_internal_encoding("UTF-8"); }
+echo $ok ? "ok" : "fail", "|", mb_internal_encoding(), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ok|UTF-8\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies the UTF-8-to-UTF-8 output-handler passthrough retains its subject without copying.
 #[test]
 fn test_mb_output_handler_utf8_passthrough() {
