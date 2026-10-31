@@ -456,6 +456,20 @@ fn test_mb_ereg_replace_len_x86_64_keeps_the_subject_cursor() {
         lines[reset - 1], "mov r8, rax",
         "the census must copy the subject pointer into r8 before rax becomes the count"
     );
+    let fallback = lines
+        .iter()
+        .position(|line| line.contains("mb_ereg_replace_len_fallback"))
+        .expect("the non-fast pattern must emit the bridge fallback");
+    let unbox = lines[fallback..]
+        .iter()
+        .position(|line| *line == "call __rt_mixed_unbox")
+        .expect("the non-fast pattern must unbox the bridge result")
+        + fallback;
+    assert!(
+        lines[unbox + 2].starts_with("mov QWORD PTR [rsp + 16], rdx"),
+        "the unboxed string length must come from the high payload register, got: {}",
+        lines[unbox + 2]
+    );
     let _ = fs::remove_dir_all(dir);
 }
 

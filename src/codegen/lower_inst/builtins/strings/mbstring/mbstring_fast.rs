@@ -2278,7 +2278,7 @@ fn emit_boxed_string_length(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");               // save the boxed cell before unboxing
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");           // save the runtime tag
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rsi");          // save the string byte length
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");          // save the string byte length
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");               // reload the cell for its final release
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");          // start with the string byte length
