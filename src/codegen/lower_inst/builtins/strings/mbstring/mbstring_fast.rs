@@ -1823,8 +1823,8 @@ pub(super) fn lower_ereg_replace_len(
                 ctx.emitter.label(&scan_done);
             }
             Arch::X86_64 => {
+                ctx.emitter.instruction("mov r8, rax");                         // subject cursor before the count reuse
                 ctx.emitter.instruction("xor eax, eax");                       // replaced length starts at zero
-                ctx.emitter.instruction("mov r8, rax");                        // subject cursor
                 ctx.emitter.instruction("mov r9, rdx");                        // remaining subject bytes
                 ctx.emitter.instruction("xor r10d, r10d");                     // no digit run is open
                 let scan = ctx.next_label("mb_ereg_replace_len_scan_x86");

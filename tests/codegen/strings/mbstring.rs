@@ -419,6 +419,46 @@ fn test_mb_ord_x86_64_ascii_predicate_preserves_the_subject_pointer() {
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies the x86_64 digit-run census copies the subject pointer before reusing rax
+/// for the replaced-length accumulator.
+#[test]
+fn test_mb_ereg_replace_len_x86_64_keeps_the_subject_cursor() {
+    let dir = make_cli_test_dir("elephc_mb_ereg_replace_len_x86");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php echo strlen(mb_ereg_replace(\"[0-9]+\", \"#\", \"a1b22c333\"));",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .args(["--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected x86_64 assembly");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let call = lines
+        .iter()
+        .position(|line| *line == "call __rt_mb_is_ascii")
+        .expect("the digit-run census must check the subject for ASCII");
+    assert!(lines[call + 1].starts_with("test rcx, rcx"), "got: {}", lines[call + 1]);
+    let reset = lines[call..]
+        .iter()
+        .position(|line| line.starts_with("xor eax, eax"))
+        .expect("the census must start its replaced-length accumulator at zero")
+        + call;
+    assert_eq!(
+        lines[reset - 1], "mov r8, rax",
+        "the census must copy the subject pointer into r8 before rax becomes the count"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies ASCII trim, substring counting, and a non-ASCII trim fallback.
 #[test]
 fn test_mb_ascii_trim_and_substr_count_fast_paths() {
