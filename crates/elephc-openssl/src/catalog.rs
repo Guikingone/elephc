@@ -29,13 +29,13 @@ use crate::CipherError;
 struct Catalog {
     packed: Vec<u8>,
     count: usize,
-    iv_lengths: HashMap<String, i32>,
+    iv_lengths: HashMap<Vec<u8>, i32>,
 }
 
 /// Names and IV lengths collected during the one provider enumeration.
 struct CatalogBuilder {
     names: Vec<String>,
-    iv_lengths: HashMap<String, i32>,
+    iv_lengths: HashMap<Vec<u8>, i32>,
 }
 
 /// The process-wide catalog snapshot.
@@ -67,7 +67,7 @@ extern "C" fn collect_name(cipher: *mut crate::ffi::EVP_CIPHER, arg: *mut c_void
     let name = name.to_ascii_lowercase();
     let iv_length = unsafe { EVP_CIPHER_get_iv_length(cipher) };
     let builder = unsafe { &mut *(arg as *mut CatalogBuilder) };
-    builder.iv_lengths.insert(name.clone(), iv_length);
+    builder.iv_lengths.insert(name.as_bytes().to_vec(), iv_length);
     builder.names.push(name);
 }
 
@@ -110,11 +110,17 @@ pub(crate) fn catalog_count() -> usize {
 /// Returns the default IV length for a cipher name, using the cached catalog first.
 pub(crate) fn cipher_iv_length(name: &[u8]) -> Result<usize, CipherError> {
     let name = std::str::from_utf8(name).map_err(|_| CipherError::UnknownCipher)?;
-    let lowered = name.to_ascii_lowercase();
-    if let Some(length) = catalog().iv_lengths.get(&lowered).copied() {
+    if let Some(length) = catalog().iv_lengths.get(name.as_bytes()).copied() {
         return usize::try_from(length).map_err(|_| CipherError::UnknownCipher);
     }
-    // Aliases outside the default catalog still resolve through one provider fetch.
+    // Uppercase aliases and names outside the default catalog resolve through a
+    // lowercase retry, then one provider fetch.
+    let lowered = name.to_ascii_lowercase();
+    if lowered != name {
+        if let Some(length) = catalog().iv_lengths.get(lowered.as_bytes()).copied() {
+            return usize::try_from(length).map_err(|_| CipherError::UnknownCipher);
+        }
+    }
     let name = CString::new(lowered).map_err(|_| CipherError::UnknownCipher)?;
     let cipher = unsafe {
         EVP_CIPHER_fetch(std::ptr::null_mut(), name.as_ptr(), std::ptr::null())
