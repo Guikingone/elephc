@@ -36,6 +36,7 @@ env:
     -p elephc-tls
     -p elephc-pdo
     -p elephc-crypto
+    -p elephc-openssl
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
