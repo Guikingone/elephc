@@ -383,14 +383,17 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 # These environment probes compile eval-capable web hosts. The computed-name
 # regression needs three separate programs, since one literal eval target would
-# otherwise retain the environment for every case. It took 90s locally.
+# otherwise retain the environment for every case. It measured 282s locally with
+# the loop-invariant mbstring pass, and the shared PR-tier macOS runners can be
+# several times slower; twenty periods keep a real hang bounded while letting the
+# first attempt finish instead of spending the job budget on retries.
 [[profile.default.overrides]]
 filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
-slow-timeout = { period = "60s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 20 }
 
 [[profile.ci.overrides]]
 filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
-slow-timeout = { period = "60s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 20 }
 
 [[profile.default.overrides]]
 filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
