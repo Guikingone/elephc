@@ -48,6 +48,7 @@ mod mb_convert_variables_len_sink;
 mod mb_parse_str_literal_sink;
 mod mb_strlen_const_local_sink;
 mod openssl_cbc_len_sink;
+mod openssl_cipher_iv_length_const_sink;
 mod mb_strstr_len_const_sink;
 mod mb_numericentity_len_sink;
 mod mb_strimwidth_len_sink;

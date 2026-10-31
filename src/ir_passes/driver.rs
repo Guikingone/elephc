@@ -59,6 +59,7 @@ use super::mb_convert_variables_len_sink::MbConvertVariablesLenSink;
 use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
 use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
 use super::openssl_cbc_len_sink::OpensslCbcLenSink;
+use super::openssl_cipher_iv_length_const_sink::OpensslCipherIvLengthConstSink;
 use super::mb_strstr_len_const_sink::MbStrstrLenConstSink;
 use super::mb_strimwidth_len_sink::MbStrimwidthLenSink;
 use super::strstr_len_sink::StrstrLenSink;
@@ -204,6 +205,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(MbParseStrLiteralSink),
         Box::new(MbStrlenConstLocalSink),
         Box::new(OpensslCbcLenSink),
+        Box::new(OpensslCipherIvLengthConstSink),
         Box::new(MbNumericentityLenSink),
         Box::new(MbStrimwidthLenSink),
         Box::new(StrstrLenSink),

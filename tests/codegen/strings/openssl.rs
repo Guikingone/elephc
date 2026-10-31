@@ -314,3 +314,22 @@ echo "\n";
     assert_eq!(out.stdout, "24|5|24|16|\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies the pinned literal IV-length fold and the dynamic/alias runtime fallback.
+#[test]
+fn test_openssl_cipher_iv_length_literal_fold_and_fallback() {
+    if skip_without_openssl_native("test_openssl_cipher_iv_length_literal_fold_and_fallback") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$cipher = $argc > 0 ? "aes-128-cbc" : "aes-256-gcm";
+echo openssl_cipher_iv_length($cipher), ":";
+echo openssl_cipher_iv_length("AES-256-GCM"), ":";
+echo openssl_cipher_iv_length("aes-128-wrap"), ":";
+echo openssl_cipher_iv_length("aes128"), ":";
+echo openssl_cipher_iv_length("not-a-cipher") === false ? "false" : "bad";
+"#,
+    );
+    assert_eq!(out, "16:12:8:16:false");
+}
