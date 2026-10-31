@@ -2,7 +2,7 @@
 title: "parse_str()"
 description: "Parses a URL-encoded query string into variables."
 sidebar:
-  order: 926
+  order: 977
 ---
 
 ## parse_str()

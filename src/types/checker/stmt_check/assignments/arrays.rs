@@ -37,8 +37,9 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    // PHP auto-vivifies an undefined variable as an indexed array when its first use is an
-    // offset write. There is no undefined read to diagnose on this path.
+    // PHP auto-vivifies an undefined variable when its first use is an offset write. There is
+    // no undefined read to diagnose on this path; starting from an empty indexed array lets the
+    // ordinary write path below decide between packed and associative storage from the key.
     let arr_ty = match env.get(array).cloned() {
         Some(ty) => ty,
         None => {
@@ -461,7 +462,9 @@ pub(super) fn check_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    // `$undefined[] = $value` starts the variable as an empty indexed array, like PHP.
+    // PHP auto-vivifies an undefined variable on `$a[] = ...`. Starting from an empty indexed
+    // array admits the write through the ordinary push path below, preserving callable-array
+    // metadata and element-type merging exactly as a declared `[]` initializer would.
     let arr_ty = match env.get(array).cloned() {
         Some(ty) => ty,
         None => {

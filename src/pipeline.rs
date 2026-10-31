@@ -319,6 +319,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
         (with_crates.contains("bcmath"), "bcmath"),
+        (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
     ]
     .into_iter()
@@ -532,6 +533,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::parse_str_prelude::inject_if_used(ast, &ini_overrides, &mut prelude_inventory);
     let ast = crate::locale_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
+    let ast = crate::gmp_prelude::inject_if_used(ast, with_crates.contains("gmp"), &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
@@ -625,13 +627,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             ast, php_version, &ini_overrides, &mut prelude_inventory,
             preload_startup_path.as_deref(),
         )
+    } else if autoloaded("web_environment") {
+        web_prelude::inject_if_web_with_autoload_usage(
+            ast, web, php_version, &ini_overrides, &mut prelude_inventory,
+            preload_startup_path.as_deref(), true,
+        )
     } else {
         web_prelude::inject_if_web(
-            ast,
-            web,
-            php_version,
-            &ini_overrides,
-            &mut prelude_inventory,
+            ast, web, php_version, &ini_overrides, &mut prelude_inventory,
             preload_startup_path.as_deref(),
         )
     };

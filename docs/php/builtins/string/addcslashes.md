@@ -2,7 +2,7 @@
 title: "addcslashes()"
 description: "Returns a string with backslashes before characters listed in a character set, including ranges."
 sidebar:
-  order: 808
+  order: 859
 ---
 
 ## addcslashes()

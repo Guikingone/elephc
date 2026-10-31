@@ -2,7 +2,7 @@
 title: "session_set_cookie_params()"
 description: "Sets the session cookie's lifetime, path, domain, and flags."
 sidebar:
-  order: 1027
+  order: 1078
 ---
 
 ## session_set_cookie_params()

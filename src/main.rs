@@ -30,6 +30,7 @@ mod core_prelude;
 mod filter_prelude;
 mod bcmath_prelude;
 mod parse_str_prelude;
+mod gmp_prelude;
 mod random_prelude;
 mod image_prelude;
 mod intrinsics;

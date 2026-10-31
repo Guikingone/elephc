@@ -2,7 +2,7 @@
 title: "setlocale()"
 description: "Sets locale information and returns the new locale name, or false when unavailable."
 sidebar:
-  order: 934
+  order: 985
 ---
 
 ## setlocale()

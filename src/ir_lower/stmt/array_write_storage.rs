@@ -107,6 +107,22 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     let array_value = if let Some(ty) = auto_vivified_array_type(ctx, array) {
         let empty = empty_auto_vivified_container(ctx, array, &ty, span);
         publish_auto_vivified_container(ctx, array, empty, ty, span)
+    } else if !ctx.has_local_slot(array) && !ctx.is_ref_bound_local(array) {
+        // A write whose first-use type the checker did not retain still needs a real local.
+        // PHP auto-vivifies a missing variable on `$a[] = ...`, so start from a generic boxed
+        // array; the checker admitted the write.
+        let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        ctx.declare_local(array, array_ty.clone());
+        let empty = ctx.emit_value(
+            Op::ArrayNew,
+            Vec::new(),
+            Some(crate::ir::Immediate::Capacity(0)),
+            array_ty.clone(),
+            Op::ArrayNew.default_effects(),
+            Some(span),
+        );
+        ctx.store_local(array, empty, array_ty, Some(span));
+        ctx.load_local(array, Some(span))
     } else if ctx.is_ref_bound_local(array) {
         ctx.load_local(array, Some(span))
     } else {

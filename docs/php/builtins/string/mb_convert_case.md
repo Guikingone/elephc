@@ -2,7 +2,7 @@
 title: "mb_convert_case()"
 description: "Converts case using one of the eight Unicode case modes."
 sidebar:
-  order: 856
+  order: 907
 ---
 
 ## mb_convert_case()

@@ -2,7 +2,7 @@
 title: "mb_substr_count()"
 description: "Counts non-overlapping occurrences of an encoded substring."
 sidebar:
-  order: 915
+  order: 966
 ---
 
 ## mb_substr_count()

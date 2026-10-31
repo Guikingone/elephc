@@ -3108,3 +3108,6 @@ fn web_filter_default_applies_without_a_filter_call() {
 
 #[path = "web/memory_metrics.rs"]
 mod memory_metrics;
+
+#[path = "web/environment.rs"]
+mod environment;
