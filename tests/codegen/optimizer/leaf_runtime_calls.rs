@@ -41,7 +41,7 @@ fn test_leaf_string_search_skips_diagnostic_publication() {
     let function = function_asm(
         r#"<?php
 function leaf_search(int $n): int {
-    $s = str_repeat("a", 10) . "needle";
+    $s = str_repeat("a", $n) . "needle";
     $x = 0;
     for ($i = 0; $i < $n; $i++) {
         if (str_contains($s, "needle")) { $x++; }

@@ -114,7 +114,12 @@ buffer_free($values);
 
     assert!(unoptimized.contains("while.body:"));
     assert!(unoptimized.contains("= ichecked_add "));
-    assert!(preheader.contains("= ichecked_add_to_int "));
+    // The `$argc` C-int range seed lets integer range analysis replace the
+    // checked add with a plain `iadd`; the LICM provenance is the invariant.
+    assert!(
+        preheader.contains("= iadd ") || preheader.contains("= ichecked_add_to_int "),
+        "{preheader}"
+    );
     assert!(preheader.contains("origin: licm"));
     // The loop counter's own `$i++` is scalar as well, so an `ichecked_add_to_int` in the
     // body is expected and says nothing about hoisting. What must not be there is the
