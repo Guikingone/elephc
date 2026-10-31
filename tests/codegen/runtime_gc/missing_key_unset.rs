@@ -190,3 +190,66 @@ echo count($items), ":", $items["keep"];
     assert_eq!(out.stdout, "removed|1:41");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Mixed reference payloads retain collection after object callbacks, null, and false warnings.
+#[test]
+fn test_gc_missing_key_unset_mixed_reference_fallbacks() {
+    let out = compile_unset_gc_fixture(
+        r#"<?php
+class UnsetCollectionAccess implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void { seedUnsetGarbage(); }
+}
+function removeMixedOffset(mixed &$value): void { unset($value["absent"]); }
+$object = new UnsetCollectionAccess();
+$before = gc_status()["runs"];
+removeMixedOffset($object);
+echo gc_status()["runs"] - $before, "|";
+$nothing = null;
+seedUnsetGarbage();
+$before = gc_status()["runs"];
+removeMixedOffset($nothing);
+echo gc_status()["runs"] - $before, "|";
+set_error_handler(function (int $level, string $message): bool {
+    seedUnsetGarbage();
+    return true;
+});
+$disabled = false;
+$before = gc_status()["runs"];
+removeMixedOffset($disabled);
+echo gc_status()["runs"] - $before;
+restore_error_handler();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|1|1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Float-key warning snapshots still reach their unconditional safe point after detached cleanup.
+#[test]
+fn test_gc_missing_key_unset_float_key_diagnostics() {
+    let out = compile_unset_gc_fixture(
+        r#"<?php
+function removeFloatOffset(array &$items): void { unset($items[1.5]); }
+set_error_handler(function (int $level, string $message): bool {
+    seedUnsetGarbage();
+    return true;
+});
+$raw = ["keep" => 1];
+$before = gc_status()["runs"];
+unset($raw[1.5]);
+echo gc_status()["runs"] - $before, "|";
+$declared = ["keep" => 1];
+$before = gc_status()["runs"];
+removeFloatOffset($declared);
+echo gc_status()["runs"] - $before;
+restore_error_handler();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

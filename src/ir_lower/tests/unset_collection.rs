@@ -21,12 +21,15 @@ function removeDeclaredHeaders(array &$items, string $key): void {
 }
 function nextUnsetKey(): string { echo "key"; return "absent"; }
 function removeComputedHeader(array $items): void { unset($items[nextUnsetKey()]); }
+function removeMixedHeader(mixed &$items): void { unset($items["other"]); }
 $items = ["keep" => 1];
 $key = $argc > 0 ? "absent" : "missing";
 unset($items[strtolower($key)], $items["other"]);
 $declared = ["keep" => 1];
 removeDeclaredHeaders($declared, $key);
 removeComputedHeader($items);
+$mixed = ["keep" => 1];
+removeMixedHeader($mixed);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source,
@@ -59,9 +62,9 @@ removeComputedHeader($items);
                     "{name}: an effectful key retains unconditional collection");
             }
         }
-        assert_eq!(removals, 5, "{name}");
+        assert_eq!(removals, 6, "{name}");
         assert!(raw > 0 && boxed > 0, "{name}: cover both array representations");
-        assert_eq!(gated, 2, "{name}");
+        assert_eq!(gated, 3, "{name}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }

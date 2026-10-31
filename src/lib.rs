@@ -45,6 +45,8 @@ pub(crate) mod global_decls;
 mod progress;
 /// Immutable BCMath Number standard-library prelude injection.
 pub mod bcmath_prelude;
+/// PHP ext/gmp standard-library prelude injection.
+pub mod gmp_prelude;
 pub mod random_prelude;
 /// Incremental hashing standard-library prelude injection.
 pub mod hash_prelude;
@@ -98,6 +100,8 @@ pub mod mysqli_prelude;
 
 /// Hosting support for real PHP extensions (surface derivation from stubs).
 pub mod php_ext;
+/// Producer-side SDK validation and registration for real PHP hosts.
+pub mod phpext;
 /// PHP language-profile selection and profile-dependence analysis.
 pub mod php_profile;
 /// Reachability pruning of injected prelude declarations.

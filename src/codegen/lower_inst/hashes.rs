@@ -495,6 +495,11 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ctx.store_result_value(hash)?;
     receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
+    if matches!(ctx.value_php_type(key)?.codegen_repr(), PhpType::Float | PhpType::Mixed) {
+        ctx.load_value_to_result(hash)?;
+        super::offset_unset::lower_array_unset_with_key_diagnostics(ctx, key)?;
+        return store_unset_result(ctx, inst);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             materialize_hash_key_aarch64(ctx, key)?;
@@ -516,6 +521,7 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Stores the runtime removal flag while leaving the legacy hash-pointer result unused.
 pub(super) fn store_unset_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.result.is_none() { return Ok(()); }
     // -- materialize the boolean result returned alongside the retired table pointer --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
