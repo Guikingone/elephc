@@ -3075,3 +3075,6 @@ fn web_array_push_onto_a_request_superglobal_keeps_the_worker_alive() {
 
 #[path = "web/memory_metrics.rs"]
 mod memory_metrics;
+
+#[path = "web/environment.rs"]
+mod environment;
