@@ -35,6 +35,7 @@ pub(crate) fn lower_mb_strlen(
 ) -> Result<()> {
     if operation == RuntimeBuiltinId::MbStrlen
         && inst.operands.len() == 2
+        && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
         && explicit_utf8_encoding(ctx, inst.operands[1])?
     {
         // An ASCII subject has one UTF-8 codepoint per byte, so fold the count even when
