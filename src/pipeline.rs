@@ -40,6 +40,9 @@ mod output;
 
 use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
 
+/// Keeps source validation and native link rejection consistent for unsupported producer inputs.
+const PHPEXT_CORE_RUNTIME_ONLY: &str = "PHP extension output currently requires the core runtime without bridges, hosted extensions, web or process monitoring";
+
 /// Runs the full compilation pipeline from PHP source to native binary.
 /// Reads PHP source, tokenizes, parses, resolves names, type-checks, optimizes,
 /// generates assembly, and links into a native binary. Exits on any error.
@@ -121,6 +124,11 @@ impl<'a> EntryKind<'a> {
 
 /// Shares every compiler pass while separating generated host storage from project discovery.
 fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
+    optimize::with_hosted_output(config.emit == Emit::Phpext, || compile_config(config, entry));
+}
+
+/// Runs compiler passes with the output kind's host-callback profile installed.
+fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let CliConfig {
         filename,
         heap_size,
@@ -152,12 +160,22 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         strict_locals,
         web,
         web_isolation,
+        web_application,
         with_crates,
         quiet,
         ini_overrides,
     } = config;
     let filename = filename.as_str();
     crate::progress::init(quiet);
+    // Reject incompatible options before check/EIR output can return without the backend.
+    if emit == Emit::Phpext && (web || !extra_link_libs.is_empty()
+        || !extra_link_paths.is_empty() || !extra_frameworks.is_empty()
+        || !with_crates.is_empty() || counters || gc_stats
+        || instrument != crate::codegen::Instrumentation::Off) {
+        crate::progress::clear();
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
+        process::exit(1);
+    }
     codegen::set_null_repr(null_repr);
     // Record the PHP language profile and SAPI mode BEFORE any prelude or lowering runs: it is
     // the single source of truth for the reported version surface (`PHP_VERSION` and friends,
@@ -302,6 +320,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
         (with_crates.contains("bcmath"), "bcmath"),
+        (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
     ]
     .into_iter()
@@ -512,6 +531,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
+    let ast = crate::gmp_prelude::inject_if_used(ast, with_crates.contains("gmp"), &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
@@ -600,7 +620,12 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = if autoloaded("web_environment") {
+    let ast = if web_application {
+        web_prelude::application::inject(
+            ast, php_version, &ini_overrides, &mut prelude_inventory,
+            preload_startup_path.as_deref(),
+        )
+    } else if autoloaded("web_environment") {
         web_prelude::inject_if_web_with_autoload_usage(
             ast, web, php_version, &ini_overrides, &mut prelude_inventory,
             preload_startup_path.as_deref(), true,
@@ -633,7 +658,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     // archive nothing references contributes nothing to the link.
     crate::progress::phase("extension-prelude");
     let phase_started = Instant::now();
-    let hosted_php_ext = match crate::php_ext::install::resolve_hosted(Path::new(filename), target) {
+    let hosted_php_ext = match crate::php_ext::install::resolve_hosted(Path::new(filename), target, web_application) {
         Ok(hosted) => hosted,
         Err(error) => {
             crate::progress::clear();
@@ -818,6 +843,10 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     );
     timings.record_since("opcache-manifest-bake", phase_started);
 
+    let ast = if web_application {
+        web_prelude::application::wrap_bootstrap(ast)
+    } else { ast };
+
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
     let ast = optimize::fold_constants_for_target(ast, target);
@@ -839,6 +868,11 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     timings.record_since("typecheck", phase_started);
+    if emit == Emit::Phpext && hosted_php_ext.is_some() {
+        crate::progress::clear();
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
+        process::exit(1);
+    }
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }
@@ -859,7 +893,8 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("exports-scan");
     let phase_started = Instant::now();
-    let exported_functions = match exports::collect(&ast, &check_result.functions) {
+    let collect_exports = if emit == Emit::Phpext { exports::collect_for_php } else { exports::collect };
+    let exported_functions = match collect_exports(&ast, &check_result.functions) {
         Ok(exports) => exports,
         Err(e) => {
             crate::progress::clear();
@@ -868,6 +903,11 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     timings.record_since("exports-scan", phase_started);
+    if emit == Emit::Phpext && exported_functions.is_empty() {
+        crate::progress::clear();
+        eprintln!("--emit phpext requires at least one #[Export] function");
+        process::exit(1);
+    }
     if matches!(emit, Emit::Executable)
         && !check_only
         && !emit_ir
@@ -937,6 +977,14 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     if preload_startup_path.is_some() {
         exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
     }
+    if web_application {
+        exported_function_names.extend([
+            web_prelude::application::READY,
+            web_prelude::application::REQUEST,
+            web_prelude::application::SHUTDOWN,
+            web_prelude::application::CONTEXT_OPTION,
+        ].map(str::to_string));
+    }
     // A generic instantiation is reachable by construction — it exists only because a call
     // site asked for it — but no call site NAMES it: the source still says `identity(5)` and
     // lowering is what resolves that to `identity<int>`. Without this the pruner drops every
@@ -956,6 +1004,12 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         },
     );
     timings.record_since("decl-reach", phase_started);
+    // Reachability removes bridge requirements belonging only to dead declarations.
+    if emit == Emit::Phpext && !check_result.required_libraries.is_empty() {
+        crate::progress::clear();
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
+        process::exit(1);
+    }
     codegen::prepare_declared_name_order(
         &ast,
         &check_result.classes,
@@ -967,6 +1021,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
             &ast,
             &check_result,
             target,
+            emit,
             filename,
             web,
             ir_opt,
@@ -999,6 +1054,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
             process::exit(1);
         }
     };
+    ir_module.web_application = web_application;
     ir_module.included_files = opcache_manifest
         .iter()
         .map(|entry| entry.path.clone())
@@ -1006,7 +1062,8 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     timings.record_since("ir-lower", phase_started);
 
     if emit.is_library() || (check_only && !exported_functions.is_empty()) {
-        if let Err(error) = exports::validate_cdylib_call_graph(&ir_module, &exported_functions) {
+        let validate = if emit == Emit::Phpext { exports::validate_phpext_call_graph } else { exports::validate_cdylib_call_graph };
+        if let Err(error) = validate(&ir_module, &exported_functions) {
             crate::progress::clear();
             errors::report(&error.with_file(filename.to_string()));
             process::exit(1);

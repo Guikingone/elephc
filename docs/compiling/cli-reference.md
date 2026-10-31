@@ -304,7 +304,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`), `phpext` | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. `phpext` produces a real PHP 8.5 extension using the matching native development SDK. |
 | `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
@@ -316,9 +316,10 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--php-version VERSION` | `8.0` through `8.6` | detected, else `8.5` | Select a PHP compatibility profile for version-dependent behavior. Automatic project detection chooses among the maintained stable profiles `8.2` through `8.5`; historical `8.0`/`8.1` and preview `8.6` remain explicitly selectable. Sessions use the profile for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary; see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 | `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
+| `--web-lifecycle MODE` / `--web-lifecycle=MODE` | `request`, `application` | `request` | Select PHP state lifetime. `application` bootstraps one typed application after fork and requires worker isolation. See [Persistent Web Applications](../beyond-php/web-application.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, either library emit kind (`cdylib` or `staticlib`),
+be combined with `--check`, a library emit kind (`cdylib`, `staticlib`, or `phpext`),
 `--emit-asm`, or `--emit-ir`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
@@ -525,7 +526,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `random`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `fileinfo`, `tokenizer`, `eval`, `regex`, `curl`, `mysqli`, `zend`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-random` force-links the random bridge and injects the `Random\*` surface and the procedural `mt_*`/`lcg_value`/`random_bytes` functions; static detection already links it when a program names that surface, `array_rand()`, or `shuffle()`. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-tokenizer` retains PHP source tokenization and `PhpToken` for indirect use. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-zend` force-links `libelephc_zend.a`, the engine [hosted PHP extensions](../beyond-php/php-extensions.md) run on; a project that declares extensions links it without the flag. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `gmp`, `random`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `fileinfo`, `tokenizer`, `eval`, `regex`, `curl`, `mysqli`, `zend`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-gmp` force-links the pinned libgmp bridge and injects the `GMP` class plus all 51 functions for indirect calls and serialized class names; the project must declare the managed `gmp` package (`elephc native add gmp`). `--with-random` force-links the random bridge and injects the `Random\*` surface and the procedural `mt_*`/`lcg_value`/`random_bytes` functions; static detection already links it when a program names that surface, `array_rand()`, or `shuffle()`. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-tokenizer` retains PHP source tokenization and `PhpToken` for indirect use. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-zend` force-links `libelephc_zend.a`, the engine [hosted PHP extensions](../beyond-php/php-extensions.md) run on; a project that declares extensions links it without the flag. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -1026,3 +1027,27 @@ The variables in this table are read by the **compiler**. A separate family,
 functions and `finfo` class for dynamic eval. Declare the managed `libmagic`
 package first with `elephc native add libmagic`. Its compiled database is embedded
 in the resulting program.
+
+## PHP extension SDK selection
+
+`--emit phpext` requires a native PHP 8.5 development SDK on Linux x86_64,
+Linux aarch64 or macOS aarch64. iOS extension output is rejected. It produces
+`<source-stem>.so`, including a Mach-O bundle with that suffix on macOS.
+Exported parameters and returns need explicit type declarations; null defaults
+need an explicit nullable type such as `?int`.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `ELEPHC_PHPEXT_PHP_CONFIG` | `php-config` on PATH | Selects the real host headers and interpreter. |
+| `ELEPHC_PHPEXT_PHP_BINARY` | `php-config --php-binary` | Explicit matching interpreter when the SDK reports `NONE`, or when selecting a particular installation. |
+| `ELEPHC_PHPEXT_MODULE_NAME` | source stem | Validated lowercase module identifier. |
+| `ELEPHC_PHPEXT_MODULE_VERSION` | compiler version | Validated module version token. |
+| `CC` | `cc` | C compiler command and flags, parsed without shell evaluation. |
+
+Headers and interpreter must agree on the complete PHP version, module API,
+build ID, ZTS mode, debug mode and integer width. A small generated extension
+must load successfully before the compiler uses that SDK. No extension is
+installed into PHP's configuration or extension directory.
+
+See [PHP extensions](../beyond-php/phpext.md) for supported signatures,
+ownership, request isolation and lifecycle testing.

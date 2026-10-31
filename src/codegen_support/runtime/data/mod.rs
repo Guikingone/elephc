@@ -26,6 +26,11 @@ pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_m
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 pub(crate) use user::USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET;
 
+/// Optional native stream closer installed only by an application worker after its startup reset.
+pub(crate) const WEB_STREAM_CLOSE_SLOT: &str = "_web_application_stream_close";
+/// Program-specific close body shared with explicit fclose lowering.
+pub(crate) const WEB_STREAM_CLOSE_ENTRY: &str = "__rt_web_application_close_stream";
+
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.
 pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
     "Fatal error: php_uname(): Argument #1 ($mode) must be a single character\n";
@@ -174,6 +179,17 @@ pub(crate) const SLEEP_WARNING_SUFFIX: &str =
 /// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
 pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
     "unserialize(): Argument #2 ($options) must be of type array, ";
+/// Runtime warning fragments for malformed `unserialize()` wire data.
+///
+/// php-src reports the failing byte offset and the total source length before returning
+/// `false`; the runtime composes the same line from these pieces plus `_script_source_file`
+/// and the call-site line.
+pub(crate) const UNSER_ERROR_PREFIX: &str = "Warning: unserialize(): Error at offset ";
+pub(crate) const UNSER_ERROR_OF: &str = " of ";
+pub(crate) const UNSER_ERROR_BYTES_IN: &str = " bytes in ";
+pub(crate) const UNSER_ERROR_ON_LINE: &str = " on line ";
+pub(crate) const UNSER_ERROR_NEWLINE: &str = "\n";
+
 /// Prefix for a catchable TypeError naming an invalid `allowed_classes` policy value.
 pub(crate) const UNSER_ALLOWED_CLASSES_POLICY_PREFIX: &str =
     "unserialize(): Option \"allowed_classes\" must be of type array|bool, ";

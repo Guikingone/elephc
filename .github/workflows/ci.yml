@@ -37,6 +37,7 @@ env:
     -p elephc-pdo
     -p elephc-crypto
     -p elephc-bcmath
+    -p elephc-gmp
     -p elephc-random
     -p elephc-mbstring
     -p elephc-iconv
@@ -55,6 +56,12 @@ env:
     -p elephc-zend
 
 jobs:
+  # The required gate waits for real PHP on the queue's actual integration commit.
+  phpext-host-sdk:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/phpext-host-sdk.yml
+
   # Chooses the tiers this run executes (scripts/ci/plan_tiers.sh, CONTRIBUTING.md § "CI
   # tiers and the merge queue"). Pull requests run every Linux job plus the macOS compile,
   # doctests and managed-native smoke; the macOS test matrix and the iOS links run in the
@@ -231,6 +238,16 @@ jobs:
           restore-keys: |
             libxml2-native-macos-aarch64-
 
+      - name: Cache managed native gmp
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-macos-aarch64-
+
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
         # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
@@ -240,6 +257,34 @@ jobs:
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -409,6 +454,16 @@ jobs:
           restore-keys: |
             libxml2-native-linux-x86_64-
 
+      - name: Cache managed native gmp
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-x86_64-
+
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
         # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
@@ -418,6 +473,34 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-x86_64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -579,6 +662,16 @@ jobs:
           restore-keys: |
             libxml2-native-linux-aarch64-
 
+      - name: Cache managed native gmp
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-aarch64-
+
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
         # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
@@ -588,6 +681,34 @@ jobs:
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-aarch64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -1235,6 +1356,33 @@ jobs:
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-macos-aarch64-
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/gmp/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1248,6 +1396,9 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
+          # artifact was materialized just above, so a missing one is a bug.
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
@@ -1328,6 +1479,33 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-x86_64-
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/gmp/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/gmp/elephc.toml
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1341,6 +1519,9 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
+          # artifact was materialized just above, so a missing one is a bug.
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
@@ -1421,6 +1602,33 @@ jobs:
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-aarch64-
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op on macOS and warm images.
+        run: |
+          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Materialize managed native gmp
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/gmp/elephc.lock build from source.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1434,6 +1642,9 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
+          # artifact was materialized just above, so a missing one is a bug.
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
@@ -2274,6 +2485,90 @@ jobs:
             "${{ matrix.sdk }}" \
             "${{ matrix.clang_target }}"
 
+  gmp-phpt-corpus:
+    name: GMP PHPT corpus
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # The prebuilt CI image already carries the pinned Rust toolchain, m4 and the
+    # native build dependencies, so this job needs no per-run apt-get step.
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Ensure GMP configure dependency
+        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
+        # installation; the guard makes the step a no-op once the image includes it.
+        run: |
+          if ! command -v m4 >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+          fi
+
+      - name: Build compiler and GMP bridge
+        run: |
+          cargo build --bin elephc
+          cargo build -p elephc-gmp
+
+      - name: Materialize managed GMP
+        run: |
+          ./target/debug/elephc native install --locked \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Run the whole ext/gmp PHPT corpus
+        env:
+          ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
+        run: |
+          cargo test --test codegen_tests test_gmp_php_src_phpt_corpus \
+            -- --ignored --nocapture
+
+  gmp-ios-compile-link:
+    name: GMP iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache managed native GMP for iOS
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: gmp-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            gmp-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link gmp with the managed libgmp
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_gmp_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
+
   tokenizer-ios-compile-link:
     name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
     needs: plan
@@ -2770,20 +3065,6 @@ jobs:
         # outcome; tests only elephc runs (the .lfc files) are informational.
         run: python3 scripts/test-differential.py examples/testing --elephc target/debug/elephc
 
-      - name: Install the runtime's stream libraries
-        # The DOOM engine reads its WAD with file_get_contents() on a run-time path,
-        # which links the runtime's stream layer (`-lz -lbz2`,
-        # src/builtins/requirements.rs); the runner image has no libbz2-dev.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libbz2-dev zlib1g-dev
-
-      - name: DOOM showcase suite
-        # Runs here because this job already builds the compiler. Map changes, specials,
-        # pickups and rendering against a small WAD the tests write themselves: no SDL,
-        # display or DOOM1.WAD needed.
-        run: target/debug/elephc test showcases/doom/tests
-
   curl-feature-contract:
     name: Curl feature contract coverage
     runs-on: ubuntu-latest
@@ -3161,6 +3442,7 @@ jobs:
       - action-pins
       - frame-assertions-release
       - benchmark-tooling
+      - phpext-host-sdk
     if: always()
     steps:
       - name: Merge JUnit reports
@@ -3183,6 +3465,7 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           RUN_TIER: ${{ needs.plan.outputs.run }}
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
+          SDK_TIER: ${{ needs.plan.outputs.run == 'true' && github.event_name != 'pull_request' }}
         run: |
           always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
             build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
@@ -3210,6 +3493,8 @@ jobs:
               if [ "$RUN_TIER" = true ]; then want=success; else want=skipped; fi
             elif in_list "$job" "$extended_tier"; then
               if [ "$EXTENDED_TIER" = true ]; then want=success; else want=skipped; fi
+            elif [ "$job" = phpext-host-sdk ]; then
+              if [ "$SDK_TIER" = true ]; then want=success; else want=skipped; fi
             else
               echo "::error::$job is in needs but in none of this gate's tier lists"
               status=1

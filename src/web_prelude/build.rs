@@ -5131,8 +5131,7 @@ fn decl_stmt_bootstrap_44() -> Stmt {
     )
 }
 
-/// Builds the complete web surface for declaration parity and AST round-trip audits.
-#[cfg(test)]
+/// Builds the complete web surface for application preparation and declaration audits.
 pub(crate) fn web_declarations(
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
