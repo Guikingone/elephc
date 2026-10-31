@@ -37,10 +37,16 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    // PHP auto-vivifies an undefined variable as an indexed array when its first use is an
+    // offset write. There is no undefined read to diagnose on this path.
+    let arr_ty = match env.get(array).cloned() {
+        Some(ty) => ty,
+        None => {
+            let empty = PhpType::Array(Box::new(PhpType::Never));
+            env.insert(array.to_string(), empty.clone());
+            empty
+        }
+    };
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
@@ -455,10 +461,15 @@ pub(super) fn check_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    // `$undefined[] = $value` starts the variable as an empty indexed array, like PHP.
+    let arr_ty = match env.get(array).cloned() {
+        Some(ty) => ty,
+        None => {
+            let empty = PhpType::Array(Box::new(PhpType::Never));
+            env.insert(array.to_string(), empty.clone());
+            empty
+        }
+    };
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     // Nested appends retain their catchable runtime Error through the generated temporary.

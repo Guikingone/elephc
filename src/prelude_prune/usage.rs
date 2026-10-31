@@ -697,6 +697,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
 /// Scans every child and callable position of one expression.
 fn scan_expr(expr: &Expr, usage: &mut Usage) {
     match &expr.kind {
+        ExprKind::Reference(inner) => scan_expr(inner, usage),
         ExprKind::IncludeValue { path, .. } => {
             // Like the include statement: a runtime include inside a fragment loads code this
             // walk cannot read.

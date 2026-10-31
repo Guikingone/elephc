@@ -2,7 +2,7 @@
 title: "mb_rtrim() - internals"
 description: "Compiler internals for mb_rtrim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 892
+  order: 893
 ---
 
 ## `mb_rtrim()` - internals

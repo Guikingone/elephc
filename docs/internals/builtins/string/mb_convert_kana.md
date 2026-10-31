@@ -2,7 +2,7 @@
 title: "mb_convert_kana() - internals"
 description: "Compiler internals for mb_convert_kana(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 857
+  order: 858
 ---
 
 ## `mb_convert_kana()` - internals

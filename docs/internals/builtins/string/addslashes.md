@@ -2,7 +2,7 @@
 title: "addslashes() - internals"
 description: "Compiler internals for addslashes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 808
+  order: 809
 ---
 
 ## `addslashes()` - internals

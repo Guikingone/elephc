@@ -2,7 +2,7 @@
 title: "ini_set() - internals"
 description: "Compiler internals for ini_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1006
+  order: 1009
 ---
 
 ## `ini_set()` - internals

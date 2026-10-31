@@ -2,7 +2,7 @@
 title: "mb_ereg_replace_callback() - internals"
 description: "Compiler internals for mb_ereg_replace_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 868
+  order: 869
 ---
 
 ## `mb_ereg_replace_callback()` - internals

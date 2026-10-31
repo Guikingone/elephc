@@ -2,7 +2,7 @@
 title: "mb_output_handler() - internals"
 description: "Compiler internals for mb_output_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 887
+  order: 888
 ---
 
 ## `mb_output_handler()` - internals
