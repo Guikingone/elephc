@@ -6,11 +6,15 @@
 //! - `crate::abi` for the C method-inventory and IV-length entry points.
 //!
 //! Key details:
-//! - The provider is loaded once and the packed trailing-NUL catalog is cached;
-//!   the benchmark's repeated calls only copy an immutable buffer.
+//! - The provider is loaded once; the packed catalog and every default IV length
+//!   are cached together, so repeated `openssl_cipher_iv_length()` calls are map
+//!   lookups rather than provider fetches.
 //! - No legacy provider is loaded, matching PHP's default 135-name list. Loading
 //!   legacy would add BF/CAST/DES/IDEA/RC2/RC4/SEED names PHP does not report.
+//! - Names outside the default catalog (aliases such as `aes128`) fall back to a
+//!   single `EVP_CIPHER_fetch` so PHP's case-insensitive alias support remains.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
 use std::sync::OnceLock;
@@ -21,11 +25,21 @@ use crate::ffi::{
 };
 use crate::CipherError;
 
-/// The packed trailing-NUL catalog, built once on first use.
-static CATALOG: OnceLock<Vec<u8>> = OnceLock::new();
+/// One immutable default-provider snapshot.
+struct Catalog {
+    packed: Vec<u8>,
+    count: usize,
+    iv_lengths: HashMap<String, i32>,
+}
 
-/// The number of names in the packed catalog.
-static CATALOG_COUNT: OnceLock<usize> = OnceLock::new();
+/// Names and IV lengths collected during the one provider enumeration.
+struct CatalogBuilder {
+    names: Vec<String>,
+    iv_lengths: HashMap<String, i32>,
+}
+
+/// The process-wide catalog snapshot.
+static CATALOG: OnceLock<Catalog> = OnceLock::new();
 
 /// Loads the default provider once for this process.
 fn ensure_default_provider() {
@@ -37,7 +51,7 @@ fn ensure_default_provider() {
     });
 }
 
-/// Collects one provider cipher name during enumeration.
+/// Collects one provider cipher name and its default IV length.
 extern "C" fn collect_name(cipher: *mut crate::ffi::EVP_CIPHER, arg: *mut c_void) {
     if cipher.is_null() || arg.is_null() {
         return;
@@ -50,50 +64,58 @@ extern "C" fn collect_name(cipher: *mut crate::ffi::EVP_CIPHER, arg: *mut c_void
     let Ok(name) = name.to_str() else {
         return;
     };
-    let names = unsafe { &mut *(arg as *mut Vec<String>) };
-    names.push(name.to_ascii_lowercase());
+    let name = name.to_ascii_lowercase();
+    let iv_length = unsafe { EVP_CIPHER_get_iv_length(cipher) };
+    let builder = unsafe { &mut *(arg as *mut CatalogBuilder) };
+    builder.iv_lengths.insert(name.clone(), iv_length);
+    builder.names.push(name);
 }
 
 /// Builds the lowercase, sorted, deduplicated default-provider catalog.
-fn build_catalog() -> Vec<u8> {
+fn build_catalog() -> Catalog {
     ensure_default_provider();
-    let mut names: Vec<String> = Vec::new();
+    let mut builder = CatalogBuilder { names: Vec::new(), iv_lengths: HashMap::new() };
     unsafe {
         EVP_CIPHER_do_all_provided(
             std::ptr::null_mut(),
             collect_name,
-            &mut names as *mut Vec<String> as *mut c_void,
+            &mut builder as *mut CatalogBuilder as *mut c_void,
         );
     }
-    names.sort();
-    names.dedup();
-    let mut packed: Vec<u8> = Vec::with_capacity(names.iter().map(|name| name.len() + 1).sum());
-    for name in names {
+    builder.names.sort();
+    builder.names.dedup();
+    let mut packed = Vec::with_capacity(builder.names.iter().map(|name| name.len() + 1).sum());
+    for name in &builder.names {
         packed.extend_from_slice(name.as_bytes());
         packed.push(0);
     }
-    packed
+    Catalog { packed, count: builder.names.len(), iv_lengths: builder.iv_lengths }
+}
+
+/// Returns the cached default-provider snapshot.
+fn catalog() -> &'static Catalog {
+    CATALOG.get_or_init(build_catalog)
 }
 
 /// Returns the cached trailing-NUL packed catalog.
 pub(crate) fn catalog_packed() -> &'static [u8] {
-    CATALOG.get_or_init(build_catalog)
+    &catalog().packed
 }
 
 /// Returns the number of catalog names.
 pub(crate) fn catalog_count() -> usize {
-    *CATALOG_COUNT.get_or_init(|| {
-        catalog_packed()
-            .split(|byte| *byte == 0)
-            .filter(|name| !name.is_empty())
-            .count()
-    })
+    catalog().count
 }
 
-/// Returns the default IV length for a fetched cipher name.
+/// Returns the default IV length for a cipher name, using the cached catalog first.
 pub(crate) fn cipher_iv_length(name: &[u8]) -> Result<usize, CipherError> {
     let name = std::str::from_utf8(name).map_err(|_| CipherError::UnknownCipher)?;
-    let name = CString::new(name).map_err(|_| CipherError::UnknownCipher)?;
+    let lowered = name.to_ascii_lowercase();
+    if let Some(length) = catalog().iv_lengths.get(&lowered).copied() {
+        return usize::try_from(length).map_err(|_| CipherError::UnknownCipher);
+    }
+    // Aliases outside the default catalog still resolve through one provider fetch.
+    let name = CString::new(lowered).map_err(|_| CipherError::UnknownCipher)?;
     let cipher = unsafe {
         EVP_CIPHER_fetch(std::ptr::null_mut(), name.as_ptr(), std::ptr::null())
     };
