@@ -1003,6 +1003,7 @@ pub enum Op {
     /// helper the callable invoker's prevalidation walk calls. The helper never returns, so the
     /// emitting block ends `Unreachable`.
     ThrowNamedParameterOverwrite,
+    /// Removes a hash key and optionally returns whether an entry was present, including null.
     HashUnset,
     /// Writes PHP null into `container[key]`, releasing whatever was there.
     ///
@@ -1035,6 +1036,7 @@ pub enum Op {
     ArrayKeyExists,
     OffsetExists,
     /// Removes an offset from a detached boxed PHP array cell, preserving sparse keys and aliases.
+    /// An optional boolean result reports presence independently of the removed value.
     OffsetUnset,
     ListUnpack,
     IterStart,

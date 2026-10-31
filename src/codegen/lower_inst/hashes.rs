@@ -511,7 +511,21 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
         }
     }
-    Ok(())
+    store_unset_result(ctx, inst)
+}
+
+/// Stores the runtime removal flag while leaving the legacy hash-pointer result unused.
+pub(super) fn store_unset_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // -- materialize the boolean result returned alongside the retired table pointer --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // a present entry reports one even when its value was null
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdx");                            // consume the per-call flag before any later helper can clobber it
+        }
+    }
+    super::store_if_result(ctx, inst)
 }
 
 /// Lowers `$hash[] = $value` runtime fallback appends for associative arrays.

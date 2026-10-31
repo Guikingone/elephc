@@ -49,5 +49,5 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
-    Ok(())
+    hashes::store_unset_result(ctx, inst)
 }
