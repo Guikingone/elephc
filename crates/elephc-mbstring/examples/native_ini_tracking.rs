@@ -87,6 +87,14 @@ fn main() {
     });
     accepted(elephc_mbstring_native_string_reset_v1());
 
+    accepted(elephc_mbstring_native_string_fresh_v1(source, 64));
+    measure("fresh_persist_forget", iterations, || {
+        accepted(elephc_mbstring_native_string_fresh_v1(source, 64));
+        accepted(elephc_mbstring_native_string_persist_v1(destination, source, 64));
+        accepted(elephc_mbstring_native_string_forget_v1(destination));
+    });
+    accepted(elephc_mbstring_native_string_reset_v1());
+
     measure("request_256_fresh_reset", iterations / owners.len(), || {
         for &owner in &owners { accepted(elephc_mbstring_native_string_fresh_v1(owner, 64)); }
         accepted(elephc_mbstring_native_string_reset_v1());

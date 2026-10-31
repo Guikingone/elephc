@@ -1529,13 +1529,18 @@ this skip, including when a Mixed cell no longer contains its former array
 value. Other allocation kinds retain their existing identity retirement path.
 
 The native INI registry records origins before the first INI call so copies made
-earlier still share their logical identity. Unshared fresh strings and literals
+earlier still share their logical identity. Initially, fresh strings and literals
 store only their kind and length in the allocation-address map. Copying a tracked
 full string or resolving it for INI promotes that origin to shared metadata;
 fresh replacement detaches the source while existing aliases keep the old
 origin. Repeated literal observations preserve both unresolved and resolved
 origins. Scratch pointers and different-length views never inherit a tracked
 identity.
+
+Once a promoted fresh origin has no remaining copied aliases and has never been
+resolved, refresh reuses that metadata allocation. Repeated update/copy/release
+loops therefore avoid allocating shared metadata again on each update. Interned
+or resolved origins and origins with live aliases still detach on replacement.
 
 The map hashes internal allocation addresses with an integer mixer, independently
 of PHP string-key hashing. Request reset releases every origin and identity lease

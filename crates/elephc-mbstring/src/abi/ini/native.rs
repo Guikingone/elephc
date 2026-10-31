@@ -5,7 +5,8 @@
 //! - Native INI materialization, string persistence, final heap release, and request reset.
 //!
 //! Key details:
-//! - Unshared origins stay inline; copying or resolving promotes them to shared metadata.
+//! - Origins start inline; copying or resolving promotes them to shared metadata.
+//! - Unique unresolved promoted origins reuse metadata after their temporary aliases retire.
 //! - Internal allocation addresses use integer hashing; request resets keep the empty table.
 //! - Resolved origins own Rust identity leases, never native heap references or PHP callbacks.
 //! - The host forgets allocations before freeing/reusing them and clears metadata before arena reset.
@@ -100,7 +101,7 @@ pub extern "C" fn elephc_mbstring_native_string_copy_v1(destination: u64, source
 pub extern "C" fn elephc_mbstring_native_string_fresh_v1(owner: u64, length: u64) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
         if owner == 0 || length > isize::MAX as u64 { return 1; }
-        replace(owner, NativeString::Fresh(length));
+        create_fresh(owner, length);
         0
     })).unwrap_or(1)
 }
@@ -129,8 +130,8 @@ pub extern "C" fn elephc_mbstring_native_string_literal_v1(owner: u64, length: u
 pub extern "C" fn elephc_mbstring_native_string_persist_v1(destination: u64, source: u64, length: u64) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
         if destination == 0 || length > isize::MAX as u64 { return 1; }
-        let entry = origin(source, length).map_or(NativeString::Fresh(length), NativeString::Shared);
-        replace(destination, entry);
+        if let Some(origin) = origin(source, length) { replace(destination, NativeString::Shared(origin)); }
+        else { create_fresh(destination, length); }
         0
     })).unwrap_or(1)
 }
@@ -183,6 +184,25 @@ fn bind(owner: u64, length: u64, identity: u64) -> i32 {
     0
 }
 
+/// Records a validated fresh origin, reusing promoted metadata only without aliases or a resolved ID.
+fn create_fresh(owner: u64, length: u64) {
+    let previous = NATIVE.with(|values| match values.borrow_mut().entry(owner) {
+        Entry::Occupied(mut slot) => {
+            if let NativeString::Shared(origin) = slot.get_mut() {
+                if let Some(origin) = Rc::get_mut(origin) {
+                    if !origin.interned && origin.identity.get().is_none() {
+                        origin.length = length;
+                        return None;
+                    }
+                }
+            }
+            Some(slot.insert(NativeString::Fresh(length)))
+        },
+        Entry::Vacant(slot) => { slot.insert(NativeString::Fresh(length)); None },
+    });
+    drop(previous);
+}
+
 /// Clones a complete logical origin while keeping the native allocation map borrow short.
 fn origin(owner: u64, length: u64) -> Option<Rc<SharedOrigin>> {
     NATIVE.with(|values| values.borrow_mut().get_mut(&owner).filter(|entry| entry.length() == length).map(NativeString::share))
@@ -219,6 +239,31 @@ mod tests {
         for _ in 0..4 {
             assert_eq!(elephc_mbstring_native_string_literal_v1(owner, 3), 0);
             NATIVE.with(|values| assert!(matches!(values.borrow().get(&owner), Some(NativeString::Literal(3)))));
+        }
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    }
+
+    /// Reuses promoted unresolved metadata when each temporary copy retires before the next refresh.
+    #[test]
+    fn ini_native_refresh_reuses_promoted_origin_after_alias_retirement() {
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+        let source = b"abcdefg".to_vec();
+        let copy = source.clone();
+        let owner = source.as_ptr() as u64;
+        let destination = copy.as_ptr() as u64;
+        assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, 3), 0);
+        assert_eq!(elephc_mbstring_native_string_persist_v1(destination, owner, 3), 0);
+        assert_eq!(elephc_mbstring_native_string_forget_v1(destination), 0);
+        let address = || NATIVE.with(|values| match values.borrow().get(&owner) {
+            Some(NativeString::Shared(entry)) => Some(Rc::as_ptr(entry)), _ => None,
+        });
+        let original = address();
+        assert!(original.is_some());
+        for length in [4, 5, 3] {
+            assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, length), 0);
+            assert_eq!(address(), original, "refresh must preserve unique unresolved promoted metadata");
+            assert_eq!(elephc_mbstring_native_string_persist_v1(destination, owner, length), 0);
+            assert_eq!(elephc_mbstring_native_string_forget_v1(destination), 0);
         }
         assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
     }
