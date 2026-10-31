@@ -199,7 +199,7 @@ fn try_lower_strwidth(
             ctx.emitter.instruction("mov x0, x2");                            // every ASCII codepoint has display width one
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                          // did every byte stay inside ASCII?
+            ctx.emitter.instruction("test rcx, rcx");                          // did every byte stay inside ASCII?
             ctx.emitter.instruction(&format!("jz {fallback}"));                // non-ASCII subjects need the width table
             ctx.emitter.instruction("mov rax, rdx");                          // every ASCII codepoint has display width one
         }
@@ -1785,7 +1785,7 @@ pub(super) fn lower_ereg_replace_len(
                 ctx.emitter.instruction(&format!("b {fallback}"));             // other subjects keep the regex bridge
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("test rax, rax");                      // did every byte stay inside ASCII?
+                ctx.emitter.instruction("test rcx, rcx");                      // did every byte stay inside ASCII?
                 ctx.emitter.instruction(&format!("jnz {ascii}"));              // ASCII subjects use the digit-run census
                 ctx.emitter.instruction(&format!("jmp {fallback}"));           // other subjects keep the regex bridge
             }
@@ -2392,7 +2392,7 @@ fn emit_predicate_branch(ctx: &mut FunctionContext<'_>, fallback: &str) {
             ctx.emitter.instruction(&format!("cbz x0, {fallback}"));           // a zero predicate means a non-ASCII byte
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                          // did every byte stay inside ASCII?
+            ctx.emitter.instruction("test rcx, rcx");                          // did every byte stay inside ASCII?
             ctx.emitter.instruction(&format!("jz {fallback}"));                // a zero predicate means a non-ASCII byte
         }
     }

@@ -16,6 +16,8 @@
 //!   keep a word open; every other non-letter starts a new word.
 //! - AArch64 input is `x1`/`x2` = pointer/length, output is the same pair; x86_64 input is
 //!   `rax`/`rdx` = pointer/length, output is the same pair. A zero pointer means fallback.
+//! - `__rt_mb_is_ascii` reads that same input pair and reports the predicate through `x0`
+//!   (AArch64) or `rcx` (x86_64), leaving the pointer and length intact for the caller.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -355,10 +357,10 @@ fn emit_is_ascii_x86_64(emitter: &mut Emitter) {
     emitter.instruction("dec r9");                                             // account for the consumed byte
     emitter.instruction("jmp __rt_mb_is_ascii_tail_x86");                      // inspect the remaining tail
     emitter.label("__rt_mb_is_ascii_yes_x86");
-    emitter.instruction("mov eax, 1");                                         // report an entirely ASCII subject
+    emitter.instruction("mov ecx, 1");                                         // report an entirely ASCII subject
     emitter.instruction("ret");                                               // return the predicate
     emitter.label("__rt_mb_is_ascii_no_x86");
-    emitter.instruction("xor eax, eax");                                       // report a non-ASCII byte
+    emitter.instruction("xor ecx, ecx");                                       // report a non-ASCII byte
     emitter.instruction("ret");                                               // return the predicate
 }
 

@@ -103,12 +103,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                       // load the haystack pointer for the ASCII check
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                      // load the haystack length for the ASCII check
     abi::emit_call_label(emitter, "__rt_mb_is_ascii");
-    emitter.instruction("test eax, eax");                                      // is the haystack entirely ASCII?
+    emitter.instruction("test ecx, ecx");                                      // is the haystack entirely ASCII?
     emitter.instruction("jz __rt_mb_strstr_len_utf8_fallback_x86");            // a non-ASCII haystack needs the Unicode bridge
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                      // load the needle pointer for the ASCII check
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                      // load the needle length for the ASCII check
     abi::emit_call_label(emitter, "__rt_mb_is_ascii");
-    emitter.instruction("test eax, eax");                                      // is the needle entirely ASCII?
+    emitter.instruction("test ecx, ecx");                                      // is the needle entirely ASCII?
     emitter.instruction("jz __rt_mb_strstr_len_utf8_fallback_x86");            // a non-ASCII needle needs the Unicode bridge
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                       // restore the haystack pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                      // restore the haystack length

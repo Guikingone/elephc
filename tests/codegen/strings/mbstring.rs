@@ -370,6 +370,55 @@ echo "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Verifies the x86_64 ASCII predicate reports through rcx so `mb_ord` keeps the
+/// subject pointer in rax for its first-byte load.
+#[test]
+fn test_mb_ord_x86_64_ascii_predicate_preserves_the_subject_pointer() {
+    let dir = make_cli_test_dir("elephc_mb_ord_x86_ascii");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo mb_ord(\"A\", \"UTF-8\");").unwrap();
+    let output = elephc_cli_command(&dir)
+        .args(["--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected x86_64 assembly");
+    let call = asm
+        .lines()
+        .position(|line| line.trim() == "call __rt_mb_is_ascii")
+        .expect("mb_ord must check the UTF-8 subject for ASCII");
+    let after: Vec<&str> = asm.lines().map(str::trim).skip(call + 1).take(8).collect();
+    assert!(
+        after[0].starts_with("test rcx, rcx"),
+        "the x86_64 predicate must report through rcx, got: {}",
+        after[0]
+    );
+    assert!(
+        after.iter().any(|line| line.starts_with("movzx edi, BYTE PTR [rax]")),
+        "mb_ord must load the first subject byte through the preserved rax pointer"
+    );
+
+    let target = Target::parse("linux-x86_64").expect("linux-x86_64 is supported");
+    let runtime = elephc::codegen::generate_runtime(8_388_608, target);
+    let helper = runtime
+        .split("__rt_mb_is_ascii:")
+        .nth(1)
+        .expect("the runtime must emit the ASCII predicate")
+        .split("--- runtime:")
+        .next()
+        .unwrap();
+    assert!(helper.contains("mov ecx, 1"), "the predicate must report through rcx");
+    assert!(helper.contains("xor ecx, ecx"), "the predicate must reject through rcx");
+    assert!(!helper.contains("mov eax, 1"), "the predicate must not clobber rax");
+    assert!(!helper.contains("xor eax, eax"), "the predicate must not clobber rax");
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies ASCII trim, substring counting, and a non-ASCII trim fallback.
 #[test]
 fn test_mb_ascii_trim_and_substr_count_fast_paths() {
