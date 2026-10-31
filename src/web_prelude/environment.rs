@@ -80,6 +80,8 @@ mod tests {
             "<?php $fn = 'eval'; $fn($code);",
             "<?php $fn = 'ev' . 'al'; $fn($code);",
             "<?php $prefix = 'ev'; $fn = $prefix . 'al'; $fn($code);",
+            "<?php $fn = 'evaX'; ($fn[3] = 'l'); $fn($code);",
+            "<?php $fn = 'evaX'; $ignored = $fn[3] = 'l'; $fn($code);",
             "<?php function invoke(string $fn, string $code) { $fn($code); }",
             "<?php $fn = 'strlen'; replace($fn); $fn($code);",
             "<?php $fn = 'strlen'; $fn |> replace(...); $fn($code);",

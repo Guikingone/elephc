@@ -928,6 +928,8 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         } => {
             if let ExprKind::Variable(name) = &target.kind {
                 usage.callable_names.assignment(name, value);
+            } else {
+                usage.callable_names.write_target(target);
             }
             scan_expr(target, usage);
             scan_expr(value, usage);

@@ -36,6 +36,15 @@ impl CallableNames {
         self.opaque.insert(name.to_owned());
     }
 
+    /// Invalidates the local owner of a write through array or string dimensions.
+    pub(crate) fn write_target(&mut self, target: &Expr) {
+        match &target.kind {
+            ExprKind::Variable(name) => self.write(name),
+            ExprKind::ArrayAccess { array, .. } => self.write_target(array),
+            _ => {}
+        }
+    }
+
     /// Records a call through a named variable.
     pub(crate) fn variable_call(&mut self, name: &str) {
         self.invoked.insert(name.to_owned());
