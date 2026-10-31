@@ -52,6 +52,9 @@ pub extern "C" fn elephc_mbstring_ereg_search_step_v1() -> i32 {
             return -1;
         }
         REGEX.with(|session| {
+            if !session.progressive_ready() {
+                return -1;
+            }
             let limits = Limits { stack: None, retry: None };
             match session.search(None, None, "mb_ereg_search", limits, &mut |_| {}) {
                 Ok(Some(_)) => 1,
@@ -102,6 +105,9 @@ pub unsafe extern "C" fn elephc_mbstring_ereg_search_pos_v1(
             if !session.progressive_ready() {
                 return -1;
             }
+            if !session.simple_ready() {
+                return -2;
+            }
             let limits = Limits { stack: None, retry: None };
             match session.search(None, None, "mb_ereg_search_pos", limits, &mut |_| {}) {
                 Ok(Some(_)) => match session.match_position() {
@@ -142,6 +148,9 @@ pub unsafe extern "C" fn elephc_mbstring_ereg_search_regs_v1(
             if !session.progressive_ready() {
                 return -1;
             }
+            if !session.simple_ready() {
+                return -2;
+            }
             let limits = Limits { stack: None, retry: None };
             match session.search(None, None, "mb_ereg_search_regs", limits, &mut |_| {}) {
                 Ok(Some(_)) => match session.match_group0() {
@@ -175,15 +184,20 @@ pub unsafe extern "C" fn elephc_mbstring_ereg_search_getregs_v1(
         return -1;
     }
     catch_unwind(AssertUnwindSafe(|| {
-        REGEX.with(|session| match session.match_group0() {
-            Some((ptr, len)) => {
-                unsafe {
-                    *ptr_out = ptr;
-                    *len_out = len as u64;
-                }
-                1
+        REGEX.with(|session| {
+            if !session.simple_ready() {
+                return -2;
             }
-            None => 0,
+            match session.match_group0() {
+                Some((ptr, len)) => {
+                    unsafe {
+                        *ptr_out = ptr;
+                        *len_out = len as u64;
+                    }
+                    1
+                }
+                None => 0,
+            }
         })
     }))
     .unwrap_or(-1)

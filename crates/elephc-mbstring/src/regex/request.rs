@@ -126,6 +126,14 @@ impl Session {
         data.pattern.is_some() && data.subject.is_some()
     }
 
+    /// Reports whether the dedicated one-group `[0-9]+` fast path owns the live
+    /// progressive pattern and subject. Other patterns must use the generic
+    /// register materializer so named/numbered groups are preserved.
+    pub fn simple_ready(&self) -> bool {
+        let data = self.data.borrow();
+        data.simple_pattern && data.pattern.is_some() && data.subject.is_some()
+    }
+
     /// Returns the retained match's start and length, if a search has matched.
     pub fn match_position(&self) -> Option<(usize, usize)> {
         self.data.borrow().matched.as_ref().map(Match::position)
