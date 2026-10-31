@@ -25,6 +25,9 @@
 //!   read, write, isset, unset, or element-address instruction is its key: PHP consumes
 //!   keys by value, so only the container operand stays conservative. Terminator uses
 //!   never alias.
+//! - The mbstring entry points admitted by `pure_mbstring_calls` consume every string
+//!   parameter by value and are listed in the runtime value-only allowlist. Their
+//!   string loads may therefore become immutable and be hoisted with the call.
 //! - WHY IT IS SHARED. Two passes with different jobs need the identical, safety-critical
 //!   judgement; a second copy that drifted would reintroduce exactly the bug each of them
 //!   fixes. `immutable_local_loads` learned this the hard way: without the exclusion it
@@ -185,6 +188,32 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::ArrayMapSumAddIntCached
             | crate::ir::RuntimeFnId::ArrayMapSumProbeInt
             | crate::ir::RuntimeFnId::ArrayMapSumAddSafe
+            // These mbstring entry points take every string parameter by value and
+            // return a fresh scalar. They are also the reads `licm` may hoist once
+            // their explicit-UTF-8 arguments make them pure.
+            | crate::ir::RuntimeFnId::MbStrlen
+            | crate::ir::RuntimeFnId::MbStrwidth
+            | crate::ir::RuntimeFnId::MbCheckEncoding
+            | crate::ir::RuntimeFnId::MbSubstrCount
+            | crate::ir::RuntimeFnId::MbOrdInt
+            | crate::ir::RuntimeFnId::MbStrposInt
+            | crate::ir::RuntimeFnId::MbStriposInt
+            | crate::ir::RuntimeFnId::MbStrrposInt
+            | crate::ir::RuntimeFnId::MbStrriposInt
+            | crate::ir::RuntimeFnId::MbStrstrLen
+            | crate::ir::RuntimeFnId::MbStristrLen
+            | crate::ir::RuntimeFnId::MbStrrchrLen
+            | crate::ir::RuntimeFnId::MbStrrichrLen
+            | crate::ir::RuntimeFnId::MbStrimwidthLen
+            | crate::ir::RuntimeFnId::MbChrLen
+            | crate::ir::RuntimeFnId::MbConvertEncodingLen
+            | crate::ir::RuntimeFnId::MbSplitCount
+            | crate::ir::RuntimeFnId::MbEregReplaceLen
+            | crate::ir::RuntimeFnId::MbDetectEncodingLen
+            | crate::ir::RuntimeFnId::MbSubstr
+            | crate::ir::RuntimeFnId::MbStrcut
+            | crate::ir::RuntimeFnId::MbScrub
+            | crate::ir::RuntimeFnId::MbConvertKana
     )
 }
 

@@ -96,6 +96,7 @@ mod loops;
 mod mem2reg;
 pub(crate) mod numeric_domain;
 mod peephole;
+mod pure_mbstring_calls;
 mod regalloc;
 pub(crate) mod rematerialize;
 mod rewrite;

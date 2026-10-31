@@ -1397,10 +1397,11 @@ acquire/release cancellation, string-literal concat folding, redundant
 `move`/`borrow` cleanup), then scalar local promotion into SSA values with block
 parameters at joins and loop back edges, then immutable concrete numeric-local
 classification and integer-sink specialization for checked add/subtract/multiply.
-Immutable-load classification also covers concrete float locals. It refines integer
-loads only in functions with checked integer arithmetic and float loads only in
-functions with float arithmetic, so identical generic bodies stay identical for
-shape merging. It accepts an
+Immutable-load classification also covers concrete float and string locals. It
+refines integer loads only in functions with checked integer arithmetic, float
+loads only in functions with float arithmetic, and string loads only in functions
+with a whitelisted explicit-UTF-8 mbstring call, so identical generic bodies stay
+identical for shape merging. It accepts an
 unwritten by-value parameter or one entry-block store that dominates every load,
 and rejects by-reference aliases, dynamic `eval`, other storage representations,
 and any unrecognized slot operation. Those passes make proven-stable integer and
@@ -1420,8 +1421,19 @@ is shared with canonical loop optimization, which exposes invariant header value
 coalesces counters with identical overflow semantics, and simplifies integer tests.
 LICM moves invariant bounds and step materializations from blocks that dominate
 every loop latch. Conditional constants stay near varying uses unless they
-accompany an invariant computation. Branch cleanup composes SSA forwarding
-arguments and merges single-predecessor loop update blocks. See
+accompany an invariant computation. LICM also moves a reviewed set of
+explicit-UTF-8 mbstring reads — `mb_strlen`, `mb_strwidth`,
+`mb_check_encoding`, `mb_substr_count`, `mb_ord`, the position searches, and the
+allocation-free length/count variants produced by the length sinks — when their
+arguments make them total and deterministic. It requires a literal `UTF-8`
+encoding, a literal zero offset where the function validates a range, a
+non-empty literal needle or `mb_ord` subject where an empty argument would
+throw, and a loop with no other global writer except the concatenation scratch
+reset. An owned `mb_substr`/`mb_strcut` result observed only by `strlen` moves
+as one group with its length observer and single release, so the loop body reads
+only the scalar length and no per-iteration allocation survives. An extra
+observer keeps the producer and release in the loop. Branch cleanup composes SSA
+forwarding arguments and merges single-predecessor loop update blocks. See
 [Canonical Loop Optimization](the-ir.md#canonical-loop-optimization).
 
 CFG states store only nonredundant path facts. Immutable scalar literals are read
