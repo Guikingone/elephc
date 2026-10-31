@@ -260,16 +260,18 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 
 # Core eval GC fixtures use opaque eval and link Magician just like codegen::eval.
 # Collection comparisons and heap-debug/tagged controls often compile twice.
-# Multiple macOS runs have exceeded 60s in different members of this same family.
-# Give the whole named family the existing eval budget, not unrelated AOT/GC tests.
-# The compiled-program watchdog remains 60s independently of this outer budget.
+# Multiple macOS runs have exceeded 60s in different members of this same family,
+# and two members reached the old three-period cap (180s) on both attempts once a
+# loaded shared runner packed the shard with 31 slow tests. Give the whole named
+# family six periods, not unrelated AOT/GC tests. The compiled-program watchdog
+# remains 60s independently of this outer budget.
 [[profile.default.overrides]]
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
-slow-timeout = { period = "60s", terminate-after = 3 }
+slow-timeout = { period = "60s", terminate-after = 6 }
 
 [[profile.ci.overrides]]
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
-slow-timeout = { period = "60s", terminate-after = 3 }
+slow-timeout = { period = "60s", terminate-after = 6 }
 
 # The standalone `eval_*` integration binaries (object handles, resource ids,
 # string interpolation) link Magician for every program they compile, exactly
