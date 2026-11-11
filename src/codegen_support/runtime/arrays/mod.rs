@@ -423,6 +423,8 @@ pub use hash_replace_into::emit_hash_replace_into;
 pub use hash_unset::emit_hash_unset;
 /// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;
+/// Number of segregated heap free-list bins (see `heap_alloc`).
+pub(crate) use heap_alloc::HEAP_BIN_COUNT;
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;
 /// Emit heap debug live check helper.

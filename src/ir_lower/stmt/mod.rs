@@ -4508,11 +4508,26 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
         terminate_return(ctx, None);
         return;
     }
+    if let Some(value_expr) = value_expr {
+        if lower_int_function_return(ctx, value_expr, span) {
+            return;
+        }
+    }
     let value = if let Some(value_expr) = value_expr {
         lower_return_expr(ctx, value_expr)
     } else {
         emit_null_value(ctx, Some(span))
     };
+    finish_return(ctx, value_expr, value, span);
+}
+
+/// Applies the return-boundary guards and coercions to a lowered value and returns it.
+fn finish_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value_expr: Option<&Expr>,
+    value: LoweredValue,
+    span: Span,
+) {
     let value = reload_returned_assignment_local(ctx, value_expr, value, span);
     let value = return_type_guard::emit_checked_downcast_return_guard(ctx, value, span);
     let value = coerce_to_return_type(ctx, value, Some(span));
@@ -4520,6 +4535,101 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Lowers `return` shapes of an `int` function without boxing their common case.
+///
+/// `return c ? a : b` becomes two returns (the merged ternary value would otherwise be a
+/// boxed `int|float`), and `return a + b` / `return a - b` on native ints returns the
+/// wrapping result directly, branching to the checked `int|float` helper (and the normal
+/// return coercion of its boxed result) only when the native operation overflowed. PHP
+/// semantics are unchanged; operands are evaluated once. Returns `false` when the shape is
+/// not handled, before anything was lowered.
+fn lower_int_function_return(ctx: &mut LoweringContext<'_, '_>, value_expr: &Expr, span: Span) -> bool {
+    if ctx.by_ref_return
+        || ctx.return_type != IrType::I64
+        || ctx.return_php_type.codegen_repr() != PhpType::Int
+    {
+        return false;
+    }
+    match &value_expr.kind {
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            let cond = lower_expr(ctx, condition);
+            let cond = ctx.truthy_consuming(cond, Some(condition.span));
+            let split_initialized = ctx.initialized_slots_snapshot();
+            let split_types = ctx.local_types_snapshot();
+            let then_block = ctx.builder.create_named_block("return.then", Vec::new());
+            let else_block = ctx.builder.create_named_block("return.else", Vec::new());
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: cond.value,
+                then_target: then_block,
+                then_args: Vec::new(),
+                else_target: else_block,
+                else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(then_block);
+            let narrowed_locals = apply_condition_then_narrowing(ctx, condition);
+            lower_return(ctx, Some(then_expr), span);
+            for (name, original) in narrowed_locals {
+                ctx.set_local_logical_type(&name, original);
+            }
+            ctx.builder.position_at_end(else_block);
+            ctx.restore_initialized_slots(split_initialized);
+            ctx.restore_local_types(split_types);
+            lower_return(ctx, Some(else_expr), span);
+            true
+        }
+        ExprKind::BinaryOp {
+            left,
+            op: op @ (BinOp::Add | BinOp::Sub),
+            right,
+        } => {
+            match crate::ir_lower::expr::lower_int_return_arith(ctx, left, op, right, value_expr) {
+                crate::ir_lower::expr::IntReturnArith::Plain(value) => {
+                    finish_return(ctx, Some(value_expr), value, span);
+                }
+                crate::ir_lower::expr::IntReturnArith::Split {
+                    lhs,
+                    rhs,
+                    checked_op,
+                    fast,
+                    overflow,
+                } => {
+                    let split_initialized = ctx.initialized_slots_snapshot();
+                    let split_types = ctx.local_types_snapshot();
+                    let slow_block = ctx.builder.create_named_block("return.overflow", Vec::new());
+                    let fast_block = ctx.builder.create_named_block("return.native", Vec::new());
+                    ctx.builder.terminate(Terminator::CondBr {
+                        cond: overflow.value,
+                        then_target: slow_block,
+                        then_args: Vec::new(),
+                        else_target: fast_block,
+                        else_args: Vec::new(),
+                    });
+                    ctx.builder.position_at_end(fast_block);
+                    finish_return(ctx, Some(value_expr), fast, span);
+                    ctx.builder.position_at_end(slow_block);
+                    ctx.restore_initialized_slots(split_initialized);
+                    ctx.restore_local_types(split_types);
+                    let boxed = ctx.emit_value(
+                        checked_op,
+                        vec![lhs, rhs],
+                        None,
+                        PhpType::Mixed,
+                        checked_op.default_effects(),
+                        Some(value_expr.span),
+                    );
+                    finish_return(ctx, Some(value_expr), boxed, span);
+                }
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Rebalances `return $x = <expr>;` (including the by-reference array-literal desugar,

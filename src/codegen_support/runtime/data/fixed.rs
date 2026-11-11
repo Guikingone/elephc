@@ -319,7 +319,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
-    out.push_str(".comm _heap_small_bins, 32, 3\n");
+    out.push_str(&format!(".comm _heap_small_bins, {}, 3\n", crate::codegen_support::runtime::arrays::HEAP_BIN_COUNT * 8));
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
     out.push_str(".comm _gc_collecting, 8, 3\n");
     out.push_str(".comm _gc_release_suppressed, 8, 3\n");
@@ -334,6 +334,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _json_decode_assoc, 8, 3\n");
     out.push_str(".comm _json_error_source_ptr, 8, 3\n");
     out.push_str(".comm _json_error_location_active, 8, 3\n");
+    out.push_str(".comm _json_error_location_ptr, 8, 3\n");
     out.push_str(".comm _json_error_line, 8, 3\n");
     out.push_str(".comm _json_error_column, 8, 3\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));

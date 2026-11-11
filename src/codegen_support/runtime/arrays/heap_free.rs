@@ -9,6 +9,7 @@
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
 
 use crate::codegen_support::emit::Emitter;
+use super::heap_alloc::{emit_bin_offset_aarch64, emit_bin_offset_x86_64, HEAP_BIN_MAX_PAYLOAD};
 use crate::codegen_support::platform::Arch;
 
 
@@ -105,23 +106,18 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // -- bump reset: block is at end of heap, just shrink the bump pointer --
     emitter.instruction("sub x14, x9, x15");                                    // x14 = header - heap_buf = new offset
     emitter.instruction("str x14, [x13]");                                      // heap_off = header offset (shrink heap)
+    // A small block freed right after its allocation (boxed temporaries) skips the O(free-list)
+    // tail trim: any ordered free block now ending at the tail stays valid and reusable.
+    emitter.instruction(&format!("cmp x11, #{}", HEAP_BIN_MAX_PAYLOAD));        // was the reclaimed tail block a binned payload size?
+    emitter.instruction("b.ls __rt_heap_free_count");                           // yes — O(1) release without rescanning the free list
     emitter.instruction("b __rt_heap_free_trim_tail");                          // trim any newly-exposed free tail blocks too
 
     // -- small non-tail blocks go through segregated bins first --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp x11, #64");                                        // does this payload fit in the segregated small-bin cache?
+    emitter.instruction(&format!("cmp x11, #{}", HEAP_BIN_MAX_PAYLOAD));        // does this payload fit in the segregated bin cache?
     emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
-    emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov x12, #8");                                         // otherwise target the <=16-byte bin
-    emitter.instruction("cmp x11, #16");                                        // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov x12, #16");                                        // otherwise target the <=32-byte bin
-    emitter.instruction("cmp x11, #32");                                        // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
+    emit_bin_offset_aarch64(emitter, "x11", "x12", "x16");                      // x12 = byte offset of the freed block's size-class bin
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
@@ -378,23 +374,18 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r9");                                         // preserve the freed block header address while converting it back into a bump offset
     emitter.instruction("sub rdx, r10");                                        // compute the new bump offset from the heap base to the reclaimed block header
     emitter.instruction("mov QWORD PTR [r8], rdx");                             // shrink the bump pointer back to the start of the freed tail block
+    // A small block freed right after its allocation (boxed temporaries) skips the O(free-list)
+    // tail trim: any ordered free block now ending at the tail stays valid and reusable.
+    emitter.instruction(&format!("cmp r11, {}", HEAP_BIN_MAX_PAYLOAD));         // was the reclaimed tail block a binned payload size?
+    emitter.instruction("jbe __rt_heap_free_count");                            // yes — O(1) release without rescanning the free list
     emitter.instruction("jmp __rt_heap_free_trim_tail");                        // trim any newly exposed free tail blocks too before returning
 
     // -- small non-tail blocks go through segregated bins first --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp r11, 64");                                         // does the freed payload fit in the segregated small-bin cache?
+    emitter.instruction(&format!("cmp r11, {}", HEAP_BIN_MAX_PAYLOAD));         // does the freed payload fit in the segregated bin cache?
     emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
-    emitter.instruction("xor rcx, rcx");                                        // default to the <=8-byte bin offset
-    emitter.instruction("cmp r11, 8");                                          // does the freed payload fit in the smallest cached class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov rcx, 8");                                          // otherwise target the <=16-byte bin offset
-    emitter.instruction("cmp r11, 16");                                         // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov rcx, 16");                                         // otherwise target the <=32-byte bin offset
-    emitter.instruction("cmp r11, 32");                                         // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
+    emit_bin_offset_x86_64(emitter, "r11", "rcx");                              // rcx = byte offset of the freed block's size-class bin
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");

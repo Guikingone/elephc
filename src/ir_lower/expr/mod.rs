@@ -344,8 +344,104 @@ fn lower_numeric_binary(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let mut lhs = lower_expr(ctx, left);
-    let mut rhs = lower_expr(ctx, right);
+    let lhs = lower_expr(ctx, left);
+    let rhs = lower_expr(ctx, right);
+    lower_numeric_binary_values(ctx, left, op, right, expr, lhs, rhs)
+}
+
+/// Result of lowering `left op right` as the value of a `return` in an `int` function.
+pub(crate) enum IntReturnArith {
+    /// The site is an unproven checked int `+`/`-`: `fast` is the wrapping native result,
+    /// `overflow` is true when it wrapped, and the caller re-runs `checked_op` on the already
+    /// evaluated operands only on that rare path (PHP's float promotion + return coercion).
+    Split {
+        lhs: crate::ir::ValueId,
+        rhs: crate::ir::ValueId,
+        checked_op: Op,
+        fast: LoweredValue,
+        overflow: LoweredValue,
+    },
+    /// Any other operand shape: the ordinary lowering of the expression.
+    Plain(LoweredValue),
+}
+
+/// Lowers a `+`/`-` returned from an `int` function without boxing its common case.
+///
+/// The operands are evaluated exactly once. When both are native ints and the site would
+/// otherwise use the checked `int|float` helper (which heap-allocates a `mixed` box per
+/// call), the caller gets a wrapping native result plus an overflow flag computed from the
+/// sign bits, and branches to the checked helper only when the native result wrapped.
+pub(crate) fn lower_int_return_arith(
+    ctx: &mut LoweringContext<'_, '_>,
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    expr: &Expr,
+) -> IntReturnArith {
+    let lhs = lower_expr(ctx, left);
+    let rhs = lower_expr(ctx, right);
+    let checked = lhs.ir_type == IrType::I64
+        && rhs.ir_type == IrType::I64
+        && matches!(op, BinOp::Add | BinOp::Sub)
+        && fallback_expr_type(expr) == PhpType::Mixed
+        && !crate::int_range::is_proven_binop(op, expr.span);
+    if !checked {
+        return IntReturnArith::Plain(lower_numeric_binary_values(ctx, left, op, right, expr, lhs, rhs));
+    }
+    let span = Some(expr.span);
+    let int_op = |ctx: &mut LoweringContext<'_, '_>, op: Op, a: crate::ir::ValueId, b: crate::ir::ValueId| {
+        ctx.emit_value(op, vec![a, b], None, PhpType::Int, op.default_effects(), span)
+    };
+    let (native_op, checked_op) = if matches!(op, BinOp::Add) {
+        (Op::IAdd, Op::ICheckedAdd)
+    } else {
+        (Op::ISub, Op::ICheckedSub)
+    };
+    let fast = int_op(ctx, native_op, lhs.value, rhs.value);
+    // Signed overflow iff the result's sign differs from what both operands imply:
+    //   add: (l ^ r) & (rr ^ r) < 0        sub: (l ^ rr) & (l ^ r) < 0
+    let (x1, x2) = if matches!(op, BinOp::Add) {
+        (
+            int_op(ctx, Op::IBitXor, lhs.value, fast.value),
+            int_op(ctx, Op::IBitXor, rhs.value, fast.value),
+        )
+    } else {
+        (
+            int_op(ctx, Op::IBitXor, lhs.value, rhs.value),
+            int_op(ctx, Op::IBitXor, lhs.value, fast.value),
+        )
+    };
+    let sign = int_op(ctx, Op::IBitAnd, x1.value, x2.value);
+    let zero = lower_int_literal(ctx, 0, expr);
+    let overflow = ctx.emit_value(
+        Op::ICmp,
+        vec![sign.value, zero.value],
+        Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Slt)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        span,
+    );
+    IntReturnArith::Split {
+        lhs: lhs.value,
+        rhs: rhs.value,
+        checked_op,
+        fast,
+        overflow,
+    }
+}
+
+/// Lowers a numeric binary operator once both operands are already evaluated.
+fn lower_numeric_binary_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    expr: &Expr,
+    lhs: LoweredValue,
+    rhs: LoweredValue,
+) -> LoweredValue {
+    let mut lhs = lhs;
+    let mut rhs = rhs;
     if matches!(op, BinOp::Add) {
         if is_datetime_fractional_unix_format_for_ir(ctx, left) {
             lhs = coerce_to_float(ctx, lhs, left);

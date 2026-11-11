@@ -112,6 +112,7 @@ fn reset_json_decode_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_last_error", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_ptr", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
 }
 
@@ -120,6 +121,7 @@ fn reset_json_validation_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_last_error", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_ptr", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
 }
 
@@ -129,6 +131,7 @@ fn reset_json_encode_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_indent_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_ptr", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
 }
 

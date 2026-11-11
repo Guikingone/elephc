@@ -46,6 +46,13 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish a stable frame pointer for the helper
     emitter.instruction("str x0, [sp, #0]");                                    // save the error code across helper calls
+    // Resolve the recorded error position into line/column only now that an error happened.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_error_location_ptr");
+    emitter.instruction("ldr x0, [x9]");                                        // load the last recorded decode position (0 when none)
+    emitter.instruction("cbz x0, __rt_json_throw_error_located");               // no recorded position: keep the location state untouched
+    emitter.instruction("bl __rt_json_resolve_error_location");                 // compute the one-based line/column of that position
+    emitter.label("__rt_json_throw_error_located");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the error code after the location resolution
 
     // Always update _json_last_error so json_last_error()/json_last_error_msg()
     // observe the failure regardless of whether THROW_ON_ERROR is set.
@@ -106,7 +113,16 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
 fn emit_json_set_error_location_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_set_error_location ---");
+    // Recording a position is O(1): the parser calls this for every container, and scanning
+    // the document from its start each time made decoding quadratic in the document size.
     emitter.label_global("__rt_json_set_error_location");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_error_location_ptr");
+    emitter.instruction("str x0, [x9]");                                        // remember the position; __rt_json_throw_error resolves it
+    emitter.instruction("ret");                                                 // return to the JSON parser
+
+    emitter.blank();
+    emitter.comment("--- runtime: json_resolve_error_location ---");
+    emitter.label_global("__rt_json_resolve_error_location");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address while scanning the source
     emitter.instruction("mov x29, sp");                                         // establish a stable frame for location calculation
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_error_source_ptr");
@@ -154,6 +170,13 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the helper
     emitter.instruction("sub rsp, 32");                                         // reserve a scratch slot for the error code
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the error code across the helper-call sequence
+    // Resolve the recorded error position into line/column only now that an error happened.
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_error_location_ptr", 0); // load the last recorded decode position (0 when none)
+    emitter.instruction("test rax, rax");                                       // was a decode position recorded?
+    emitter.instruction("je __rt_json_throw_error_located_x");                  // no: keep the location state untouched
+    emitter.instruction("call __rt_json_resolve_error_location");               // compute the one-based line/column of that position
+    emitter.label("__rt_json_throw_error_located_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the error code after the location resolution
 
     abi::emit_store_reg_to_symbol(emitter, "rax", "_json_last_error", 0);       // record the error code in the runtime's last-error slot
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_active_flags", 0);      // load the active flag bitmask
@@ -202,7 +225,15 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
 fn emit_json_set_error_location_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_set_error_location ---");
+    // Recording a position is O(1): the parser calls this for every container, and scanning
+    // the document from its start each time made decoding quadratic in the document size.
     emitter.label_global("__rt_json_set_error_location");
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_error_location_ptr", 0); // remember the position; __rt_json_throw_error resolves it
+    emitter.instruction("ret");                                                 // return to the JSON parser
+
+    emitter.blank();
+    emitter.comment("--- runtime: json_resolve_error_location ---");
+    emitter.label_global("__rt_json_resolve_error_location");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scanning the source
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for location calculation
     abi::emit_load_symbol_to_reg(emitter, "r8", "_json_error_source_ptr", 0);   // load the persisted json_decode source pointer

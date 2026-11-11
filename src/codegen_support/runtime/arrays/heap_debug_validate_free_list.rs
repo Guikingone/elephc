@@ -9,6 +9,7 @@
 //! - Date helpers consume fixed lookup tables and target libc time fields, so symbol names and field offsets must stay coupled.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use super::heap_alloc::HEAP_BIN_COUNT;
 
 /// Emits the `__rt_heap_debug_validate_free_list` runtime helper for heap debug mode.
 ///
@@ -69,24 +70,20 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.instruction("xor eax, eax");                                    // start with the <=8-byte small-bin head offset
 
         emitter.label("__rt_heap_debug_validate_small_bins");
-        emitter.instruction("cmp eax, 32");                                     // have we validated all four small-bin classes?
+        emitter.instruction(&format!("cmp eax, {}", HEAP_BIN_COUNT * 8));       // have we validated every segregated bin class?
         emitter.instruction("je __rt_heap_debug_validate_free_list_ret");       // yes — both the ordered free list and cached bins are valid
         emitter.instruction("lea r8, [r11 + rax]");                             // compute the address of the current small-bin head slot
         emitter.instruction("mov rdx, QWORD PTR [r8]");                         // load the current cached block header for this size class
-        emitter.instruction("xor ecx, ecx");                                    // default exclusive lower bound for the <=8-byte bin
-        emitter.instruction("mov edi, 8");                                      // default inclusive upper bound for the <=8-byte bin
-        emitter.instruction("cmp eax, 0");                                      // are we validating the smallest cached size class?
-        emitter.instruction("je __rt_heap_debug_validate_small_bin_ready");     // yes — keep the default <=8-byte bounds
-        emitter.instruction("mov ecx, 8");                                      // otherwise start with the <=16-byte class lower bound
-        emitter.instruction("mov edi, 16");                                     // set the inclusive upper bound for the <=16-byte class
-        emitter.instruction("cmp eax, 8");                                      // are we validating the <=16-byte cached class?
-        emitter.instruction("je __rt_heap_debug_validate_small_bin_ready");     // yes — keep the <=16-byte bounds
-        emitter.instruction("mov ecx, 16");                                     // otherwise start with the <=32-byte class lower bound
-        emitter.instruction("mov edi, 32");                                     // set the inclusive upper bound for the <=32-byte class
-        emitter.instruction("cmp eax, 16");                                     // are we validating the <=32-byte cached class?
-        emitter.instruction("je __rt_heap_debug_validate_small_bin_ready");     // yes — keep the <=32-byte bounds
-        emitter.instruction("mov ecx, 32");                                     // the remaining cached class is the <=64-byte bin
-        emitter.instruction("mov edi, 64");                                     // set the inclusive upper bound for the <=64-byte class
+        // Bin k (offset k * 8) holds payloads in (4 << k, 8 << k]; bin 0 holds (0, 8].
+        emitter.instruction("mov ecx, eax");                                    // copy the bin-head byte offset
+        emitter.instruction("shr ecx, 3");                                      // k = bin index
+        emitter.instruction("mov edi, 8");                                      // inclusive upper bound base
+        emitter.instruction("shl edi, cl");                                     // upper bound = 8 << k
+        emitter.instruction("mov esi, 4");                                      // exclusive lower bound base
+        emitter.instruction("shl esi, cl");                                     // lower bound = 4 << k
+        emitter.instruction("xor ecx, ecx");                                    // bin 0 has no lower bound
+        emitter.instruction("test eax, eax");                                   // is this bin 0?
+        emitter.instruction("cmovnz ecx, esi");                                 // other bins use the 4 << k exclusive lower bound
 
         emitter.label("__rt_heap_debug_validate_small_bin_ready");
         crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
@@ -175,24 +172,18 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("mov x12, #0");                                         // start with the <=8-byte bin offset
 
     emitter.label("__rt_heap_debug_validate_small_bins");
-    emitter.instruction("cmp x12, #32");                                        // have we validated all four small-bin classes?
+    emitter.instruction(&format!("cmp x12, #{}", HEAP_BIN_COUNT * 8));          // have we validated every segregated bin class?
     emitter.instruction("b.eq __rt_heap_debug_validate_free_list_ret");         // yes — the entire cached free state is valid
     emitter.instruction("add x13, x11, x12");                                   // x13 = address of the current small-bin head slot
     emitter.instruction("ldr x14, [x13]");                                      // x14 = current cached block header for this size class
-    emitter.instruction("mov x15, #0");                                         // x15 = exclusive lower bound for this bin's payload size
-    emitter.instruction("mov x16, #8");                                         // x16 = inclusive upper bound for this bin's payload size
-    emitter.instruction("cmp x12, #0");                                         // are we validating the <=8-byte bin?
-    emitter.instruction("b.eq __rt_heap_debug_validate_small_bin_ready");       // yes — keep the default bounds
-    emitter.instruction("mov x15, #8");                                         // otherwise start with the <=16-byte class bounds
-    emitter.instruction("mov x16, #16");                                        // set the inclusive upper bound for the <=16-byte class
-    emitter.instruction("cmp x12, #8");                                         // are we validating the <=16-byte bin?
-    emitter.instruction("b.eq __rt_heap_debug_validate_small_bin_ready");       // yes — keep the <=16-byte bounds
-    emitter.instruction("mov x15, #16");                                        // otherwise start with the <=32-byte class bounds
-    emitter.instruction("mov x16, #32");                                        // set the inclusive upper bound for the <=32-byte class
-    emitter.instruction("cmp x12, #16");                                        // are we validating the <=32-byte bin?
-    emitter.instruction("b.eq __rt_heap_debug_validate_small_bin_ready");       // yes — keep the <=32-byte bounds
-    emitter.instruction("mov x15, #32");                                        // the remaining case is the <=64-byte class
-    emitter.instruction("mov x16, #64");                                        // set the inclusive upper bound for the <=64-byte class
+    // Bin k (offset k * 8) holds payloads in (4 << k, 8 << k]; bin 0 holds (0, 8].
+    emitter.instruction("lsr x17, x12, #3");                                    // k = bin index
+    emitter.instruction("mov x16, #8");                                         // inclusive upper bound base
+    emitter.instruction("lsl x16, x16, x17");                                   // x16 = 8 << k
+    emitter.instruction("mov x15, #4");                                         // exclusive lower bound base
+    emitter.instruction("lsl x15, x15, x17");                                   // x15 = 4 << k
+    emitter.instruction("cmp x12, #0");                                         // is this bin 0?
+    emitter.instruction("csel x15, xzr, x15, eq");                              // bin 0 has no lower bound
 
     emitter.label("__rt_heap_debug_validate_small_bin_ready");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");

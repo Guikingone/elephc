@@ -167,3 +167,47 @@ echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
     );
     assert_eq!(out, "5:0:4");
 }
+
+/// Asserts a heap-debug run printed `expected` and reported a clean heap.
+fn assert_heap_clean(out: ProgramOutput, expected: &str) {
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `return c ? a : b` and `return a + b` in an `int` function return native ints on their
+/// common path (no boxed `int|float` temporary) and stay heap-clean.
+#[test]
+fn test_int_function_return_split_is_exact_and_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function fib(int $n): int { return $n < 2 ? $n : fib($n - 1) + fib($n - 2); }
+function f(int $a, int $b): int { return $a - $b; }
+function g(int $a): int { return $a > 0 ? $a - 1 : ($a < -5 ? $a + 2 : $a + 1); }
+echo fib(20), " ", f(3, 10), " ", g(5), " ", g(-3), " ", g(-9), "\n";
+"#,
+    );
+    assert_heap_clean(out, "6765 -7 4 -2 -7\n");
+}
+
+/// Decoding JSON in a loop releases every decoded container, key, and the source copy.
+#[test]
+fn test_json_decode_loop_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$doc = json_encode([["id" => 1, "name" => "a", "tags" => ["x", "y"], "o" => []], ["id" => 2, "name" => "b"]]);
+$sum = 0;
+for ($r = 0; $r < 50; $r++) {
+    $d = json_decode($doc, true);
+    $sum += count($d) + $d[1]["id"] + count($d[0]["tags"]);
+}
+$o = json_decode("1");
+echo $sum, " ", $o, "\n";
+"#,
+    );
+    assert_heap_clean(out, "300 1\n");
+}
