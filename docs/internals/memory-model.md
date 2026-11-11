@@ -18,7 +18,7 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │         (unused)             │
 ├─────────────────────────────┤
-│       Heap buffer            │  _heap_buf: 8MB default (--heap-size)
+│       Heap buffer            │  _heap_buf: 128MB default (--heap-size)
 │  (arrays, hash tables,       │  Free-list + bump allocator
 │   objects, persisted strings) │
 ├─────────────────────────────┤
@@ -224,7 +224,7 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 ## The heap
 
 ```asm
-.comm _heap_buf, 8388608    ; 8MB buffer (configurable via --heap-size)
+.comm _heap_buf, 134217728  ; 128MB buffer (configurable via --heap-size)
 .comm _heap_off, 8          ; current bump allocation offset
 .comm _heap_free_list, 8    ; head of the general free block linked list
 .comm _heap_small_bins, 32  ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
@@ -237,7 +237,7 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 .comm _gc_peak, 8           ; heap high-water mark
 ```
 
-The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
+The heap (`_heap_buf`) is a 128MB region (by default, matching PHP's `memory_limit`; untouched zero-fill pages cost no resident memory) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
 
 ### How heap allocation works
 
@@ -298,7 +298,7 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 
 ### Configurable heap size
 
-The default heap is 8MB. For programs that need more (or less), use:
+The default heap is 128MB. For programs that need more (or less), use:
 
 ```bash
 elephc --heap-size=16777216 heavy.php    # 16MB heap
@@ -594,7 +594,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn` = 8 bytes each | Late-bound magician callbacks for eval-registered output handlers and eval dynamic-object destructors |
-| Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
+| Heap | 128MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
@@ -666,4 +666,4 @@ For a loop like `for ($i = 0; $i < 1000; $i++) { $s .= "x"; }`:
 - Each iteration frees the old `$s` and allocates a new one
 - Old blocks go to the free list, new blocks come from bump allocation (growing size)
 - Net heap usage is O(N) for the final string, not O(N²)
-- With 8MB heap, this handles thousands of iterations comfortably
+- With the 128MB default heap, this handles thousands of iterations comfortably

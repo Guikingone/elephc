@@ -954,6 +954,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
                 | RuntimeFnId::IteratorToArray
+                // The structural decoder builds a fresh Mixed tree; decoded strings are
+                // persisted copies, never views into the source argument.
+                | RuntimeFnId::JsonDecode
                 | RuntimeFnId::ObGetClean
                 | RuntimeFnId::ObGetContents
                 | RuntimeFnId::ObGetFlush

@@ -23,6 +23,13 @@ use super::super::system;
 use crate::codegen_support::platform::Target;
 use crate::types::checker::builtins::supported_builtin_function_names;
 
+/// Capacity of the shared `_concat_buf` scratch area that string builtins and encoders
+/// (`json_encode`, `implode`, `str_replace`, ...) write their results into before they are
+/// persisted. It lives in zero-fill BSS, so only the bytes actually written are ever
+/// committed; 64 MiB keeps large results such as a pretty-printed multi-megabyte JSON
+/// document from overrunning the area.
+pub(crate) const CONCAT_BUF_SIZE: usize = 64 * 1024 * 1024;
+
 /// Emit the fixed runtime `.data` section as assembly text.
 /// Cached across compilations because it contains only target-independent
 /// runtime data: heap globals, concat buffers, exception/fiber state,
@@ -40,7 +47,7 @@ use crate::types::checker::builtins::supported_builtin_function_names;
 pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(".comm _concat_buf, 65536, 3\n");
+    out.push_str(&format!(".comm _concat_buf, {}, 3\n", CONCAT_BUF_SIZE));
     out.push_str(".comm _concat_off, 8, 3\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by

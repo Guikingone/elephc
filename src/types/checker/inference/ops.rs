@@ -104,6 +104,12 @@ impl Checker {
                     Ok(literal_ty)
                 } else if int_arithmetic_identity_is_always_int(op, left, right) {
                     Ok(PhpType::Int)
+                } else if lt == PhpType::Int
+                    && rt == PhpType::Int
+                    && crate::int_range::is_proven_binop(op, expr.span)
+                {
+                    // Proven overflow-free by `crate::int_range`: PHP yields an int here.
+                    Ok(PhpType::Int)
                 } else {
                     Ok(PhpType::Mixed)
                 }
@@ -128,6 +134,12 @@ impl Checker {
                     {
                         Ok(literal_ty)
                     } else if int_arithmetic_identity_is_always_int(op, left, right) {
+                        Ok(PhpType::Int)
+                    } else if lt == PhpType::Int
+                        && rt == PhpType::Int
+                        && crate::int_range::is_proven_binop(op, expr.span)
+                    {
+                        // Proven overflow-free by `crate::int_range`: PHP yields an int here.
                         Ok(PhpType::Int)
                     } else {
                         Ok(PhpType::Mixed)

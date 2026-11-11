@@ -51,7 +51,10 @@ fn test_cse_distinct_subexpressions_preserved() {
 /// Structural proof that CSE actually deduplicates `($n + 1) * ($n + 1)` (the
 /// previous output-only tests passed even when it did not fire): the constant `1`
 /// operands are unified by value, so `main` contains exactly one `iadd` with ir-opt
-/// on (two without). Guards the constant-operand canonicalization against regression.
+/// on (two without). `$n = $argc` is bounded (argv holds at most `i32::MAX` entries),
+/// so `crate::int_range` proves `$n + 1` overflow-free and it lowers to a pure `iadd`.
+/// An unbounded operand keeps the checked, allocating `ichecked_add`, which CSE must not
+/// collapse. Guards the constant-operand canonicalization against regression.
 #[test]
 fn test_cse_collapses_constant_operand_subexpression() {
     use std::fs;
@@ -64,11 +67,11 @@ fn test_cse_collapses_constant_operand_subexpression() {
         std::thread::current().id()
     ));
     fs::create_dir_all(&dir).unwrap();
-    let php_path: PathBuf = dir.join("t.php");
-    fs::write(&php_path, "<?php $n = $argc; echo ($n + 1) * ($n + 1);\n").unwrap();
     let elephc = elephc_cli_bin();
 
-    let count_iadds = |extra: &[&str]| -> usize {
+    let count_adds = |source: &str, name: &str, extra: &[&str]| -> (usize, usize) {
+        let php_path: PathBuf = dir.join(name);
+        fs::write(&php_path, source).unwrap();
         let mut cmd = Command::new(&elephc);
         cmd.arg("--emit-ir");
         cmd.args(extra);
@@ -78,13 +81,19 @@ fn test_cse_collapses_constant_operand_subexpression() {
         let text = String::from_utf8_lossy(&out.stdout);
         let main_body = text.split("function main(").nth(1).expect("main present");
         let main_body = main_body.split("\n  function ").next().unwrap_or(main_body);
-        // Count both iadd (constant) and ichecked_add (non-constant) forms.
-        main_body.matches("= iadd ").count() + main_body.matches("= ichecked_add ").count()
+        (
+            main_body.matches("= iadd ").count(),
+            main_body.matches("= ichecked_add ").count(),
+        )
     };
 
-    // With Tier 1 int overflow, non-constant `$n + 1` uses `ichecked_add` (not
-    // pure — it allocates a Mixed box), so CSE cannot collapse it. Both adds
-    // remain even with IR optimization enabled.
-    assert_eq!(count_iadds(&["--no-ir-opt"]), 2, "unoptimized keeps both adds");
-    assert_eq!(count_iadds(&[]), 2, "CSE cannot collapse checked adds (not pure)");
+    // Proven overflow-free: pure `iadd`, collapsed by CSE.
+    let bounded = "<?php $n = $argc; echo ($n + 1) * ($n + 1);\n";
+    assert_eq!(count_adds(bounded, "bounded.php", &["--no-ir-opt"]), (2, 0), "unoptimized keeps both adds");
+    assert_eq!(count_adds(bounded, "bounded.php", &[]), (1, 0), "CSE collapses the proven pure add");
+
+    // Unbounded operand: `ichecked_add` allocates a Mixed box (not pure), so CSE keeps both.
+    let unbounded = "<?php $n = intval($argv[0]); echo ($n + 1) * ($n + 1);\n";
+    assert_eq!(count_adds(unbounded, "unbounded.php", &["--no-ir-opt"]), (0, 2), "unoptimized keeps both checked adds");
+    assert_eq!(count_adds(unbounded, "unbounded.php", &[]), (0, 2), "CSE cannot collapse checked adds (not pure)");
 }

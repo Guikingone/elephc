@@ -515,6 +515,10 @@ pub(crate) fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) 
         }
         (PhpType::Array(_), PhpType::Array(_)) => incoming,
         (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => incoming,
+        // `int` and `bool` share the raw 8-byte slot shape but not their meaning: once both
+        // can reach a merge point (`$found = false; ... $found = $i;`), the slot must carry a
+        // runtime tag or the int is later read back as `bool(true)`.
+        (PhpType::Int, PhpType::Bool) | (PhpType::Bool, PhpType::Int) => PhpType::Mixed,
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,

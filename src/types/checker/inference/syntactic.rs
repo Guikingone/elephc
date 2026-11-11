@@ -399,7 +399,11 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Float
                 } else if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
                     ty
-                } else if int_arithmetic_identity_is_always_int(op, left, right) {
+                } else if int_arithmetic_identity_is_always_int(op, left, right)
+                    || (lt == PhpType::Int
+                        && rt == PhpType::Int
+                        && crate::int_range::is_proven_binop(op, expr.span))
+                {
                     PhpType::Int
                 } else {
                     PhpType::Mixed
@@ -413,7 +417,11 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
                         ty
-                    } else if int_arithmetic_identity_is_always_int(op, left, right) {
+                    } else if int_arithmetic_identity_is_always_int(op, left, right)
+                        || (lt == PhpType::Int
+                            && rt == PhpType::Int
+                            && crate::int_range::is_proven_binop(op, expr.span))
+                    {
                         PhpType::Int
                     } else {
                         PhpType::Mixed

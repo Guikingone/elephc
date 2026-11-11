@@ -193,11 +193,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, 0");                                          // capacity = 0
     emitter.instruction("mov rsi, 8");                                          // elem_size = 8 (Mixed-pointer slots)
     emitter.instruction("call __rt_array_new");                                 // returns rax = array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the array until the box owns it
     emitter.instruction("mov rdi, rax");                                        // payload = array pointer
     emitter.instruction("mov rax, 4");                                          // tag = indexed array
     emitter.instruction("xor rsi, rsi");                                        // update the JSON decoder cursor or counter
-    emitter.instruction("call __rt_mixed_from_value");                          // call the mixed from value helper
+    emitter.instruction("call __rt_mixed_from_value");                          // box as Mixed(array); the box retains it
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the boxed array across depth_exit
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the empty array
+    emitter.instruction("call __rt_decref_array");                              // transfer sole ownership of the array to the box
     emitter.instruction("call __rt_json_depth_exit");                           // leave the current JSON array depth
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the boxed array result
     emitter.instruction("jmp __rt_json_decode_mixed_done");                     // continue in the JSON decoder control path
@@ -239,6 +242,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, 0");                                          // capacity = 0
     emitter.instruction("mov rsi, 7");                                          // value_type = 7 (boxed mixed slots)
     emitter.instruction("call __rt_hash_new");                                  // returns rax = hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the hash until the box (or stdClass) owns it
     emitter.instruction("mov rdi, rax");                                        // payload = hash pointer
     // Honor the json_decode `$associative` flag: 0 → stdClass, non-zero → assoc.
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_decode_assoc", 0);      // load the assoc flag
@@ -246,8 +250,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_decode_mixed_object_empty_stdclass_x");   // wrap the empty hash in a stdClass instance
     emitter.instruction("mov rax, 5");                                          // tag = associative array
     emitter.instruction("xor rsi, rsi");                                        // mixed_from_value high word unused for assoc payload
-    emitter.instruction("call __rt_mixed_from_value");                          // box as Mixed(assoc)
+    emitter.instruction("call __rt_mixed_from_value");                          // box as Mixed(assoc); the box retains it
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the boxed assoc result across depth_exit
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the empty hash
+    emitter.instruction("call __rt_decref_hash");                               // transfer sole ownership of the hash to the box
     emitter.instruction("call __rt_json_depth_exit");                           // leave the current JSON object depth
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the boxed assoc result
     emitter.instruction("jmp __rt_json_decode_mixed_done");                     // continue in the JSON decoder control path
@@ -255,11 +261,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_mixed_object_empty_stdclass_x");
     // rdi already holds the empty hash pointer (SysV first arg) for stdclass_from_hash.
     emitter.instruction("call __rt_stdclass_from_hash");                        // rax = freshly allocated stdClass owning the empty hash
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the stdClass until the box owns it
     emitter.instruction("mov rdi, rax");                                        // shift the stdClass pointer into the mixed_from_value low-word slot
     emitter.instruction("mov rax, 6");                                          // tag = object
     emitter.instruction("xor rsi, rsi");                                        // mixed_from_value high word unused for object payload
-    emitter.instruction("call __rt_mixed_from_value");                          // box as Mixed(object)
+    emitter.instruction("call __rt_mixed_from_value");                          // box as Mixed(object); the box retains it
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the boxed stdClass result across depth_exit
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the stdClass
+    emitter.instruction("call __rt_decref_object");                             // transfer sole ownership of the stdClass to the box
     emitter.instruction("call __rt_json_depth_exit");                           // leave the current JSON object depth
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the boxed stdClass result
     emitter.instruction("jmp __rt_json_decode_mixed_done");                     // continue in the JSON decoder control path

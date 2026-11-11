@@ -143,6 +143,7 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
     emitter.instruction("bl __rt_mixed_from_value");                            // box the double result into a Mixed cell
+    emitter.instruction("b __rt_mixed_numeric_done");                           // restore the helper frame and return the boxed double
 
     // -- dynamic add: arrays union only with arrays; every mixed pairing is a TypeError --
     emitter.label("__rt_mixed_numeric_array_path");
@@ -327,6 +328,7 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rsi, rsi");                                        // double payloads do not use a high word
     emitter.instruction("mov rax, 2");                                          // runtime tag 2 = double
     emitter.instruction("call __rt_mixed_from_value");                          // box the double result into a Mixed cell
+    emitter.instruction("jmp __rt_mixed_numeric_done_linux_x86_64");            // restore the helper frame and return the boxed double
 
     // -- dynamic add: arrays union only with arrays; every mixed pairing is a TypeError --
     emitter.label("__rt_mixed_numeric_array_path_linux_x86_64");

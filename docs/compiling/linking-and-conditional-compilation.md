@@ -87,15 +87,17 @@ archive is included.
 
 ## Heap size
 
-The compiled program uses a fixed-size runtime heap, **8 MB** by default. Programs
-that allocate a lot of arrays, strings, or objects may need more.
+The compiled program uses a fixed-size runtime heap, **128 MB** by default — the same
+budget as PHP's default `memory_limit`, which is also what `ini_get('memory_limit')`
+reports. The heap is reserved as zero-fill memory, so pages the program never touches
+cost no resident memory. Programs that allocate more than that need a larger heap.
 
 ### `--heap-size`
 
 Sets the heap size in bytes. The minimum is `65536` (64 KB).
 
 ```bash
-elephc --heap-size=16777216 heavy.php   # 16 MB
+elephc --heap-size=536870912 heavy.php   # 512 MB
 ```
 
 If a program exhausts its heap it aborts with a fatal "heap memory exhausted"

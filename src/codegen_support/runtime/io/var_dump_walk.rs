@@ -564,8 +564,8 @@ pub fn emit_var_dump_emit_float_line(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #8");                                          // len("  float(") = 8
     emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
-    // ftoa(d0) → x1=ptr, x2=len
-    emitter.instruction("bl __rt_ftoa");                                        // call runtime helper
+    // var_dump float digits (serialize_precision=-1) → x1=ptr, x2=len
+    emitter.instruction("bl __rt_var_dump_ftoa");                               // format with PHP var_dump float precision
     emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit ")\n"
@@ -594,7 +594,7 @@ fn emit_var_dump_emit_float_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 8]");                     // reload xmm0 for ftoa
-    emitter.instruction("call __rt_ftoa");                                      // rax=ptr, rdx=len
+    emitter.instruction("call __rt_var_dump_ftoa");                             // rax=ptr, rdx=len (PHP var_dump float precision)
     emitter.instruction("mov rsi, rax");                                        // prepare SysV call argument
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 

@@ -84,6 +84,7 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+                Some(PhpType::Int) if crate::int_range::is_proven_step(expr) => Ok(PhpType::Int),
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {

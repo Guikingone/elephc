@@ -95,7 +95,7 @@ Target:
   --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
 
 Codegen:
-  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
+  --heap-size=BYTES       Fixed heap size in bytes (default: 134217728, PHP's memory_limit)
   --null-repr=MODE        sentinel (default) | tagged
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
@@ -174,7 +174,9 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         process::exit(0);
     }
 
-    let mut heap_size: usize = 8_388_608; // 8MB default
+    // 128 MiB matches PHP's default `memory_limit` (also what `ini_get('memory_limit')` reports).
+    // The heap lives in zero-fill BSS, so untouched pages cost no resident memory.
+    let mut heap_size: usize = 134_217_728;
     let mut gc_stats = false;
     let mut heap_debug = false;
     let mut emit_ir = false;

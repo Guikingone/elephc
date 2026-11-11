@@ -39,3 +39,5 @@ mod prologue_param_register_clobber;
 mod mixed_count_sentinel;
 #[path = "regressions/gradual_int_and_iterable_count.rs"]
 mod gradual_int_and_iterable_count;
+#[path = "regressions/manticore_bench_gaps.rs"]
+mod manticore_bench_gaps;

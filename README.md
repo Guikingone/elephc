@@ -167,8 +167,8 @@ xattr -cr elephc
 elephc hello.php
 ./hello
 
-# Custom heap size (default: 8MB)
-elephc --heap-size=16777216 heavy.php
+# Custom heap size (default: 128MB, like PHP's memory_limit)
+elephc --heap-size=268435456 heavy.php
 
 # Enable runtime heap verification while debugging ownership issues
 elephc --heap-debug heavy.php

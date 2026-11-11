@@ -425,6 +425,35 @@ resolvable, the slot still receives a value, and the binary loses the
 wrapper. `Context::mark_fcc_used` is the central hook every "this FCC
 value escapes" path calls.
 
+## Integer-range analysis (overflow-free arithmetic)
+
+PHP promotes an integer `+`, `-`, `*`, `++` or `--` whose result leaves the `int` range to
+`float`. elephc therefore types such a site as `int|float` and lowers it to a checked helper
+that returns a boxed `mixed` cell — correct, but it allocates on every operation and makes
+every downstream use dynamic.
+
+`src/int_range/` runs an abstract interpretation over every body *before* type checking and
+proves sites that can never overflow. Each local carries an interval (`[lo, hi]` of a definite
+`int`, or "unknown"); conditions narrow intervals (`$i < $n` bounds `$i` by `$n - 1` inside the
+loop, an early `return` after `$n <= 0` makes `$n >= 1` afterwards); loops run to a fixpoint with
+threshold widening followed by narrowing; `%`, `&`, `>>`, `count()`, `strlen()`, `ord()`,
+`crc32()` and `$argc` provide bounds. A site is proven only when every analysed occurrence keeps
+the exact result inside `i64`, so the checker can type it `int` and EIR lowering can emit a
+native `iadd`/`isub`/`imul` without changing PHP semantics.
+
+```php
+$acc = $argc;                               // $acc ∈ [0, 2^31 - 1]
+for ($i = 0; $i < 50000000; $i++) {        // proven: $i ∈ [0, 49999999] in the body
+    $acc = ($acc * 3 + ($i & 7)) & 0x3FFFFFFF; // proven: * and + stay below 2^33
+}
+```
+
+The analysis is conservative: a variable that can change behind its back (references, `global`,
+`static`, by-reference arguments, `finally` writes, `$GLOBALS[...]`) is never tracked, and bodies
+using `goto`, runtime `include`, `extract()` or `eval()` are not analysed. Facts are keyed by
+`(span, kind)`; one unsafe occurrence of a key makes it unsafe, and lowering only trusts sites
+proven both before type checking and on the final optimized AST.
+
 ## What the optimizer does not do yet
 
 The current optimizer is still intentionally local. It does not yet implement:

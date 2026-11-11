@@ -108,7 +108,7 @@ pub(crate) use json_encode_array_str::emit_json_encode_array_str;
 pub(crate) use json_encode_assoc::emit_json_encode_assoc;
 pub(crate) use json_encode_bool::emit_json_encode_bool;
 pub(crate) use json_encode_float::emit_json_encode_float;
-pub(crate) use json_ftoa::emit_json_ftoa;
+pub(crate) use json_ftoa::{emit_json_ftoa, emit_var_dump_ftoa};
 pub(crate) use json_encode_null::emit_json_encode_null;
 pub(crate) use json_encode_object::emit_json_encode_object;
 pub(crate) use json_encode_str::emit_json_encode_str;

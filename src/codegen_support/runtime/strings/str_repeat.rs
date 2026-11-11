@@ -10,14 +10,14 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::runtime::data::STR_REPEAT_TIMES_MSG;
+use crate::codegen_support::runtime::data::{CONCAT_BUF_SIZE, STR_REPEAT_TIMES_MSG};
 
 
 /// Emits the `__rt_str_repeat` runtime helper for repeating a string N times.
 ///
 /// Targets ARM64 (and other non-x86_64) architectures. The helper accepts a source
 /// string pointer/length and a repetition count, writing the repeated result into
-/// concat scratch storage when it fits within the 64 KiB limit, or into a heap-allocated
+/// concat scratch storage when it fits within the `CONCAT_BUF_SIZE` limit, or into a heap-allocated
 /// buffer otherwise.
 ///
 /// # Input (ARM64 calling convention)
@@ -65,7 +65,7 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current concat scratch write offset
     emitter.instruction("add x5, x8, x4");                                      // compute concat scratch end offset after this append
-    emitter.instruction("mov x12, #65536");                                     // load concat scratch capacity in bytes
+    emitter.instruction(&format!("mov x12, #{}", CONCAT_BUF_SIZE));              // load concat scratch capacity in bytes
     emitter.instruction("cmp x5, x12");                                         // does the repeated result fit in concat scratch storage?
     emitter.instruction("b.hi __rt_str_repeat_heap");                           // use heap fallback when concat scratch would overflow
     crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
@@ -170,7 +170,7 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load current concat scratch write offset
     emitter.instruction("mov rdx, r9");                                         // copy the current offset before adding the requested result length
     emitter.instruction("add rdx, rcx");                                        // compute concat scratch end offset after this append
-    emitter.instruction("cmp rdx, 65536");                                      // does the repeated result fit in concat scratch storage?
+    emitter.instruction(&format!("cmp rdx, {}", CONCAT_BUF_SIZE));               // does the repeated result fit in concat scratch storage?
     emitter.instruction("ja __rt_str_repeat_heap_linux_x86_64");                // use heap fallback when concat scratch would overflow
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
     emitter.instruction("lea r11, [r10 + r9]");                                 // compute concat scratch destination pointer

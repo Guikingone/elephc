@@ -118,7 +118,7 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                if matches!(old_ty, Some(PhpType::Int)) && !crate::int_range::is_proven_step(expr) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
@@ -126,7 +126,7 @@ impl Checker {
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                if matches!(old_ty, Some(PhpType::Int)) && !crate::int_range::is_proven_step(expr) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)

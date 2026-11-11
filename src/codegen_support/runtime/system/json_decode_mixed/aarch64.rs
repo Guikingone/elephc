@@ -202,11 +202,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // capacity = 0
     emitter.instruction("mov x1, #8");                                          // elem_size = 8 (Mixed-pointer slots)
     emitter.instruction("bl __rt_array_new");                                   // allocate the empty indexed array
+    emitter.instruction("str x0, [sp, #64]");                                   // park the array until the box owns it
     emitter.instruction("mov x1, x0");                                          // payload = array pointer
     emitter.instruction("mov x0, #4");                                          // tag = indexed array
     emitter.instruction("mov x2, #0");                                          // load or prepare JSON decoder state
-    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(array)
+    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(array); the box retains it
     emitter.instruction("str x0, [sp, #88]");                                   // save the boxed array across depth_exit
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the empty array
+    emitter.instruction("bl __rt_decref_array");                                // transfer sole ownership of the array to the box
     emitter.instruction("bl __rt_json_depth_exit");                             // leave the current JSON array depth
     emitter.instruction("ldr x0, [sp, #88]");                                   // restore the boxed array result
     emitter.instruction("b __rt_json_decode_mixed_done");                       // continue in the JSON decoder control path
@@ -248,6 +251,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // capacity = 0
     emitter.instruction("mov x1, #7");                                          // value_type = 7 (boxed mixed slots)
     emitter.instruction("bl __rt_hash_new");                                    // allocate the empty hash
+    emitter.instruction("str x0, [sp, #64]");                                   // park the hash until the box (or stdClass) owns it
     emitter.instruction("mov x1, x0");                                          // payload = hash pointer
     // Honor the json_decode `$associative` flag: 0 → stdClass, non-zero → assoc.
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_decode_assoc");
@@ -255,8 +259,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_json_decode_mixed_object_empty_stdclass"); // 0 → wrap in a stdClass instance
     emitter.instruction("mov x0, #5");                                          // tag = associative array
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for assoc payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(assoc)
+    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(assoc); the box retains it
     emitter.instruction("str x0, [sp, #88]");                                   // save the boxed assoc result across depth_exit
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the empty hash
+    emitter.instruction("bl __rt_decref_hash");                                 // transfer sole ownership of the hash to the box
     emitter.instruction("bl __rt_json_depth_exit");                             // leave the current JSON object depth
     emitter.instruction("ldr x0, [sp, #88]");                                   // restore the boxed assoc result
     emitter.instruction("b __rt_json_decode_mixed_done");                       // continue in the JSON decoder control path
@@ -264,11 +270,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_mixed_object_empty_stdclass");
     emitter.instruction("mov x0, x1");                                          // x0 = empty hash pointer for stdclass_from_hash
     emitter.instruction("bl __rt_stdclass_from_hash");                          // x0 = freshly allocated stdClass owning the empty hash
+    emitter.instruction("str x0, [sp, #64]");                                   // park the stdClass until the box owns it
     emitter.instruction("mov x1, x0");                                          // shift the stdClass pointer into the mixed_from_value low-word slot
     emitter.instruction("mov x0, #6");                                          // tag = object
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for object payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(object)
+    emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(object); the box retains it
     emitter.instruction("str x0, [sp, #88]");                                   // save the boxed stdClass result across depth_exit
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the stdClass
+    emitter.instruction("bl __rt_decref_object");                               // transfer sole ownership of the stdClass to the box
     emitter.instruction("bl __rt_json_depth_exit");                             // leave the current JSON object depth
     emitter.instruction("ldr x0, [sp, #88]");                                   // restore the boxed stdClass result
     emitter.instruction("b __rt_json_decode_mixed_done");                       // continue in the JSON decoder control path

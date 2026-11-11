@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv,
 };
@@ -140,16 +140,30 @@ fn apply_array_write_evidence(
         let Some(current) = env.get(write.name).cloned() else {
             continue;
         };
-        let key_type = write.index.map(|index| {
-            let inferred = infer_storage_value_type(index, env, infer_value)
-                .or_else(|| precise_scalar_expr_type(index))
-                .unwrap_or(PhpType::Mixed);
-            normalized_array_key_type(index, inferred)
+        // `.` always yields a string, even when its operands are not inferable here.
+        let raw_key_type = write.index.map(|index| {
+            if matches!(index.kind, ExprKind::BinaryOp { op: BinOp::Concat, .. }) {
+                PhpType::Str
+            } else {
+                infer_storage_value_type(index, env, infer_value)
+                    .or_else(|| precise_scalar_expr_type(index))
+                    .unwrap_or(PhpType::Mixed)
+            }
         });
-        let forces_hash = write.index.is_some_and(|index| {
-            matches!(key_type.as_ref(), Some(PhpType::Str))
-                && matches!(index.kind, ExprKind::StringLiteral(_) | ExprKind::Null)
+        let key_type = write
+            .index
+            .zip(raw_key_type.clone())
+            .map(|(index, raw)| normalized_array_key_type(index, raw));
+        // Any string-typed key turns an indexed local into a hash, literal or not: EIR lowering
+        // converts the array to a hash at every write whose key lowers to a string
+        // (`$a["k" . $i] = ...`), so the loop-carried storage contract must already be a hash or
+        // the next iteration reloads that hash through an indexed-array typed slot. A dynamic
+        // string key normalizes to `Mixed` (it may be numeric), which stays the hash key type.
+        let dynamic_string_key = write.index.is_some_and(|index| {
+            !matches!(index.kind, ExprKind::StringLiteral(_))
+                && matches!(raw_key_type.as_ref(), Some(PhpType::Str))
         });
+        let forces_hash = matches!(key_type.as_ref(), Some(PhpType::Str)) || dynamic_string_key;
         let updated = match current {
             PhpType::Array(element) if forces_hash => {
                 let was_empty = matches!(element.as_ref(), PhpType::Never);

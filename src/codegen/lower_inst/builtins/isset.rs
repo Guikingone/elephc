@@ -276,10 +276,18 @@ fn emit_isset_hash_found_null_check_aarch64(
     missing: &str,
 ) -> Result<()> {
     if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+        // A Mixed-typed hash still stores scalars with their own slot tag (e.g. an int written
+        // by `$m[$k] = 1`); only slots tagged 7 hold a boxed Mixed pointer worth unboxing.
+        let present = ctx.next_label("isset_hash_present");
+        ctx.emitter.instruction("cmp x3, #8");                                  // runtime tag 8 means the found hash slot is PHP null
+        ctx.emitter.instruction(&format!("b.eq {}", missing));                  // null hash values make isset return false
+        ctx.emitter.instruction("cmp x3, #7");                                  // is the found slot a boxed Mixed pointer (tag 7)?
+        ctx.emitter.instruction(&format!("b.ne {}", present));                  // any other non-null tag is a present value
         ctx.emitter.instruction("mov x0, x1");                                  // pass the boxed Mixed hash value to the unbox helper
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        ctx.emitter.instruction("cmp x0, #8");                                  // runtime tag 8 means the found hash value is PHP null
+        ctx.emitter.instruction("cmp x0, #8");                                  // runtime tag 8 means the boxed hash value is PHP null
         ctx.emitter.instruction(&format!("b.eq {}", missing));                  // null hash values make isset return false
+        ctx.emitter.label(&present);
         return Ok(());
     }
     ctx.emitter.instruction("cmp x3, #8");                                      // runtime tag 8 means the found hash value is PHP null
@@ -294,10 +302,18 @@ fn emit_isset_hash_found_null_check_x86_64(
     missing: &str,
 ) -> Result<()> {
     if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
+        // A Mixed-typed hash still stores scalars with their own slot tag (e.g. an int written
+        // by `$m[$k] = 1`); only slots tagged 7 hold a boxed Mixed pointer worth unboxing.
+        let present = ctx.next_label("isset_hash_present");
+        ctx.emitter.instruction("cmp rcx, 8");                                  // runtime tag 8 means the found hash slot is PHP null
+        ctx.emitter.instruction(&format!("je {}", missing));                    // null hash values make isset return false
+        ctx.emitter.instruction("cmp rcx, 7");                                  // is the found slot a boxed Mixed pointer (tag 7)?
+        ctx.emitter.instruction(&format!("jne {}", present));                   // any other non-null tag is a present value
         ctx.emitter.instruction("mov rax, rdi");                                // pass the boxed Mixed hash value to the unbox helper
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        ctx.emitter.instruction("cmp rax, 8");                                  // runtime tag 8 means the found hash value is PHP null
+        ctx.emitter.instruction("cmp rax, 8");                                  // runtime tag 8 means the boxed hash value is PHP null
         ctx.emitter.instruction(&format!("je {}", missing));                    // null hash values make isset return false
+        ctx.emitter.label(&present);
         return Ok(());
     }
     ctx.emitter.instruction("cmp rcx, 8");                                      // runtime tag 8 means the found hash value is PHP null

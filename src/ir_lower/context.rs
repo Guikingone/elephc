@@ -151,6 +151,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
+    /// Local-type facts and initialized slots captured at every `break` that targets a loop or
+    /// switch exit block, keyed by that block. They are joined into the exit's facts so a value
+    /// assigned just before `break` is not read back with the fall-through path's type.
+    pub(crate) break_states: HashMap<BlockId, Vec<(TypeEnv, HashSet<LocalSlotId>)>>,
     pub finally_stack: Vec<FinallyFrame>,
     /// Maps a `goto` label name to its EIR block within the current function. Blocks are created
     /// lazily the first time a label or a `goto` referencing it is lowered, so a forward `goto`
@@ -299,6 +303,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
+            break_states: HashMap::new(),
             finally_stack: Vec::new(),
             goto_label_blocks: HashMap::new(),
             static_callable_locals: HashMap::new(),

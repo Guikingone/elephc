@@ -21,6 +21,7 @@ mod exports;
 mod filter_var_prelude;
 mod globals_array;
 mod image_prelude;
+mod int_range;
 mod intrinsics;
 #[allow(dead_code, unused_imports)]
 mod ir;

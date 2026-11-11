@@ -14,7 +14,9 @@ use super::super::Checker;
 
 impl Checker {
     /// Flattens nested unions, removes duplicates and `PhpType::Mixed` (which absorbs all),
-    /// and returns a single `PhpType` or a `PhpType::Union` with deduped members.
+    /// drops `PhpType::Never` (the empty type contributes no value: the element type of a
+    /// still-empty `[]` joined with a filled array is just the filled element type), and
+    /// returns a single `PhpType` or a `PhpType::Union` with deduped members.
     pub(crate) fn normalize_union_type(&self, members: Vec<PhpType>) -> PhpType {
         let mut flat = Vec::new();
         for member in members {
@@ -23,6 +25,9 @@ impl Checker {
                 PhpType::Mixed => return PhpType::Mixed,
                 other => flat.push(other),
             }
+        }
+        if flat.iter().any(|member| !matches!(member, PhpType::Never)) {
+            flat.retain(|member| !matches!(member, PhpType::Never));
         }
 
         let mut deduped = Vec::new();

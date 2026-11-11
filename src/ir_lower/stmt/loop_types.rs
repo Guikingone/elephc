@@ -14,9 +14,10 @@
 //!   branch-scoping change). Widening to `Mixed` is the only retroactively-lossless target:
 //!   a `Mixed` cell can hold either iteration's value and reads coerce correctly.
 //! - Only locals that already have an entry type are considered; a local first assigned
-//!   inside the loop has no stale entry type to leak. Same-category widenings (int↔bool,
-//!   array↔array) are intentionally left alone: they are a separate concern and forcing them
-//!   to `Mixed` would both over-box and misrepresent the entry value.
+//!   inside the loop has no stale entry type to leak. Same-category array widenings
+//!   (array↔array) are intentionally left alone: forcing them to `Mixed` would over-box them.
+//!   `int`↔`bool` is NOT same-category: the raw slot carries no tag, so
+//!   `widened_local_storage_type` reports `Mixed` for it and it is widened like any other.
 
 use std::collections::HashMap;
 

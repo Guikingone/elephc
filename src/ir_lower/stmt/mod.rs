@@ -1635,6 +1635,125 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
+/// Folds the storage contracts of loops nested in `body` into the enclosing loop's contracts.
+///
+/// A nested loop converts a local at its own head (`[]` to a hash when its body writes string
+/// keys, or to boxed `mixed` payloads). On the enclosing loop's back-edge the slot then holds
+/// that converted container, so the enclosing loop head must already use the same (or a wider)
+/// representation; otherwise its next iteration reloads a hash through an indexed-array slot.
+/// The checker computes each loop's contract independently, so the enclosing one can miss a
+/// conversion that depends on facts only known inside the nested loop (e.g. a `foreach` value
+/// used as a string key).
+fn merge_nested_loop_contracts(
+    ctx: &LoweringContext<'_, '_>,
+    body: &[Stmt],
+    contracts: &mut Vec<(String, PhpType)>,
+) {
+    let mut nested = Vec::new();
+    collect_nested_loop_spans(body, &mut nested);
+    for nested_span in nested {
+        let Some(nested_contracts) = ctx
+            .loop_storage_types
+            .get(&(ctx.loop_storage_scope.clone(), nested_span))
+        else {
+            continue;
+        };
+        for (name, nested_ty) in nested_contracts {
+            match contracts.iter_mut().find(|(existing, _)| existing == name) {
+                Some((_, own_ty)) => {
+                    if let Some(wider) = wider_container_contract(own_ty, nested_ty) {
+                        *own_ty = wider;
+                    }
+                }
+                None => {
+                    if matches!(
+                        nested_ty.codegen_repr(),
+                        PhpType::AssocArray { .. } | PhpType::Array(_)
+                    ) {
+                        contracts.push((name.clone(), nested_ty.clone()));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Returns the nested contract when it needs a wider container representation than `own`.
+fn wider_container_contract(own: &PhpType, nested: &PhpType) -> Option<PhpType> {
+    match (own.codegen_repr(), nested.codegen_repr()) {
+        (PhpType::Array(_), PhpType::AssocArray { .. }) => Some(nested.clone()),
+        (PhpType::Array(own_element), PhpType::Array(nested_element))
+            if own_element.codegen_repr() != PhpType::Mixed
+                && nested_element.codegen_repr() == PhpType::Mixed =>
+        {
+            Some(nested.clone())
+        }
+        (
+            PhpType::AssocArray { value: own_value, .. },
+            PhpType::AssocArray { value: nested_value, .. },
+        ) if own_value.codegen_repr() != PhpType::Mixed
+            && nested_value.codegen_repr() == PhpType::Mixed =>
+        {
+            Some(nested.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Collects the spans of loops nested anywhere in `body` (not inside nested declarations).
+fn collect_nested_loop_spans(body: &[Stmt], out: &mut Vec<Span>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                out.push(stmt.span);
+                collect_nested_loop_spans(body, out);
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_nested_loop_spans(then_body, out);
+                for (_, clause_body) in elseif_clauses {
+                    collect_nested_loop_spans(clause_body, out);
+                }
+                if let Some(else_body) = else_body {
+                    collect_nested_loop_spans(else_body, out);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collect_nested_loop_spans(case_body, out);
+                }
+                if let Some(default) = default {
+                    collect_nested_loop_spans(default, out);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_nested_loop_spans(try_body, out);
+                for catch in catches {
+                    collect_nested_loop_spans(&catch.body, out);
+                }
+                if let Some(finally_body) = finally_body {
+                    collect_nested_loop_spans(finally_body, out);
+                }
+            }
+            StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::IfDef { then_body: body, .. } => collect_nested_loop_spans(body, out),
+            _ => {}
+        }
+    }
+}
+
 /// Materializes the checker-recorded storage contract before entering a loop.
 ///
 /// Indexed and associative arrays are promoted in place so existing elements use boxed payload
@@ -1643,13 +1762,17 @@ fn lower_ifdef(
 fn apply_loop_storage_contracts(
     ctx: &mut LoweringContext<'_, '_>,
     loop_span: Span,
+    body: &[Stmt],
     span: Option<Span>,
 ) {
-    let contracts = ctx
+    let mut contracts: Vec<(String, PhpType)> = ctx
         .loop_storage_types
         .get(&(ctx.loop_storage_scope.clone(), loop_span))
         .cloned()
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    merge_nested_loop_contracts(ctx, body, &mut contracts);
     for (name, target_ty) in contracts {
         if !ctx.local_slots.contains_key(&name) {
             continue;
@@ -1730,7 +1853,7 @@ fn lower_while(
     // body statement placed before the reassignment; widen its type to Mixed for the whole loop
     // scope so those reads do not coerce a widened Mixed slot to a stale narrow type.
     loop_types::prewiden_loop_carried_locals(ctx, &[body], &[], &[condition]);
-    apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
+    apply_loop_storage_contracts(ctx, loop_span, body, Some(condition.span));
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("while.body", Vec::new());
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
@@ -1762,6 +1885,7 @@ fn lower_while(
     }
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
+    merge_break_states(ctx, exit);
     ctx.clear_static_callable_locals();
 }
 
@@ -1775,7 +1899,7 @@ fn lower_do_while(
     // See `lower_while`: pre-widen loop-carried locals so a read placed before an in-loop
     // reassignment is typed to match the widened Mixed slot on iterations past the first.
     loop_types::prewiden_loop_carried_locals(ctx, &[body], &[], &[condition]);
-    apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
+    apply_loop_storage_contracts(ctx, loop_span, body, Some(condition.span));
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
     let cond_block = ctx.builder.create_named_block("do.cond", Vec::new());
     let exit = ctx.builder.create_named_block("do.exit", Vec::new());
@@ -1803,6 +1927,7 @@ fn lower_do_while(
     });
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(exit);
+    merge_break_states(ctx, exit);
     ctx.clear_static_callable_locals();
 }
 
@@ -1833,7 +1958,7 @@ fn lower_for(
     let contract_span = condition
         .map(|c| c.span)
         .or_else(|| body.first().map(|s| s.span));
-    apply_loop_storage_contracts(ctx, loop_span, contract_span);
+    apply_loop_storage_contracts(ctx, loop_span, body, contract_span);
 
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
@@ -1873,6 +1998,7 @@ fn lower_for(
     }
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
+    merge_break_states(ctx, exit);
     ctx.clear_static_callable_locals();
 }
 
@@ -3343,7 +3469,7 @@ fn lower_foreach(
     loop_types::prewiden_loop_carried_locals(ctx, &[body], &[], &[]);
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
-    apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    apply_loop_storage_contracts(ctx, loop_span, body, Some(array.span));
     let source = lower_expr(ctx, array);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
@@ -3471,6 +3597,7 @@ fn lower_foreach(
     ctx.loop_stack.pop();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
+    merge_break_states(ctx, exit);
     ctx.clear_static_callable_locals();
     // Release the source when it is a fresh owning temporary (e.g. `foreach
     // (explode(...) as $p)` or a literal array): the iterator borrows it for the
@@ -3785,6 +3912,7 @@ fn lower_switch_bodies(
     ctx.builder.position_at_end(exit);
     ctx.restore_local_types(merged_body_types);
     ctx.restore_initialized_slots(merged_body_initialized);
+    merge_break_states(ctx, exit);
     ctx.clear_static_callable_locals();
 }
 
@@ -4283,7 +4411,30 @@ fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
+    if !ctx.builder.insertion_block_is_terminated() {
+        let snapshot = (ctx.local_types_snapshot(), ctx.initialized_slots_snapshot());
+        ctx.break_states.entry(frame.break_block).or_default().push(snapshot);
+    }
     terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
+}
+
+/// Joins the facts captured at `break`s targeting `exit` into the facts at the exit block.
+///
+/// Call right after positioning at a loop or switch exit block, while the context still holds
+/// the fall-through path's facts. A local whose logical type differs between the fall-through
+/// path and a `break` adopts its widened frame-storage type, exactly like an `if` merge.
+fn merge_break_states(ctx: &mut LoweringContext<'_, '_>, exit: crate::ir::BlockId) {
+    let Some(states) = ctx.break_states.remove(&exit) else {
+        return;
+    };
+    let mut types = ctx.local_types_snapshot();
+    let mut initialized = ctx.initialized_slots_snapshot();
+    for (break_types, break_initialized) in states {
+        types = join_local_types(ctx, types, &break_types);
+        initialized = initialized.intersection(&break_initialized).copied().collect();
+    }
+    ctx.restore_local_types(types);
+    ctx.restore_initialized_slots(initialized);
 }
 
 /// Lowers a `continue` terminator.

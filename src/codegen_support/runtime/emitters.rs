@@ -171,6 +171,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_encode_mixed(emitter);
     system::emit_json_encode_float(emitter);
     system::emit_json_ftoa(emitter);
+    system::emit_var_dump_ftoa(emitter);
     system::emit_json_encode_object(emitter);
     system::emit_json_pretty_helpers(emitter);
     system::emit_json_throw_error(emitter);

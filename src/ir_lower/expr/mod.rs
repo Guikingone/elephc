@@ -470,7 +470,10 @@ fn lower_numeric_binary(
         // Check if the type checker promoted this to Mixed (non-constant int arithmetic
         // that can overflow to float). If so, emit a checked helper that returns a Mixed box.
         let result_php_type = fallback_expr_type(expr);
-        if result_php_type == PhpType::Mixed && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
+        if result_php_type == PhpType::Mixed
+            && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+            && !crate::int_range::is_proven_binop(op, expr.span)
+        {
             // Identity shortcuts: x+0, x-0, 0+x, 0-x cannot overflow → keep plain Int.
             // x*1, 1*x cannot overflow → keep plain Int.
             // x*0, 0*x always yields 0 → keep plain Int.
@@ -2234,7 +2237,9 @@ fn lower_inc_dec(
     }
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
-    let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int);
+    // `crate::int_range` proves some sites overflow-free; those keep a native int result.
+    let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int)
+        && !crate::int_range::is_proven_step(expr);
     let iop = match (increment, checked_int_local) {
         (true, true) => Op::ICheckedAdd,
         (false, true) => Op::ICheckedSub,
@@ -2501,6 +2506,30 @@ fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
+    if eval_literal.is_none()
+        && operands.len() > 2
+        && php_symbol_key(name.trim_start_matches('\\')) == "array_merge"
+    {
+        // `array_merge(a, b, c, ...)` is the left fold of binary merges: integer keys are
+        // renumbered in order and later string keys overwrite earlier ones either way. Every
+        // operand is already evaluated (PHP's left-to-right order is preserved), so folding
+        // here only reuses the binary runtime merge.
+        let last_index = operands.len() - 1;
+        let mut acc = operands[0];
+        for (index, next) in operands.iter().copied().enumerate().skip(1) {
+            let pair = vec![acc, next];
+            let pair_type = if index == last_index {
+                php_type.clone()
+            } else {
+                array_merge_builtin_return_type(ctx, &pair).unwrap_or(PhpType::Mixed)
+            };
+            acc = emit_builtin_call_value(ctx, name, pair, pair_type, span, None).value;
+        }
+        return LoweredValue {
+            value: acc,
+            ir_type: ctx.builder.value_type(acc),
+        };
+    }
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             // The caller resolves the registry builtin's result type from the same
@@ -6257,7 +6286,9 @@ fn persist_call_arg_if_string(
     if source.ir_type != IrType::Str {
         return source;
     }
-    ctx.emit_value(
+    // `__rt_str_persist` always returns a fresh heap copy, so the operand is an owned temporary
+    // that the post-call argument cleanup must release (it leaked once per call before).
+    ctx.emit_owned_value(
         Op::StrPersist,
         vec![source.value],
         None,

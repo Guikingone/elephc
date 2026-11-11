@@ -26,6 +26,8 @@ pub(crate) use class_relation_registry::emit_class_relation_registry_data;
 /// `get_class_methods()`.
 pub(crate) use class_methods_registry::emit_class_methods_registry_data;
 pub(crate) use fixed::emit_runtime_data_fixed;
+/// Capacity of the shared `_concat_buf` string scratch area.
+pub(crate) use fixed::CONCAT_BUF_SIZE;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
 pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};

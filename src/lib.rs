@@ -34,6 +34,8 @@ pub mod globals_array;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
+/// Integer-range analysis proving overflow-free integer arithmetic sites.
+pub mod int_range;
 /// Intrinsic call handling.
 pub mod intrinsics;
 /// Intermediate representation used by the EIR backend track.

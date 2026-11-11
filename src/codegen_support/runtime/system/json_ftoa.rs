@@ -393,3 +393,40 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return result pointer (rax) and length (rdx)
 }
+
+/// Emits `__rt_var_dump_ftoa`, the float formatter behind `var_dump()`.
+///
+/// PHP renders `var_dump()` floats with `serialize_precision = -1`: the shortest
+/// round-trip digits with an uppercase exponent (`0.30000000000000004`, `100`,
+/// `1.0E+100`), and `INF`/`-INF`/`NAN` for non-finite values. Finite values tail-call
+/// `__rt_json_ftoa` with the `'E'` marker; non-finite values tail-call `__rt_ftoa`,
+/// which already spells them the PHP way.
+///
+/// Input: AArch64 `d0` / x86_64 `xmm0` = the double. Output: the same pointer/length
+/// registers and `_concat_buf` contract as `__rt_ftoa`.
+pub(crate) fn emit_var_dump_ftoa(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_ftoa (serialize_precision=-1) ---");
+    emitter.label_global("__rt_var_dump_ftoa");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("movq r9, xmm0");                                   // copy the double bits to test the exponent field
+        emitter.instruction("shr r9, 52");                                      // shift the exponent (and sign) into the low bits
+        emitter.instruction("and r9, 0x7ff");                                   // isolate the 11-bit exponent
+        emitter.instruction("cmp r9, 0x7ff");                                   // an all-ones exponent means INF or NAN
+        emitter.instruction("je __rt_ftoa");                                    // non-finite values keep the INF/-INF/NAN spelling
+        emitter.instruction("mov edi, 69");                                     // exponent marker 'E' for the shortest round-trip layout
+        emitter.instruction("jmp __rt_json_ftoa");                              // tail-call the serialize_precision=-1 formatter
+        return;
+    }
+    emitter.instruction("fmov x9, d0");                                         // copy the double bits to test the exponent field
+    emitter.instruction("lsr x9, x9, #52");                                     // shift the exponent (and sign) into the low bits
+    emitter.instruction("and x9, x9, #0x7ff");                                  // isolate the 11-bit exponent
+    emitter.instruction("cmp x9, #0x7ff");                                      // an all-ones exponent means INF or NAN
+    emitter.instruction("b.ne __rt_var_dump_ftoa_finite");                      // finite values use the shortest round-trip layout
+    // Mach-O cannot relocate a conditional branch to another helper's atom, so the
+    // non-finite tail call is an unconditional `b`.
+    emitter.instruction("b __rt_ftoa");                                         // non-finite values keep the INF/-INF/NAN spelling
+    emitter.label("__rt_var_dump_ftoa_finite");
+    emitter.instruction("mov w0, #69");                                         // exponent marker 'E' for the shortest round-trip layout
+    emitter.instruction("b __rt_json_ftoa");                                    // tail-call the serialize_precision=-1 formatter
+}
