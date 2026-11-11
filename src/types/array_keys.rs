@@ -98,6 +98,18 @@ pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr) -> bool {
     }
 }
 
+/// Returns the `sparse_key_write_sites` entry that records a packed-loop-counter write.
+///
+/// The checker keeps `for ($i = 0; …; $i++) { $a[$i] = …; }` on packed storage because the
+/// counter provably starts at slot 0 and grows one slot at a time with the array. Lowering's
+/// own syntactic rule (`empty_array_key_requires_hash_storage`) cannot see that proof, so the
+/// checker records the site under this marker and lowering skips the hash promotion there. A
+/// NUL byte never appears in a PHP variable name, so the marker cannot collide with a local
+/// recorded as a sparse-key promotion at the same span.
+pub(crate) fn packed_counter_write_marker(name: &str) -> String {
+    format!("\0packed-counter:{name}")
+}
+
 /// Returns whether an integer key written into the non-empty packed local `array` provably lands
 /// inside `[0, count($array)]`, so the write can neither leave a gap nor need a negative key.
 ///

@@ -346,7 +346,8 @@ fn lower_array_assign_from_value(
     let empty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if is_empty_indexed_array_element(&element))
         && crate::types::empty_array_key_requires_hash_storage(index)
-        && !index_is_boxed_mixed_key(index_value.ir_type);
+        && !index_is_boxed_mixed_key(index_value.ir_type)
+        && !ctx.is_recorded_packed_counter_write(span, array);
     let nonempty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if !is_empty_indexed_array_element(&element))
         && crate::types::nonempty_array_key_forces_hash_storage(index)

@@ -55,3 +55,5 @@ mod fixed_issue_behaviour;
 mod fixed_issue_leaks;
 #[path = "regressions/large_runtime_outputs.rs"]
 mod large_runtime_outputs;
+#[path = "regressions/manticore_bench_gaps.rs"]
+mod manticore_bench_gaps;

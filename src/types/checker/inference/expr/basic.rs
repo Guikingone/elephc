@@ -91,6 +91,8 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+                // Proven overflow-free by `crate::int_range`: the stepped value is an int.
+                Some(PhpType::Int) if crate::int_range::is_proven_step(expr) => Ok(PhpType::Int),
                 Some(ty) if crate::types::object_operators::binary_plan_with_classes(
                     &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
                 ).is_some() => {

@@ -144,6 +144,20 @@ pub(super) fn check_array_assign(
             && !index_is_foreach_key
             && !matches!(idx_ty, PhpType::Mixed | PhpType::Union(_))
             && !nonempty_array_key_stays_in_range(index);
+        // The packed-counter exemption above is the checker's proof alone; record it so the
+        // lowering does not re-promote the empty array on its syntactic key rule.
+        if !forces_hash
+            && matches!(elem_ty.as_ref(), PhpType::Never)
+            && matches!(normalized_idx_ty, PhpType::Int)
+            && !index_is_foreach_key
+            && checker.index_is_packed_loop_counter(array, index)
+        {
+            checker
+                .sparse_key_write_sites
+                .entry(span)
+                .or_default()
+                .insert(crate::types::packed_counter_write_marker(array));
+        }
         if skips_nonempty_slot {
             checker
                 .sparse_key_write_sites

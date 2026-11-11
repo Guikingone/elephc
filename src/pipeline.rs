@@ -1002,6 +1002,14 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     let ast = optimize::fold_constants_for_target(ast, target);
     timings.record_since("opt-fold", phase_started);
 
+    // Prove which integer `+`/`-`/`*`/`++`/`--` sites can never overflow, so the checker and EIR
+    // lowering keep them as native ints instead of the boxed "int or float" form. PHP semantics
+    // are unchanged: only sites whose every integer execution stays in range are proven.
+    let phase_started = Instant::now();
+    let overflow_facts = crate::int_range::analyze_program(&ast, web);
+    crate::int_range::install(overflow_facts.clone());
+    timings.record_since("int-range", phase_started);
+
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
     let check_options = types::CheckOptions { strict_locals };
@@ -1161,6 +1169,13 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     let ast = post_typecheck_optimizer
         .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     timings.record_since("dce", phase_started);
+
+    // Lowering only trusts sites proven both before type checking and on the final AST, so a
+    // post-check rewrite can never extend a proof to a context that was not analyzed.
+    let phase_started = Instant::now();
+    let final_overflow_facts = crate::int_range::analyze_program(&ast, web);
+    crate::int_range::install(overflow_facts.intersect(&final_overflow_facts));
+    timings.record_since("int-range", phase_started);
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();

@@ -137,7 +137,10 @@ impl Checker {
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
-                let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
+                // A step proven overflow-free by `crate::int_range` keeps an int local an int.
+                let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env)
+                    || (matches!(old_ty, Some(PhpType::Int))
+                        && crate::int_range::is_proven_step(expr));
                 let result_ty = self.infer_type(expr, env)?;
                 if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
                     self.record_local_storage_effect(name, &updated);
@@ -147,7 +150,10 @@ impl Checker {
             }
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
                 let old_ty = env.get(name).cloned();
-                let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
+                // A step proven overflow-free by `crate::int_range` keeps an int local an int.
+                let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env)
+                    || (matches!(old_ty, Some(PhpType::Int))
+                        && crate::int_range::is_proven_step(expr));
                 let result_ty = self.infer_type(expr, env)?;
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.

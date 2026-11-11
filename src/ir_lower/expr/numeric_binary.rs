@@ -175,7 +175,10 @@ fn lower_numeric_binary_values(
         lhs.ir_type,
         rhs.ir_type,
         &fallback_expr_type(expr),
-        numeric_binary_identity(op, left, right),
+        // `crate::int_range` proves some `+`/`-`/`*` sites overflow-free; like the identity
+        // cases they keep a native int result instead of the checked boxed form.
+        numeric_binary_identity(op, left, right)
+            || crate::int_range::is_proven_binop(op, expr.span),
     );
     if matches!(op, BinOp::Pow) {
         // PHP's `**` is int-preserving (`2 ** 3` is `int(8)`), so an int/int power goes

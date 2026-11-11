@@ -3899,6 +3899,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .is_some_and(|written| written.contains(name))
     }
 
+    /// Returns whether the checker proved THIS write into the still-empty `name` is indexed by
+    /// its loop's packed counter, so it keeps packed storage (see
+    /// `types::packed_counter_write_marker`).
+    pub(crate) fn is_recorded_packed_counter_write(&self, span: Span, name: &str) -> bool {
+        span.identifies_a_node()
+            && self
+                .sparse_key_write_sites
+                .get(&span)
+                .is_some_and(|written| {
+                    written.contains(&crate::types::packed_counter_write_marker(name))
+                })
+    }
+
     /// Returns whether the checker kept `name` a typed packed local whose storage may become a
     /// hash at run time, so its element writes and appends must dispatch on the heap kind.
     ///

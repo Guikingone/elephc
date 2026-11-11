@@ -5,6 +5,19 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+- Added an integer-range analysis (`crate::int_range`) that proves `+`, `-`, `*`, `++` and `--` sites overflow-free (loop counters bounded by their condition, masked/modulo accumulators, guarded recursion arguments, `count()`/`strlen()` bounds, ...). Proven sites compile to native machine arithmetic instead of the checked `int|float` form that boxed every result into a `mixed` cell; semantics are unchanged because only sites whose every integer execution stays in range are proven. A 50M-iteration integer loop drops from ~5 s to ~0.17 s on x86_64.
+- Fixed `mixed` float arithmetic (`int|float` values in `+`, `-`, `*`) falling through into the array-union path and raising a bogus `TypeError: array builtin argument must be of type array` on every supported target.
+- Fixed `isset()` on a `mixed`-valued hash unboxing raw scalar slots as pointers, which segfaulted the classic `if (isset($c[$k])) { $c[$k]++ } else { $c[$k] = 1; }` word-count loop.
+- Fixed a local holding `int` on one path and `bool`/`false` on another sharing an untagged slot, so the int was read back as `bool(true)`; such locals now widen to `mixed` storage.
+- Fixed locals assigned just before `break` losing their type at the loop exit (e.g. `$server = false; ... $server = $s; break;` then `fclose($server)` failing to compile); break states are now merged into the exit like `if` branches.
+- Fixed functions that fill `[]` with dynamic string keys in a loop (`$a["k" . $i] = ...`), and loops nested in other loops, reloading a hash through an indexed-array slot (`array builtin argument must be of type array`); loop storage contracts now force hash storage for any string-typed key and fold nested-loop contracts into the enclosing loop.
+- Fixed the element type of an array reset to `[]` inside a loop and refilled in a nested loop being typed `never|int`, which rejected later arithmetic as non-numeric.
+- `var_dump()` now prints floats with PHP's `serialize_precision = -1` (shortest round-trip, e.g. `float(0.30000000000000004)`, `float(1.0E+100)`).
+- `array_merge()` accepts more than two arguments.
+- Fixed `json_decode()` leaking every decoded container, element, object key and its source string copy; decoding in a loop is now heap-clean.
+- The default runtime heap is now 128 MB, matching PHP's default `memory_limit` (which `ini_get('memory_limit')` already reported); untouched heap pages cost no resident memory.
+- The shared string scratch area grew from 64 KiB to 64 MiB, so large `json_encode()` (including `JSON_PRETTY_PRINT`) and other string results no longer overrun it and corrupt neighbouring runtime state.
+- `crc32()` is now table-driven (one lookup per byte instead of eight bit iterations).
 ## [0.27.9] - 2026-11-20
 
 - Added PHP 8.5's `uri` extension: `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, `Uri\UriComparisonMode`, `Uri\WhatWg\UrlValidationError` and their exceptions, linked automatically when a program uses `Uri\` (or forced with `--with-uri`) on PHP 8.5 profiles and checked against 332 cases ported from php-src's `ext/uri` tests.

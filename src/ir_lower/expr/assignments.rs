@@ -848,7 +848,10 @@ pub(super) fn lower_inc_dec(
     let nullable_int = matches!(&existing_type, PhpType::Union(members)
         if members.iter().any(|ty| *ty == PhpType::Int)
             && members.iter().all(|ty| matches!(ty, PhpType::Int | PhpType::Void)));
-    let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int) || nullable_int;
+    // `crate::int_range` proves some plain-int sites overflow-free; those keep a native int result.
+    let checked_int_local = (matches!(existing_type.codegen_repr(), PhpType::Int)
+        && !crate::int_range::is_proven_step(expr))
+        || nullable_int;
     // An incoming typed reference addresses the caller's tagged cell, which cannot hold a
     // float. Use the existing checked scalar-storage diagnostic instead of writing float bits.
     let fixed_tagged_reference = nullable_int && ctx.is_ref_bound_local(name);
