@@ -87,5 +87,6 @@ pub mod tz_prelude;
 pub mod upload_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
+pub mod printf_prelude;
 /// Conditionally-injected `--web` request prelude (extern declarations for bridge getters).
 pub mod web_prelude;

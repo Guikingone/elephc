@@ -22,8 +22,7 @@ use crate::codegen_support::platform::Arch;
 /// Output registers (x86_64 SysV): `rax` = string pointer, `rdx` = string length
 ///
 /// Stack frame layout (ARM64, 128 bytes):
-///   `[sp+0..47]`  snprintf buffer (48 bytes)
-///   `[sp+64..68]` format string `"%.Nf\0"`
+///   `[sp+64]`     raw snprintf text pointer (in the concat buffer, past the output)
 ///   `[sp+72]`     result start ptr
 ///   `[sp+80]`     raw snprintf length
 ///   `[sp+88]`     number (double)
@@ -38,8 +37,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     }
 
     // Stack frame layout (128 bytes):
-    //   [sp+0..47]  snprintf buffer (48 bytes)
-    //   [sp+64..68] format string "%.Nf\0"
+    //   [sp+64]     raw snprintf text pointer
     //   [sp+72]     result start ptr
     //   [sp+80]     raw_len
     //   [sp+88]     number (d0)
@@ -62,27 +60,28 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #100]");                                  // save decimal point character
     emitter.instruction("str x3, [sp, #104]");                                  // save thousands separator character
 
-    // -- build format string "%.Nf" at [sp+64] --
-    emitter.instruction("mov w9, #37");                                         // ASCII '%'
-    emitter.instruction("strb w9, [sp, #64]");                                  // write '%' to format string
-    emitter.instruction("mov w9, #46");                                         // ASCII '.'
-    emitter.instruction("strb w9, [sp, #65]");                                  // write '.' to format string
-    emitter.instruction("ldr x9, [sp, #96]");                                   // load decimals count
-    emitter.instruction("add w9, w9, #48");                                     // convert to ASCII digit ('0' + N)
-    emitter.instruction("strb w9, [sp, #66]");                                  // write decimal count digit
-    emitter.instruction("mov w9, #102");                                        // ASCII 'f'
-    emitter.instruction("strb w9, [sp, #67]");                                  // write 'f' format specifier
-    emitter.instruction("strb wzr, [sp, #68]");                                 // null-terminate the format string
+    // -- clamp negative decimal counts to zero --
+    emitter.instruction("ldrsw x9, [sp, #96]");                                 // load decimals count (32-bit slot: the decimal separator follows)
+    emitter.instruction("cmp x9, #0");                                          // negative precision?
+    emitter.instruction("csel x9, xzr, x9, lt");                                // clamp it to zero
+    emitter.instruction("str w9, [sp, #96]");                                   // save the clamped decimals count
 
-    // -- call snprintf(buf, 48, fmt, d0) --
-    emitter.instruction("add x0, sp, #0");                                      // x0 = output buffer at start of stack frame
-    emitter.instruction("mov x1, #48");                                         // buffer size = 48 bytes
-    emitter.instruction("add x2, sp, #64");                                     // x2 = format string pointer
-    emitter.instruction("ldr d0, [sp, #88]");                                   // reload the float value
-    emitter.instruction("str d0, [sp, #-16]!");                                 // push double for variadic ABI, adjust sp
-    emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0
-    emitter.instruction("add sp, sp, #16");                                     // pop the variadic argument from stack
+    // -- measure: len = snprintf(NULL, 0, "%.*f", decimals, number) --
+    emit_star_f_snprintf_aarch64(emitter, false);
     emitter.instruction("str x0, [sp, #80]");                                   // save raw string length
+
+    // -- raw text goes past the widest grouped output: concat_buf + off + 2*len + 16 --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
+    emitter.instruction("ldr x8, [x6]");                                        // load current concat_buf write offset
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    emitter.instruction("add x9, x7, x8");                                      // x9 = output start
+    emitter.instruction("ldr x10, [sp, #80]");                                  // reload the raw length
+    emitter.instruction("add x9, x9, x10, lsl #1");                             // skip twice the raw length (grouping adds at most len/3 bytes)
+    emitter.instruction("add x9, x9, #16");                                     // plus slack for the sign
+    emitter.instruction("str x9, [sp, #64]");                                   // save the raw text pointer
+
+    // -- render: snprintf(raw, len + 1, "%.*f", decimals, number) --
+    emit_star_f_snprintf_aarch64(emitter, true);
 
     // -- set up concat_buf destination --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
@@ -92,7 +91,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #72]");                                  // save result start pointer
 
     // -- scan raw string to find integer part length --
-    emitter.instruction("add x11, sp, #0");                                     // x11 = source ptr (snprintf output)
+    emitter.instruction("ldr x11, [sp, #64]");                                  // x11 = source ptr (snprintf output)
     emitter.instruction("ldr x12, [sp, #80]");                                  // x12 = raw string length
     emitter.instruction("mov x13, #0");                                         // x13 = integer part digit count
 
@@ -192,25 +191,29 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // preserve the requested decimal count across the intermediate formatting and copy loops
     emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // preserve the decimal-separator byte across the intermediate formatting and copy loops
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the thousands-separator byte across the intermediate formatting and copy loops
-    emitter.instruction("mov BYTE PTR [rbp - 72], 37");                         // seed the mini format string with the leading '%' introducer
-    emitter.instruction("mov BYTE PTR [rbp - 71], 46");                         // append the '.' precision introducer to the mini format string
-    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the requested decimal count before converting it into the single supported ASCII precision digit
-    emitter.instruction("add r8b, 48");                                         // convert the requested decimal count into its single-digit ASCII representation for the mini format string
-    emitter.instruction("mov BYTE PTR [rbp - 70], r8b");                        // append the ASCII precision digit to the mini format string
-    emitter.instruction("mov BYTE PTR [rbp - 69], 102");                        // append the trailing 'f' format type so snprintf renders a fixed-point decimal string
-    emitter.instruction("mov BYTE PTR [rbp - 68], 0");                          // null-terminate the mini format string before handing it to snprintf
-    emitter.instruction("lea rdi, [rbp - 120]");                                // point snprintf at the fixed local raw-decimal buffer that will be post-processed for thousands separators
-    emitter.instruction("mov esi, 48");                                         // bound the raw-decimal buffer to 48 bytes before the variadic snprintf call
-    emitter.instruction("lea rdx, [rbp - 72]");                                 // pass the mini format string to snprintf as the fixed-point format pointer
-    emitter.instruction("mov eax, 1");                                          // advertise one live SIMD variadic register because the formatted number is passed in xmm0 on SysV x86_64
-    emitter.bl_c("snprintf");                                                   // render the raw fixed-point decimal string into the local snprintf buffer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the raw snprintf byte count before the thousands-separator pass consumes caller-saved registers
+    emitter.instruction("xor eax, eax");                                        // zero for the precision clamp
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // negative precision?
+    emitter.instruction("cmovl rdi, rax");                                      // clamp it to zero
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the clamped decimals count
+    emitter.instruction("movsd QWORD PTR [rbp - 80], xmm0");                    // keep the number across both snprintf calls
+    emitter.instruction("xor edi, edi");                                        // measuring pass: no output buffer
+    emitter.instruction("xor esi, esi");                                        // measuring pass: zero capacity
+    emit_star_f_snprintf_x86_64(emitter);
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // raw fixed-point length
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // current concat-buffer offset
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    emitter.instruction("lea rdi, [r9 + r8 + 16]");                             // output start plus slack for the sign
+    emitter.instruction("lea rdi, [rdi + rax * 2]");                            // raw text goes past the widest grouped output
+    emitter.instruction("mov QWORD PTR [rbp - 72], rdi");                       // save the raw text pointer
+    emitter.instruction("lea rsi, [rax + 1]");                                  // capacity = length + NUL
+    emit_star_f_snprintf_x86_64(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r13", "_concat_off");
     emitter.instruction("mov r8, QWORD PTR [r13]");                             // load the current concat-buffer write cursor before appending the formatted output
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("lea rbx, [r9 + r8]");                                  // compute the concat-buffer destination cursor where the formatted output will begin
     emitter.instruction("mov r12, rbx");                                        // preserve the concat-buffer start pointer for the final x86_64 string return pair
-    emitter.instruction("lea r10, [rbp - 120]");                                // point at the raw snprintf output buffer before scanning for a leading minus sign and decimal point
+    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // point at the raw snprintf output before scanning for a leading minus sign and decimal point
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the raw snprintf byte count before splitting the integer and decimal parts
     emitter.instruction("movzx eax, BYTE PTR [r10]");                           // peek at the first raw formatted byte to detect a leading minus sign
     emitter.instruction("cmp al, 45");                                          // is the first raw formatted byte the leading '-' sign?
@@ -297,4 +300,36 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbx");                                             // restore the saved concat-buffer destination cursor register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the x86_64 formatted string pair
     emitter.instruction("ret");                                                 // return the formatted string pointer and length in the standard x86_64 string result registers
+}
+
+/// Emits `snprintf(x0, x1, "%.*f", decimals, number)` for AArch64 with the decimals count at
+/// `[sp+96]` and the number at `[sp+88]`; `render` selects the raw buffer at `[sp+64]` with
+/// capacity `[sp+80] + 1` instead of the `(NULL, 0)` measuring call. Variadic arguments are
+/// passed both in registers (Linux) and on the stack (Apple).
+fn emit_star_f_snprintf_aarch64(emitter: &mut Emitter, render: bool) {
+    if render {
+        emitter.instruction("ldr x0, [sp, #64]");                               // raw text buffer
+        emitter.instruction("ldr x1, [sp, #80]");                               // raw length
+        emitter.instruction("add x1, x1, #1");                                  // capacity = length + NUL
+    } else {
+        emitter.instruction("mov x0, #0");                                      // measuring pass: no output buffer
+        emitter.instruction("mov x1, #0");                                      // measuring pass: zero capacity
+    }
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x2", "_fmt_star_f");
+    emitter.instruction("ldrsw x3, [sp, #96]");                                 // precision argument (32-bit slot)
+    emitter.instruction("ldr d0, [sp, #88]");                                   // number argument
+    emitter.instruction("sub sp, sp, #16");                                     // variadic stack slots
+    emitter.instruction("str x3, [sp]");                                        // precision (stack-passed variadics)
+    emitter.instruction("str d0, [sp, #8]");                                    // number (stack-passed variadics)
+    emitter.bl_c("snprintf");                                                   // x0 = formatted length
+    emitter.instruction("add sp, sp, #16");                                     // drop the variadic slots
+}
+
+/// Emits `snprintf(rdi, rsi, "%.*f", [rbp-56], [rbp-80])` for x86_64 SysV.
+fn emit_star_f_snprintf_x86_64(emitter: &mut Emitter) {
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_fmt_star_f");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // precision argument
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 80]");                    // number argument
+    emitter.instruction("mov eax, 1");                                          // one vector register carries a variadic argument
+    emitter.bl_c("snprintf");                                                   // rax = formatted length
 }

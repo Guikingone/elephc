@@ -178,6 +178,8 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("cbz x20, __rt_sprintf_end_spec");                      // no chars left
     emitter.instruction("ldrb w12, [x19], #1");                                 // load type char, consume it
     emitter.instruction("sub x20, x20, #1");                                    // decrement remaining
+    emitter.instruction("cmp w12, #108");                                       // PHP accepts and ignores an `l` length modifier
+    emitter.instruction("b.eq __rt_sprintf_scan_type");                         // skip it and read the real type character
 
     // Dispatch by type character
     emitter.instruction("cmp w12, #102");                                       // 'f' ?
@@ -208,6 +210,22 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [x15]");                                       // load float bits as integer
     emitter.instruction("add x21, x21, #1");                                    // increment arg index
 
+    // -- PHP spells non-finite values INF / NaN (libc: inf / nan) --
+    emitter.instruction("ubfx x4, x3, #52, #11");                               // biased exponent
+    emitter.instruction("cmp x4, #2047");                                       // NaN or infinity?
+    emitter.instruction("b.ne __rt_sprintf_float_finite");                      // finite: format through snprintf
+    emitter.instruction("lsl x4, x3, #12");                                     // significand bits
+    emitter.instruction("mov w5, #0x4e49");                                     // "IN"
+    emitter.instruction("movk w5, #0x46, lsl #16");                             // "INF"
+    emitter.instruction("mov w6, #0x614e");                                     // "Na"
+    emitter.instruction("movk w6, #0x4e, lsl #16");                             // "NaN"
+    emitter.instruction("cmp x4, #0");                                          // zero significand means infinity
+    emitter.instruction("csel w5, w5, w6, eq");                                 // pick the PHP spelling
+    emitter.instruction("str w5, [x23]");                                       // write the three letters (plus a scratch NUL)
+    emitter.instruction("add x23, x23, #3");                                    // advance the concat-buffer cursor
+    emitter.instruction("b __rt_sprintf_loop");                                 // next format char
+    emitter.label("__rt_sprintf_float_finite");
+
     if emitter.platform == Platform::Linux {
         emitter.instruction("fmov d0, x3");                                     // pass first variadic double in the Linux AArch64 FP register
     }
@@ -216,15 +234,18 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp]");                                        // variadic float bits at [sp]
 
     // -- call snprintf(buf, 128, fmt) with variadic float on stack --
-    emitter.instruction("add x0, sp, #112");                                    // output buffer at sp+112
-    emitter.instruction("mov x1, #128");                                        // buffer size
+    emitter.instruction("mov x0, x23");                                         // format straight into the concat-buffer cursor
+    emitter.instruction("mov x1, #4096");                                       // bound one conversion to 4 KiB
     emitter.instruction("add x2, sp, #80");                                     // mini format string at sp+80
     emitter.bl_c("snprintf");                                        // call libc snprintf
     // x0 = number of chars written
 
     // -- copy snprintf result to concat_buf --
-    emitter.instruction("mov x4, x0");                                          // chars to copy
-    emitter.instruction("add x3, sp, #112");                                    // source buffer
+    emitter.instruction("mov x4, #4095");                                       // longest conversion snprintf could store
+    emitter.instruction("cmp x0, x4");                                          // was the conversion truncated?
+    emitter.instruction("csel x0, x0, x4, ls");                                 // count only the bytes actually written
+    emitter.instruction("add x23, x23, x0");                                    // the conversion is already in place: advance the cursor
+    emitter.instruction("mov x4, #0");                                          // nothing left to copy
 
     emitter.label("__rt_sprintf_copy_f");
     emitter.instruction("cbz x4, __rt_sprintf_copy_f_done");                    // no bytes left
@@ -266,15 +287,18 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp]");                                        // variadic int at [sp]
 
     // -- call snprintf(buf, 128, fmt) with variadic int on stack --
-    emitter.instruction("add x0, sp, #112");                                    // output buffer at sp+112
-    emitter.instruction("mov x1, #128");                                        // buffer size
+    emitter.instruction("mov x0, x23");                                         // format straight into the concat-buffer cursor
+    emitter.instruction("mov x1, #4096");                                       // bound one conversion to 4 KiB
     emitter.instruction("add x2, sp, #80");                                     // mini format string at sp+80
     emitter.bl_c("snprintf");                                        // call libc snprintf
     // x0 = number of chars written
 
     // -- copy snprintf result to concat_buf --
-    emitter.instruction("mov x4, x0");                                          // chars to copy
-    emitter.instruction("add x3, sp, #112");                                    // source buffer
+    emitter.instruction("mov x4, #4095");                                       // longest conversion snprintf could store
+    emitter.instruction("cmp x0, x4");                                          // was the conversion truncated?
+    emitter.instruction("csel x0, x0, x4, ls");                                 // count only the bytes actually written
+    emitter.instruction("add x23, x23, x0");                                    // the conversion is already in place: advance the cursor
+    emitter.instruction("mov x4, #0");                                          // nothing left to copy
 
     emitter.label("__rt_sprintf_copy_i");
     emitter.instruction("cbz x4, __rt_sprintf_copy_i_done");                    // no bytes left
@@ -329,15 +353,18 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp]");                                        // variadic string ptr at [sp]
 
     // -- call snprintf(buf, 128, fmt) with variadic string ptr on stack --
-    emitter.instruction("add x0, sp, #112");                                    // output buffer at sp+112
-    emitter.instruction("mov x1, #128");                                        // buffer size
+    emitter.instruction("mov x0, x23");                                         // format straight into the concat-buffer cursor
+    emitter.instruction("mov x1, #4096");                                       // bound one conversion to 4 KiB
     emitter.instruction("add x2, sp, #80");                                     // mini format string at sp+80
     emitter.bl_c("snprintf");                                        // call libc snprintf
     // x0 = number of chars written
 
     // -- copy snprintf result to concat_buf --
-    emitter.instruction("mov x4, x0");                                          // chars to copy
-    emitter.instruction("add x3, sp, #112");                                    // source buffer
+    emitter.instruction("mov x4, #4095");                                       // longest conversion snprintf could store
+    emitter.instruction("cmp x0, x4");                                          // was the conversion truncated?
+    emitter.instruction("csel x0, x0, x4, ls");                                 // count only the bytes actually written
+    emitter.instruction("add x23, x23, x0");                                    // the conversion is already in place: advance the cursor
+    emitter.instruction("mov x4, #0");                                          // nothing left to copy
 
     emitter.label("__rt_sprintf_copy_s");
     emitter.instruction("cbz x4, __rt_sprintf_copy_s_done");                    // no bytes left

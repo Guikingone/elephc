@@ -294,6 +294,12 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = var_export_prelude::inject_if_used(ast);
     timings.record_since("var-export-prelude", phase_started);
 
+    // The sprintf-family prelude, for calls the name resolver routed to `__elephc_*printf`
+    // (same stage and rationale as var_export_prelude).
+    let phase_started = Instant::now();
+    let ast = crate::printf_prelude::inject_if_used(ast);
+    timings.record_since("printf-prelude", phase_started);
+
     // Inject the register_shutdown_function prelude (a pure elephc-PHP callback registry) only
     // when the program references register_shutdown_function and does not declare its own.
     // Placed at the exact same pipeline stage as var_export_prelude for the same reasons: after

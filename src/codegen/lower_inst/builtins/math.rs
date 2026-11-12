@@ -775,6 +775,70 @@ fn emit_round_loaded_float_with_precision(
     Ok(())
 }
 
+/// Pre-rounds the loaded float to `precision` decimals like `round()` (ties away from zero),
+/// leaving the value unchanged when the scaled value is not below 2^52 (no fractional digits
+/// left, or an infinite/NaN scale from a huge precision). Used by `number_format()`, which
+/// rounds before formatting so `-0.5` prints as `-1`.
+pub(crate) fn emit_preround_loaded_float(
+    ctx: &mut FunctionContext<'_>,
+    precision: crate::ir::ValueId,
+    name: &str,
+) -> Result<()> {
+    let keep = ctx.next_label("preround_keep");
+    let done = ctx.next_label("preround_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str d0, [sp, #-16]!");                     // keep the original value
+            load_precision_as_int(ctx, precision, name)?;
+            ctx.emitter.instruction("scvtf d1, x0");                            // precision as the pow() exponent
+            ctx.emitter.instruction("fmov d0, #10.0");                          // pow() base 10
+            ctx.emitter.bl_c("pow");                                            // d0 = 10^precision
+            ctx.emitter.instruction("ldr d1, [sp]");                            // reload the original value
+            ctx.emitter.instruction("fmul d2, d1, d0");                         // scaled = value * 10^precision
+            ctx.emitter.instruction("fabs d3, d2");                             // |scaled|
+            ctx.emitter.instruction("mov x9, #0x4330000000000000");             // 2^52
+            ctx.emitter.instruction("fmov d4, x9");                             // 2^52 as a double
+            ctx.emitter.instruction("fcmp d3, d4");                             // does the scaled value still have a fraction?
+            ctx.emitter.instruction(&format!("b.pl {}", keep));                 // no (or NaN): format the value as is
+            ctx.emitter.instruction("frinta d2, d2");                           // round half away from zero
+            ctx.emitter.instruction("fdiv d0, d2, d0");                         // scale back
+            ctx.emitter.instruction("add sp, sp, #16");                         // drop the original value
+            ctx.emitter.instruction(&format!("b {}", done));                    // rounded value ready
+            ctx.emitter.label(&keep);
+            ctx.emitter.instruction("ldr d0, [sp], #16");                       // restore the original value
+        }
+        Arch::X86_64 => {
+            abi::emit_push_float_reg(ctx.emitter, "xmm0");
+            load_precision_as_int(ctx, precision, name)?;
+            ctx.emitter.instruction("cvtsi2sd xmm1, rax");                      // precision as the pow() exponent
+            ctx.emitter.instruction("mov rax, 0x4024000000000000");             // 10.0
+            ctx.emitter.instruction("movq xmm0, rax");                          // pow() base 10
+            ctx.emitter.bl_c("pow");                                            // xmm0 = 10^precision
+            ctx.emitter.instruction("movsd xmm1, QWORD PTR [rsp]");             // reload the original value
+            ctx.emitter.instruction("mulsd xmm1, xmm0");                        // scaled = value * 10^precision
+            ctx.emitter.instruction("movq rax, xmm1");                          // scaled bits
+            ctx.emitter.instruction("btr rax, 63");                             // |scaled|
+            ctx.emitter.instruction("movq xmm2, rax");                          // |scaled| as a double
+            ctx.emitter.instruction("mov rax, 0x4330000000000000");             // 2^52
+            ctx.emitter.instruction("movq xmm3, rax");                          // 2^52 as a double
+            ctx.emitter.instruction("ucomisd xmm2, xmm3");                      // does the scaled value still have a fraction?
+            ctx.emitter.instruction(&format!("jp {}", keep));                   // NaN: format the value as is
+            ctx.emitter.instruction(&format!("jae {}", keep));                  // no fraction left: format the value as is
+            abi::emit_push_float_reg(ctx.emitter, "xmm0");
+            ctx.emitter.instruction("movsd xmm0, xmm1");                        // round() argument
+            ctx.emitter.bl_c("round");                                          // round half away from zero
+            abi::emit_pop_float_reg(ctx.emitter, "xmm1");
+            ctx.emitter.instruction("divsd xmm0, xmm1");                        // scale back
+            ctx.emitter.instruction("add rsp, 16");                             // drop the original value
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // rounded value ready
+            ctx.emitter.label(&keep);
+            abi::emit_pop_float_reg(ctx.emitter, "xmm0");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Emits absolute value for the loaded floating-point result.
 fn emit_float_abs(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {

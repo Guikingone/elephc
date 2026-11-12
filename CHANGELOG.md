@@ -4,6 +4,12 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- `sprintf`/`printf`/`vsprintf`/`vprintf`/`fprintf`/`vfprintf` follow PHP's `formatted_print.c` exactly: calls the native formatter cannot reproduce (dynamic formats, `%1$s`, `*`, `'c` padding, `b`/`u`/`e`/`E`/`g`/`G`/`F`, `l`, spread or missing arguments) are routed by the name resolver to an elephc-PHP prelude (`printf_prelude`), including the `ValueError`/`ArgumentCountError` messages; the native path now uses 64-bit integer conversions on x86_64, PHP's `INF`/`NaN` spellings, and no longer overflows its 128-byte scratch buffer.
+- `(int)` of a float follows `zend_dval_to_lval`: NaN/±INF give 0 and out-of-range values wrap modulo 2^64 (they produced `PHP_INT_MIN`); out-of-range numeric strings saturate on x86_64 too.
+- `number_format()` rounds half away from zero before formatting (`-0.5` → `-1`), prints no sign for values rounding to zero, and supports any number of decimals (it printed `%.0Nf` past 9) and negative decimal counts.
+- Fixed: `bindec()`/`octdec()` crashed on x86_64 (input read from the wrong registers).
+- Fixed: returning a string/array parameter (`function f(string $s) { return $s; }`) freed the caller's value twice; the return now takes its own reference, and such functions are no longer inlined.
+- Added the `DivisionByZeroError` and `ArgumentCountError` builtin classes.
 - php-src conformance suite: 195 `.phpt` tests from php-src (`ext/standard/tests/{array,strings,math}`, `ext/json/tests`) rewritten as Rust tests under `tests/codegen/php_src/`, with the triage/migration scripts in `scripts/php-src/`.
 - Builtin aliases `sizeof`, `join`, `is_integer`, `is_long`, `is_double`, `key_exists`, `pos`, `strchr`, `doubleval`, `fputs`, `ini_alter`, `show_source`, `diskfreespace`, `is_writeable` (and the other PHP function aliases) resolve to their canonical builtin.
 - `SORT_REGULAR`, `SORT_NUMERIC` and `SORT_LOCALE_STRING` constants are defined.

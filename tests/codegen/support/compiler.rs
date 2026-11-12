@@ -111,6 +111,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     // register_shutdown_function prelude (usage inside PSR-4 autoloaded files is detected too).
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
     let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
+    let resolved = elephc::printf_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_ini_prelude::inject_if_used(resolved);
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved);
     let resolved = elephc::upload_prelude::inject_if_used(resolved);
@@ -600,6 +601,7 @@ pub(crate) fn compile_expect_check_error(source: &str) -> String {
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
     let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
+    let resolved = elephc::printf_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_ini_prelude::inject_if_used(resolved);
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved);
     let resolved = elephc::upload_prelude::inject_if_used(resolved);

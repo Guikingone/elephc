@@ -276,6 +276,8 @@ fn collect_emitted_class_names(
         "TypeError",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "ArgumentCountError",
         "UnhandledMatchError",
         "Exception",
         "LogicException",

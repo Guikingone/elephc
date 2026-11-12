@@ -991,6 +991,8 @@ fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
             | "TypeError"
             | "ValueError"
             | "ArithmeticError"
+            | "DivisionByZeroError"
+            | "ArgumentCountError"
             | "UnhandledMatchError"
             | "Exception"
             | "RuntimeException"
@@ -1598,6 +1600,8 @@ fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "DomainException",
         "Error",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "ArgumentCountError",
         "Exception",
         "Fiber",
         "FiberError",
@@ -1622,6 +1626,8 @@ fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "UnexpectedValueException",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "ArgumentCountError",
         "stdClass",
     ]
 }
@@ -1705,6 +1711,8 @@ fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "UnexpectedValueException",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "ArgumentCountError",
         "stdClass",
     ]
 }

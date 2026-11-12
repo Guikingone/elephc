@@ -272,11 +272,41 @@ pub fn emit_int_result_to_float_result(emitter: &mut Emitter) {
     }
 }
 
-/// Truncates the floating-point result register value to the integer result register.
+/// Converts the floating-point result register to the integer result register with PHP's
+/// `(int)` semantics (`zend_dval_to_lval`): in-range values truncate toward zero, NaN and
+/// infinities become 0, and other out-of-range values wrap modulo 2^64.
 ///
-/// AArch64: `fcvtzs` (floating-point convert to signed fixed-point). x86_64: `cvttsd2si` (convert with truncation).
-/// Used when a PHP float must be coerced to int in mixed arithmetic contexts.
+/// The common in-range case stays a single `fcvtzs` / `cvttsd2si`; only a saturated
+/// (AArch64) or "integer indefinite" (x86_64) result calls `__rt_dval_to_lval_slow`, which
+/// preserves every register except the integer result (and the link register on AArch64,
+/// which every emitted function body saves in its prologue).
 pub fn emit_float_result_to_int_result(emitter: &mut Emitter) {
+    let int_reg = int_result_reg(emitter);
+    let float_reg = float_result_reg(emitter);
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("fcvtzs {}, {}", int_reg, float_reg));    // truncate the floating-point result into the integer result register
+            emitter.instruction(&format!("cmp {}, #1", int_reg));                  // overflows only for the saturated INT64_MIN
+            emitter.instruction("b.vs 1f");                                     // saturated low: PHP wraps modulo 2^64
+            emitter.instruction(&format!("cmn {}, #1", int_reg));                  // overflows only for the saturated INT64_MAX
+            emitter.instruction("b.vc 2f");                                     // in range: the truncation is the PHP result
+            emitter.raw("1:");
+            emitter.instruction("bl __rt_dval_to_lval_slow");                   // NaN/Inf -> 0, otherwise wrap modulo 2^64
+            emitter.raw("2:");
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("cvttsd2si {}, {}", int_reg, float_reg)); // truncate the floating-point result into the integer result register
+            emitter.instruction(&format!("cmp {}, 1", int_reg));                   // overflows only for the "integer indefinite" INT64_MIN
+            emitter.instruction("jno 1f");                                      // in range: the truncation is the PHP result
+            emitter.instruction("call __rt_dval_to_lval_slow");                 // NaN/Inf -> 0, otherwise wrap modulo 2^64
+            emitter.raw("1:");
+        }
+    }
+}
+
+/// Truncates the floating-point result register to the integer result register with the
+/// raw machine conversion (saturating on AArch64, INT64_MIN on x86_64 when out of range).
+pub fn emit_float_result_to_int_result_raw(emitter: &mut Emitter) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
             let inst = format!(

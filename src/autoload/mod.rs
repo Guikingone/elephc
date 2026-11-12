@@ -48,6 +48,8 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "EmptyIterator",
     "Error",
     "ArithmeticError",
+    "DivisionByZeroError",
+    "ArgumentCountError",
     "UnhandledMatchError",
     "Exception",
     "Fiber",

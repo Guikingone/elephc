@@ -67,7 +67,7 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
-    emitter.instruction("fcvtzs x0, d0");                                       // truncate the float payload toward zero
+    abi::emit_float_result_to_int_result(emitter);                              // PHP (int): truncate, NaN/Inf -> 0, wrap out-of-range values
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the converted integer result
 
     emitter.label("__rt_mixed_cast_int_from_bool");
@@ -139,7 +139,7 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_from_float_linux_x86_64");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the floating-point result register
-    emitter.instruction("cvttsd2si rax, xmm0");                                 // truncate the floating-point payload toward zero
+    abi::emit_float_result_to_int_result(emitter);                              // PHP (int): truncate, NaN/Inf -> 0, wrap out-of-range values
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the converted integer result
 
     emitter.label("__rt_mixed_cast_int_from_bool_linux_x86_64");

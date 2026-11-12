@@ -9,6 +9,7 @@
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 
 mod itoa;
+mod dval_to_lval;
 mod concat;
 mod str_bitwise;
 mod string_offset_set;
@@ -189,6 +190,7 @@ pub use explode::emit_explode;
 pub use implode::emit_implode;
 /// Emit implode (join array to string) helper.
 pub use implode_int::{emit_implode_float, emit_implode_int};
+pub use dval_to_lval::emit_dval_to_lval_slow;
 /// Emit integer-optimized implode helper.
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.

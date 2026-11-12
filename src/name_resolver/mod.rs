@@ -10,6 +10,7 @@
 
 mod expressions;
 mod names;
+mod printf_calls;
 mod declarations;
 mod statements;
 mod symbols;

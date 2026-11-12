@@ -367,12 +367,24 @@ pub(super) fn lower_addcslashes(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// The runtime helper ignores non-hexadecimal bytes (matching PHP) and folds the
 /// hex digits into a 64-bit integer returned in the int result register.
 pub(super) fn lower_hexdec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "hexdec", 1)?;
+    lower_base_digits_to_int(ctx, inst, "hexdec", "__rt_hexdec")
+}
+
+/// Lowers `bindec()` / `octdec()` / `hexdec()`: the digit-folding helpers take the string in
+/// the first two argument registers (x1/x2 on AArch64, rdi/rsi on x86_64), not in the string
+/// result registers.
+pub(super) fn lower_base_digits_to_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => load_string_arg_to_regs(ctx, inst, 0, "hexdec", "x1", "x2")?,
-        Arch::X86_64 => load_string_arg_to_regs(ctx, inst, 0, "hexdec", "rdi", "rsi")?,
+        Arch::AArch64 => load_string_arg_to_regs(ctx, inst, 0, name, "x1", "x2")?,
+        Arch::X86_64 => load_string_arg_to_regs(ctx, inst, 0, name, "rdi", "rsi")?,
     }
-    abi::emit_call_label(ctx.emitter, "__rt_hexdec");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
 }
 
@@ -1454,6 +1466,25 @@ pub(crate) fn lower_number_format(
 
     let number = expect_operand(inst, 0)?;
     load_as_float(ctx, number, "number_format")?;
+    // PHP rounds to the requested decimals (half away from zero) before formatting.
+    match inst.operands.get(1).copied() {
+        Some(decimals) => super::math::emit_preround_loaded_float(ctx, decimals, "number_format")?,
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("frinta d0, d0"),          // round half away from zero to an integer
+            Arch::X86_64 => ctx.emitter.bl_c("round"),                          // round half away from zero to an integer
+        },
+    }
+    // A value that rounds to zero prints without a sign (`-0.4` -> "0"): -0.0 + 0.0 is +0.0.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("movi d1, #0");                             // +0.0
+            ctx.emitter.instruction("fadd d0, d0, d1");                         // normalize -0.0 to +0.0
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // +0.0
+            ctx.emitter.instruction("addsd xmm0, xmm1");                        // normalize -0.0 to +0.0
+        }
+    }
     abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
 
     push_decimal_count(ctx, inst)?;

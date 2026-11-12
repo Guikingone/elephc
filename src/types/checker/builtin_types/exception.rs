@@ -458,6 +458,8 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
         "TypeError",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "ArgumentCountError",
         "UnhandledMatchError",
         "Exception",
         "RuntimeException",

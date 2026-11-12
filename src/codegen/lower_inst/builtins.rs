@@ -139,11 +139,11 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "strspn" => strings::lower_span(ctx, inst, "strspn", "__rt_strspn"),
         "strpbrk" => strings::lower_strpbrk(ctx, inst),
         "hexdec" => strings::lower_hexdec(ctx, inst),
-        "bindec" => strings::lower_unary_string_runtime(ctx, inst, "bindec", "__rt_bindec"),
+        "bindec" => strings::lower_base_digits_to_int(ctx, inst, "bindec", "__rt_bindec"),
         "dechex" => strings::lower_int_to_base_string(ctx, inst, "dechex", "__rt_dechex"),
         "decoct" => strings::lower_int_to_base_string(ctx, inst, "decoct", "__rt_decoct"),
         "decbin" => strings::lower_int_to_base_string(ctx, inst, "decbin", "__rt_decbin"),
-        "octdec" => strings::lower_unary_string_runtime(ctx, inst, "octdec", "__rt_octdec"),
+        "octdec" => strings::lower_base_digits_to_int(ctx, inst, "octdec", "__rt_octdec"),
         "substr_count" => strings::lower_substr_count(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }

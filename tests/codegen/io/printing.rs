@@ -693,6 +693,7 @@ fn test_var_export_in_autoloaded_file_is_injected() {
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved = elephc::printf_prelude::inject_if_used(resolved);
     let (resolved, _warnings) =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);

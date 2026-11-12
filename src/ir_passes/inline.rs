@@ -188,6 +188,15 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
     if !direct_return_cleanup_is_inline_safe(callee) {
         return false;
     }
+    // Returning a refcounted parameter hands the caller a value it then owns and releases,
+    // but the spliced body would pass the host's borrowed argument through unchanged (the
+    // real call's return path retains it), so the caller's release would free the
+    // argument's storage under its owner.
+    if callee.return_type.is_refcounted_storage()
+        && !callee_directly_returned_slots(callee).is_disjoint(&callee_param_slots(callee))
+    {
+        return false;
+    }
     true
 }
 

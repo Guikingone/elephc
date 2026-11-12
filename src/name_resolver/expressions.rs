@@ -91,6 +91,13 @@ pub(super) fn resolve_expr(
                     name: resolved_name(function_name),
                     args: resolved_args,
                 }
+            } else if let Some(prelude) =
+                super::printf_calls::printf_prelude_target(&function_name, &resolved_args)
+            {
+                ExprKind::FunctionCall {
+                    name: resolved_name(prelude.to_string()),
+                    args: resolved_args,
+                }
             } else if let Some(rewritten) =
                 rewrite_date_procedural_alias(&function_name, &resolved_args)
             {

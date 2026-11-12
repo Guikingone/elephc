@@ -1009,7 +1009,7 @@ fn function_cleanup_locals(
 }
 
 /// Returns whether a local slot is populated from the function's incoming parameter ABI.
-fn local_slot_is_parameter(function: &Function, slot: LocalSlotId) -> bool {
+pub(super) fn local_slot_is_parameter(function: &Function, slot: LocalSlotId) -> bool {
     function.params.get(slot.as_raw() as usize).is_some()
 }
 

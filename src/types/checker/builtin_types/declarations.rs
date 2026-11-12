@@ -60,7 +60,8 @@ impl Clone for InterfaceDeclInfo {
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
 /// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
-/// ArithmeticError/UnhandledMatchError extend Error; RuntimeException/
+/// ArithmeticError/UnhandledMatchError extend Error; DivisionByZeroError extends
+/// ArithmeticError; ArgumentCountError extends TypeError; RuntimeException/
 /// ReflectionException extend Exception; JsonException extends RuntimeException;
 /// FiberError extends Error. Fiber is final with no parent.
 pub(crate) fn inject_builtin_throwables(
@@ -73,6 +74,8 @@ pub(crate) fn inject_builtin_throwables(
         "TypeError",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "ArgumentCountError",
         "UnhandledMatchError",
         "Exception",
         "RuntimeException",
@@ -273,6 +276,42 @@ pub(crate) fn inject_builtin_throwables(
             name: "ArithmeticError".to_string(),
             span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "DivisionByZeroError".to_string(),
+        FlattenedClass {
+            name: "DivisionByZeroError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("ArithmeticError".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "ArgumentCountError".to_string(),
+        FlattenedClass {
+            name: "ArgumentCountError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("TypeError".to_string()),
             implements: Vec::new(),
             is_abstract: false,
             is_final: false,

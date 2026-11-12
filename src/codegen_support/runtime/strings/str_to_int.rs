@@ -60,7 +60,7 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
     emitter.instruction("b __rt_str_to_int_done");                              // skip the float-truncation path
 
     emitter.label("__rt_str_to_int_float");
-    abi::emit_float_result_to_int_result(emitter);                              // truncate the parsed double in d0 toward zero for PHP float-string casts
+    abi::emit_float_result_to_int_result_raw(emitter);                              // truncate the parsed double in d0 toward zero for PHP float-string casts
 
     emitter.label("__rt_str_to_int_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame pointer and return address
@@ -107,7 +107,13 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_str_to_int_done_linux_x86_64");               // skip the float-truncation path
 
     emitter.label("__rt_str_to_int_float_linux_x86_64");
-    abi::emit_float_result_to_int_result(emitter);                              // truncate the parsed double in xmm0 toward zero for PHP float-string casts
+    abi::emit_float_result_to_int_result_raw(emitter);                              // truncate the parsed double in xmm0 toward zero for PHP float-string casts
+    emitter.instruction("cmp rax, 1");                                          // overflows only for the out-of-range "integer indefinite" value
+    emitter.instruction("jno __rt_str_to_int_done_linux_x86_64");               // in range: keep the truncation
+    emitter.instruction("movq r8, xmm0");                                       // out of range: inspect the sign of the parsed double
+    emitter.instruction("test r8, r8");                                         // negative overflow?
+    emitter.instruction("js __rt_str_to_int_done_linux_x86_64");                // yes: numeric strings saturate to PHP_INT_MIN
+    emitter.instruction("mov rax, 0x7fffffffffffffff");                         // positive overflow saturates to PHP_INT_MAX like AArch64's fcvtzs
 
     emitter.label("__rt_str_to_int_done_linux_x86_64");
     emitter.instruction("add rsp, 48");                                         // release the helper frame

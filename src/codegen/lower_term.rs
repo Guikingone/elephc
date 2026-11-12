@@ -64,6 +64,17 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             if ctx.function.return_php_type.codegen_repr() == PhpType::TaggedScalar {
                 super::lower_inst::coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             }
+            // Returning a borrowed parameter: the caller owns (and releases) the call result,
+            // but the argument still belongs to the caller's own variable, so take a reference.
+            if let Some(slot) = skip_return_slot {
+                if frame::local_slot_is_parameter(ctx.function, slot) && !ctx.owns_parameter_slot(slot) {
+                    match source_ty.codegen_repr() {
+                        PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_str_persist"),
+                        other if other.is_refcounted() => abi::emit_incref_if_refcounted(ctx.emitter, &other),
+                        _ => {}
+                    }
+                }
+            }
             frame::emit_function_return_epilogue(ctx, skip_return_slot);
             Ok(())
         }

@@ -44,3 +44,4 @@ mod manticore_bench_gaps;
 mod review_bugs;
 mod ssa_registers;
 mod runtime_fast_paths;
+mod php_formatting_compliance;

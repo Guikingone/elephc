@@ -95,6 +95,8 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "UnexpectedValueException",
     "ValueError",
     "ArithmeticError",
+    "DivisionByZeroError",
+    "ArgumentCountError",
 ];
 
 /// Callback strategy supported by the current EIR `iterator_apply()` lowering.

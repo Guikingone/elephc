@@ -60,6 +60,7 @@ mod types;
 mod tz_prelude;
 mod upload_prelude;
 mod var_export_prelude;
+mod printf_prelude;
 mod web_prelude;
 
 /// Entry point for the `elephc` binary.

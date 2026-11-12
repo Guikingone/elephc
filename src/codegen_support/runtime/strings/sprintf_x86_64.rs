@@ -154,6 +154,20 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r8d, BYTE PTR [r12]");                           // load the terminal type character that completes the current mini format string
     emitter.instruction("add r12, 1");                                          // consume the type character from the source format string
     emitter.instruction("sub r13, 1");                                          // decrement the remaining format length after consuming the type character
+    emitter.instruction("cmp r8d, 108");                                        // PHP accepts and ignores an `l` length modifier
+    emitter.instruction("je __rt_sprintf_scan_type_linux_x86_64");              // skip it and read the real type character
+    for (index, conversion) in [b'd', b'i', b'u', b'x', b'X', b'o'].iter().enumerate() {
+        emitter.instruction(&format!("cmp r8d, {}", conversion));               // 64-bit integer conversion?
+        if index < 5 {
+            emitter.instruction("je __rt_sprintf_ll_linux_x86_64");             // yes: add the `ll` length modifier
+        } else {
+            emitter.instruction("jne __rt_sprintf_type_char_linux_x86_64");     // no: append the conversion as is
+        }
+    }
+    emitter.label("__rt_sprintf_ll_linux_x86_64");
+    emitter.instruction("mov WORD PTR [r10], 0x6c6c");                          // `ll`: PHP integers are 64-bit
+    emitter.instruction("add r10, 2");                                          // advance past the length modifier
+    emitter.label("__rt_sprintf_type_char_linux_x86_64");
     emitter.instruction("mov BYTE PTR [r10], r8b");                             // append the terminal type character to the mini format string
     emitter.instruction("add r10, 1");                                          // advance the mini format-string cursor after appending the type character
     emitter.instruction("mov BYTE PTR [r10], 0");                               // null-terminate the one-specifier mini format string for the upcoming snprintf call
@@ -177,17 +191,31 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_done_linux_x86_64");                  // stop formatting when the format string ends partway through a specifier
 
     emitter.label("__rt_sprintf_call_float_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // float bits
+    emitter.instruction("shl rax, 1");                                          // drop the sign
+    emitter.instruction("shr rax, 53");                                         // biased exponent
+    emitter.instruction("cmp eax, 2047");                                       // NaN or infinity?
+    emitter.instruction("jne __rt_sprintf_float_finite_linux_x86_64");          // finite: format through snprintf
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // float bits again
+    emitter.instruction("shl rax, 12");                                         // significand bits (zero for infinity)
+    emitter.instruction("mov eax, 0x464e49");                                   // "INF" (mov does not change the flags)
+    emitter.instruction("mov ecx, 0x4e614e");                                   // "NaN"
+    emitter.instruction("cmovnz eax, ecx");                                     // PHP spells NaN this way
+    emitter.instruction("mov DWORD PTR [rbx], eax");                            // write the three letters (plus a scratch NUL)
+    emitter.instruction("add rbx, 3");                                          // advance the concat-buffer cursor
+    emitter.instruction("jmp __rt_sprintf_loop_linux_x86_64");                  // resume scanning the format string
+    emitter.label("__rt_sprintf_float_finite_linux_x86_64");
     emitter.instruction("movq xmm0, QWORD PTR [r9]");                           // load the packed floating-point bits into xmm0 for the SysV variadic snprintf call
-    emitter.instruction("lea rdi, [rbp - 224]");                                // point snprintf at the fixed local output scratch buffer
-    emitter.instruction("mov esi, 128");                                        // bound the local snprintf output scratch buffer to 128 bytes
+    emitter.instruction("mov rdi, rbx");                                        // format straight into the concat-buffer cursor
+    emitter.instruction("mov esi, 4096");                                       // bound one conversion to 4 KiB
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
     emitter.instruction("mov eax, 1");                                          // advertise one live SIMD variadic register to the SysV variadic call ABI
     emitter.bl_c("snprintf");                                                   // format the floating operand into the local snprintf output scratch buffer
     emitter.instruction("jmp __rt_sprintf_copy_result_linux_x86_64");           // copy the freshly formatted snprintf output into the concat buffer
 
     emitter.label("__rt_sprintf_call_int_linux_x86_64");
-    emitter.instruction("lea rdi, [rbp - 224]");                                // point snprintf at the fixed local output scratch buffer
-    emitter.instruction("mov esi, 128");                                        // bound the local snprintf output scratch buffer to 128 bytes
+    emitter.instruction("mov rdi, rbx");                                        // format straight into the concat-buffer cursor
+    emitter.instruction("mov esi, 4096");                                       // bound one conversion to 4 KiB
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
     emitter.instruction("mov rcx, QWORD PTR [r9]");                             // load the packed integer payload into the first SysV variadic integer register
     emitter.instruction("xor eax, eax");                                        // advertise that no SIMD variadic registers are live for the integer snprintf call
@@ -195,8 +223,8 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_copy_result_linux_x86_64");           // copy the freshly formatted snprintf output into the concat buffer
 
     emitter.label("__rt_sprintf_call_char_linux_x86_64");
-    emitter.instruction("lea rdi, [rbp - 224]");                                // point snprintf at the fixed local output scratch buffer
-    emitter.instruction("mov esi, 128");                                        // bound the local snprintf output scratch buffer to 128 bytes
+    emitter.instruction("mov rdi, rbx");                                        // format straight into the concat-buffer cursor
+    emitter.instruction("mov esi, 4096");                                       // bound one conversion to 4 KiB
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
     emitter.instruction("mov ecx, DWORD PTR [r9]");                             // load the packed character payload into the first SysV variadic integer register
     emitter.instruction("xor eax, eax");                                        // advertise that no SIMD variadic registers are live for the char snprintf call
@@ -208,16 +236,19 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r9 + 8]");                         // load the packed string metadata word before extracting the elephc string length
     emitter.instruction("shr rdx, 8");                                          // extract the original elephc string length from the packed string metadata word
     emitter.instruction("call __rt_cstr");                                      // convert the elephc string pointer+length pair into a null-terminated C string in the scratch buffer
-    emitter.instruction("lea rdi, [rbp - 224]");                                // point snprintf at the fixed local output scratch buffer
-    emitter.instruction("mov esi, 128");                                        // bound the local snprintf output scratch buffer to 128 bytes
+    emitter.instruction("mov rdi, rbx");                                        // format straight into the concat-buffer cursor
+    emitter.instruction("mov esi, 4096");                                       // bound one conversion to 4 KiB
     emitter.instruction("lea rdx, [rbp - 96]");                                 // pass the one-specifier mini format string to snprintf as the format pointer
     emitter.instruction("mov rcx, rax");                                        // pass the null-terminated C string pointer in the first SysV variadic integer register
     emitter.instruction("xor eax, eax");                                        // advertise that no SIMD variadic registers are live for the string snprintf call
     emitter.bl_c("snprintf");                                                   // format the string operand into the local snprintf output scratch buffer
 
     emitter.label("__rt_sprintf_copy_result_linux_x86_64");
-    emitter.instruction("mov rcx, rax");                                        // copy the snprintf-written byte count before the result-copy loop consumes caller-saved registers
-    emitter.instruction("lea r10, [rbp - 224]");                                // point at the local snprintf output scratch buffer before copying its bytes into the concat buffer
+    emitter.instruction("mov ecx, 4095");                                       // longest conversion snprintf could store
+    emitter.instruction("cmp rax, rcx");                                        // was the conversion truncated?
+    emitter.instruction("cmova rax, rcx");                                      // count only the bytes actually written
+    emitter.instruction("add rbx, rax");                                        // the conversion is already in place: advance the cursor
+    emitter.instruction("xor ecx, ecx");                                        // nothing left to copy
     emitter.label("__rt_sprintf_copy_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // have all bytes produced by snprintf already been copied into the concat buffer?
     emitter.instruction("jz __rt_sprintf_loop_linux_x86_64");                   // resume scanning the source format string once the local snprintf output has been fully copied
