@@ -10,6 +10,8 @@
 //!   statement are reclaimed. Most statements (integer/float arithmetic, local stores, array
 //!   element reads) never touch the scratch area, so the reset before the next statement is a
 //!   redundant load/store pair in every loop iteration.
+//! - Calls/runtime calls and string producers other than plain loads are always dirtying,
+//!   because runtime helpers may write scratch strings without declaring `alloc_concat`.
 //! - A forward must-analysis tracks "clean" (offset equals the entry value): a reset makes the
 //!   state clean, and any instruction that may allocate scratch strings, call out, write
 //!   globals, print, warn, or throw makes it dirty. A fatal error ends the process, so it
@@ -20,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{BlockId, DataPool, Effects, Function, Op, Terminator};
+use crate::ir::{BlockId, DataPool, Effects, Function, Instruction, IrType, Op, Terminator};
 
 use super::cfg::{has_exception_handlers, successors};
 use super::driver::IrPass;
@@ -30,7 +32,7 @@ use super::rewrite::neutralize_to_nop;
 pub(crate) struct ConcatResetElim;
 
 /// Effects after which the scratch offset may differ from the function's entry value.
-fn dirties_scratch(effects: Effects) -> bool {
+fn dirty_effects(effects: Effects) -> bool {
     effects.intersects(
         Effects::ALLOC_CONCAT
             | Effects::WRITES_GLOBAL
@@ -41,6 +43,33 @@ fn dirties_scratch(effects: Effects) -> bool {
             | Effects::MAY_THROW
             | Effects::MAY_DEOPT,
     )
+}
+
+/// Returns whether `inst` may leave the scratch offset away from its entry value.
+///
+/// Effects alone are not enough: runtime helpers and calls may write scratch strings
+/// without declaring `alloc_concat`, and any non-trivial producer of a string may return
+/// one that lives in the scratch area. Both are treated as dirtying.
+fn dirties_scratch(function: &Function, inst: &Instruction) -> bool {
+    if dirty_effects(inst.effects) || inst.op.name().contains("call") {
+        return true;
+    }
+    let produces_string = inst
+        .result
+        .and_then(|result| function.value(result))
+        .is_some_and(|value| value.ir_type == IrType::Str);
+    produces_string
+        && !matches!(
+            inst.op,
+            Op::ConstStr
+                | Op::LoadLocal
+                | Op::LoadGlobal
+                | Op::LoadStaticLocal
+                | Op::LoadRefCell
+                | Op::Acquire
+                | Op::Move
+                | Op::Borrow
+        )
 }
 
 impl IrPass for ConcatResetElim {
@@ -71,7 +100,7 @@ impl IrPass for ConcatResetElim {
                         redundant.push(inst_id);
                     }
                     clean = true;
-                } else if dirties_scratch(inst.effects) {
+                } else if dirties_scratch(function, inst) {
                     clean = false;
                 }
             }
@@ -130,7 +159,7 @@ fn compute_clean_in(function: &Function) -> HashMap<BlockId, bool> {
                 if let Some(inst) = function.instruction(inst_id) {
                     if inst.op == Op::ConcatReset {
                         clean = true;
-                    } else if dirties_scratch(inst.effects) {
+                    } else if dirties_scratch(function, inst) {
                         clean = false;
                     }
                 }

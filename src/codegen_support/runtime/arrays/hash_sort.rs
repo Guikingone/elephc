@@ -15,6 +15,8 @@
 //!   matching PHP 8's stable sorts; descending order compares `(right, left)` so ties keep
 //!   their original order. Comparisons use `__rt_php_compare` (PHP 8 `<=>` rules) with an
 //!   inline fast path when both boxes hold ints.
+//! - Each comparison runs between a save and a restore of `_concat_off`, so the scratch
+//!   strings produced by stringifying operands do not accumulate over n·log n comparisons.
 //! - Mode bits: bit 0 = sort by value (else by key), bit 1 = descending, bit 2 = `SORT_STRING`
 //!   (compare the string forms byte-wise through `__rt_hash_sort_strcmp`).
 
@@ -180,9 +182,9 @@ pub fn emit_hash_sort(emitter: &mut Emitter) {
     // -- merge(x0 src, x1 dst, x2 lo, x3 mid, x4 hi, x5 mode): stable, records are 16 bytes --
     emitter.blank();
     emitter.label("__rt_hash_sort_merge");
-    emitter.instruction("sub sp, sp, #80");                                     // frame for callee-saved registers
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish frame pointer
+    emitter.instruction("sub sp, sp, #96");                                     // frame for callee-saved registers and the scratch offset
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish frame pointer
     emitter.instruction("stp x19, x20, [sp, #0]");                              // save callee-saved registers
     emitter.instruction("stp x21, x22, [sp, #16]");                             // save callee-saved registers
     emitter.instruction("stp x23, x24, [sp, #32]");                             // save callee-saved registers
@@ -210,6 +212,10 @@ pub fn emit_hash_sort(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // descending compares (right, left)
     emitter.instruction("mov x1, x9");                                          // so ties keep their order
     emitter.label("__rt_hash_sort_merge_cmp");
+    // Comparisons may stringify operands into the concat scratch: rewind it afterwards.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // scratch offset before the comparison
+    emitter.instruction("str x10, [sp, #64]");                                  // save it
     emitter.instruction(&format!("tst x26, #{}", HASH_SORT_STRING));            // SORT_STRING?
     emitter.instruction("b.eq __rt_hash_sort_merge_regular");                   // no: SORT_REGULAR rules
     emitter.instruction("bl __rt_hash_sort_strcmp");                            // x0 = -1/0/+1 on the string forms
@@ -227,6 +233,9 @@ pub fn emit_hash_sort(emitter: &mut Emitter) {
     emitter.label("__rt_hash_sort_merge_php_cmp");
     emitter.instruction("bl __rt_php_compare");                                 // x0 = -1/0/+1
     emitter.label("__rt_hash_sort_merge_pick");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [sp, #64]");                                  // scratch offset before the comparison
+    emitter.instruction("str x10, [x9]");                                       // drop the comparison's scratch strings
     emitter.instruction("cmp x0, #0");                                          // left after right?
     emitter.instruction("b.gt __rt_hash_sort_merge_take_right");                // yes: take the right record
     emitter.instruction("add x9, x19, x21, lsl #4");                            // left record
@@ -266,8 +275,8 @@ pub fn emit_hash_sort(emitter: &mut Emitter) {
     emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore callee-saved registers
     emitter.instruction("ldp x23, x24, [sp, #32]");                             // restore callee-saved registers
     emitter.instruction("ldp x25, x26, [sp, #48]");                             // restore callee-saved registers
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the frame
     emitter.instruction("ret");                                                 // return to the sort driver
 
     // -- strcmp(x0 left box, x1 right box): SORT_STRING sign of the stringified operands --
@@ -464,7 +473,7 @@ fn emit_hash_sort_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // callee-saved: i
     emitter.instruction("push r14");                                            // callee-saved: j
     emitter.instruction("push r15");                                            // callee-saved: k
-    emitter.instruction("sub rsp, 24");                                         // mid, hi, mode (keeps 16-byte alignment)
+    emitter.instruction("sub rsp, 40");                                         // mid, hi, mode, scratch offset (keeps 16-byte alignment)
     emitter.instruction("mov rbx, rdi");                                        // src
     emitter.instruction("mov r12, rsi");                                        // dst
     emitter.instruction("mov r13, rdx");                                        // i = lo
@@ -488,6 +497,9 @@ fn emit_hash_sort_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_hash_sort_merge_cmp");                         // ascending: compare (left, right)
     emitter.instruction("xchg rdi, rsi");                                       // descending compares (right, left) so ties keep their order
     emitter.label("__rt_hash_sort_merge_cmp");
+    // Comparisons may stringify operands into the concat scratch: rewind it afterwards.
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);
+    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // save the scratch offset
     emitter.instruction(&format!("test QWORD PTR [rbp - 64], {}", HASH_SORT_STRING)); // SORT_STRING?
     emitter.instruction("jz __rt_hash_sort_merge_regular");                     // no: SORT_REGULAR rules
     emitter.instruction("call __rt_hash_sort_strcmp");                          // rax = -1/0/+1 on the string forms
@@ -505,6 +517,8 @@ fn emit_hash_sort_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_sort_merge_php_cmp");
     emitter.instruction("call __rt_php_compare");                               // rax = -1/0/+1
     emitter.label("__rt_hash_sort_merge_pick");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // scratch offset before the comparison
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);
     emitter.instruction("test rax, rax");                                       // left after right?
     emitter.instruction("jg __rt_hash_sort_merge_take_right");                  // yes: take the right record
     emitter.instruction("mov r10, r13");                                        // i
@@ -545,7 +559,7 @@ fn emit_hash_sort_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r15, 1");                                          // k++
     emitter.instruction("jmp __rt_hash_sort_merge_left");                       // left first, then right
     emitter.label("__rt_hash_sort_merge_done");
-    emitter.instruction("add rsp, 24");                                         // release the locals
+    emitter.instruction("add rsp, 40");                                         // release the locals
     emitter.instruction("pop r15");                                             // restore callee-saved registers
     emitter.instruction("pop r14");                                             // restore callee-saved registers
     emitter.instruction("pop r13");                                             // restore callee-saved registers

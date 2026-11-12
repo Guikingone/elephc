@@ -189,6 +189,12 @@ impl ProgramInfo {
     /// Records the declaration facts carried by one statement.
     fn observe_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            // `goto` targets, labels and runtime includes create call paths the body analysis
+            // does not model (unreachable-looking labels, code outside the program), so calls
+            // there would never be observed: disable call-site parameter ranges.
+            StmtKind::Goto(_) | StmtKind::Label(_) | StmtKind::Include { .. } => {
+                self.dynamic_calls = true;
+            }
             StmtKind::FunctionDecl {
                 name,
                 params,
@@ -264,6 +270,12 @@ impl ProgramInfo {
             positions: sig.ref_params.clone(),
             variadic_by_ref: false,
         })
+    }
+
+    /// Returns whether a user class declares `count()`: `count($countable)` then returns
+    /// whatever that method returns, so `count()` results are not bounded by memory.
+    pub(crate) fn has_user_count_method(&self) -> bool {
+        self.methods.contains_key(&symbol_key("count"))
     }
 
     /// By-reference shape of a method call by name, or `None` when no user method has that name.

@@ -1875,6 +1875,18 @@ fn lower_hash_sort(
     }
     let array = expect_operand(inst, 0)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    // The copy-on-write split must be stored back to the sorted variable. Only plain frame
+    // locals are handled; properties, reference cells and by-reference parameters would keep
+    // the unsorted table, so they are rejected instead of silently doing nothing.
+    let raw_local = source_local.is_some_and(|slot| {
+        ctx.local_slot_representation(slot) == crate::codegen::context::LocalSlotRepresentation::Raw
+    });
+    if !raw_local {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} on an associative array that is not a plain local variable",
+            name
+        )));
+    }
     let (table_reg, mode_reg) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x0", "x1"),
         Arch::X86_64 => ("rdi", "rsi"),

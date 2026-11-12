@@ -1034,7 +1034,9 @@ impl<'a> Analyzer<'a> {
         }
         let ints = || values.iter().map(|value| value.bounds()).collect::<Option<Vec<_>>>();
         match key.as_str() {
-            "count" | "sizeof" if positional && args.len() == 1 => AbsVal::Int(0, MEMORY_BOUND),
+            "count" | "sizeof" if positional && args.len() == 1 && !self.info.has_user_count_method() => {
+                AbsVal::Int(0, MEMORY_BOUND)
+            }
             "strlen" | "mb_strlen" if positional && args.len() == 1 => AbsVal::Int(0, MEMORY_BOUND),
             "ord" => AbsVal::Int(0, 255),
             "crc32" => AbsVal::Int(0, u32::MAX as i64),

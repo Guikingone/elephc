@@ -243,3 +243,15 @@ fn exported_functions_keep_unknown_parameters() {
     let src = "<?php\n#[Export]\nfunction e(int $i): int {\n  return $i + 1;\n}\necho e(1);\n";
     assert_not_proven(src, 4, ArithKind::Add);
 }
+
+#[test]
+fn goto_disables_call_site_ranges() {
+    let src = "<?php\nfunction f($x) {\n  return $x + 9223372036854775800;\n}\nvar_dump(f(1));\nwhile (true) { goto out; }\nout: var_dump(f(100));\n";
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn user_count_method_unbounds_count() {
+    let src = "<?php\nclass C implements Countable { function count(): int { return PHP_INT_MAX; } }\n$c = new C();\nvar_dump(count($c) + 1);\n";
+    assert_not_proven(src, 4, ArithKind::Add);
+}

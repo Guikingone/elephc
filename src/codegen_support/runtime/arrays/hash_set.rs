@@ -43,6 +43,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     //   [sp, #48] = probe index (saved across calls)
     //   [sp, #56] = first tombstone index seen by the probe (-1 = none)
     //   [sp, #64] = tombstones crossed by the probe
+    //   [sp, #72] = probe count spilled across helper calls
     //   [sp, #80] = saved x29
     //   [sp, #88] = saved x30
     emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes on the stack
@@ -110,7 +111,9 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = our key_len
     emitter.instruction("ldr x3, [x12, #8]");                                   // x3 = existing key_ptr in entry
     emitter.instruction("ldr x4, [x12, #16]");                                  // x4 = existing key_len in entry
+    emitter.instruction("str x10, [sp, #72]");                                  // keep the probe count across the key comparison
     emitter.instruction("bl __rt_hash_key_eq");                                 // compare normalized typed keys, x0=1 if equal
+    emitter.instruction("ldr x10, [sp, #72]");                                  // restore the probe count
 
     // -- restore probe state after str_eq --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr

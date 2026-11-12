@@ -340,3 +340,31 @@ echo "\n";
     );
     assert_heap_clean(out, "011111-101111-1-1001-1-1-1001-1-1-1-1-10-1-1-11110\n");
 }
+
+/// A loop calling a string builtin that writes the concat scratch keeps its per-statement
+/// `concat_reset` (runtime calls do not always declare `alloc_concat`), so long loops do not
+/// overrun the scratch area.
+#[test]
+fn test_concat_reset_kept_next_to_scratch_writing_builtins() {
+    use std::process::Command;
+
+    let dir = std::env::temp_dir().join(format!("elephc_concat_reset_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let php_path = dir.join("upper.php");
+    std::fs::write(
+        &php_path,
+        "<?php\nfunction f() { $n = 0; $s = 'hello world';\n  for ($i = 0; $i < 3; $i++) { $n += strlen(strtoupper($s)); }\n  return $n; }\necho f();\n",
+    )
+    .unwrap();
+    let out = Command::new(elephc_cli_bin())
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("emit-ir");
+    assert!(out.status.success(), "emit-ir failed");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let body = text.split("function f(").nth(1).expect("f present");
+    let body = body.split("\n  function ").next().unwrap_or(body);
+    assert!(body.contains("concat_reset"), "loop concat_reset was removed:\n{body}");
+    assert_eq!(compile_and_run("<?php function f() { $n = 0; $s = 'hello world'; for ($i = 0; $i < 3; $i++) { $n += strlen(strtoupper($s)); } return $n; } echo f();"), "33");
+}
