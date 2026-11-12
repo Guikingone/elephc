@@ -63,6 +63,17 @@ pub(crate) fn collect_cycles(ctx: &mut LoweringContext<'_, '_>, span: Option<Spa
     );
 }
 
+/// Emits a cycle-collection safe point that only runs when `__rt_hash_unset` released a container.
+pub(crate) fn collect_cycles_if_unset_released(ctx: &mut LoweringContext<'_, '_>, span: Option<Span>) {
+    ctx.emit_void(
+        Op::GcCollect,
+        Vec::new(),
+        Some(crate::ir::Immediate::I64(1)),
+        Op::GcCollect.default_effects(),
+        span,
+    );
+}
+
 /// Returns whether an ownership state means the value is potentially released by this path.
 pub(crate) fn may_require_release(ownership: Ownership) -> bool {
     ownership.may_require_release()

@@ -6,10 +6,16 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
+//! - Probes continue past tombstones until an empty slot or the matching key, so an update
+//!   never duplicates a key that lives after a tombstone; a new key reuses the first tombstone.
+//!   A probe crossing `HASH_SET_TOMBSTONE_REHASH` tombstones rebuilds the table first.
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+
+/// Tombstones a single insert probe may cross before the table is rebuilt without them.
+const HASH_SET_TOMBSTONE_REHASH: usize = 8;
 
 /// hash_set: insert or update a normalized int/string key-value pair in the hash table.
 /// Grows the table automatically if load factor exceeds 75%, persists newly
@@ -35,11 +41,13 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     //   [sp, #32] = value_hi (x4)
     //   [sp, #40] = value_tag (x5)
     //   [sp, #48] = probe index (saved across calls)
-    //   [sp, #64] = saved x29
-    //   [sp, #72] = saved x30
-    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
+    //   [sp, #56] = first tombstone index seen by the probe (-1 = none)
+    //   [sp, #64] = tombstones crossed by the probe
+    //   [sp, #80] = saved x29
+    //   [sp, #88] = saved x30
+    emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // set up new frame pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save key_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
     emitter.instruction("str x3, [sp, #24]");                                   // save value_lo
@@ -77,10 +85,13 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- linear probe loop --
     emitter.instruction("str x8, [sp, #48]");                                   // save initial probe index
     emitter.instruction("mov x10, #0");                                         // x10 = probe count (to detect full table)
+    emitter.instruction("mov x13, #-1");                                        // no tombstone seen yet
+    emitter.instruction("str x13, [sp, #56]");                                  // first tombstone index = none
+    emitter.instruction("str xzr, [sp, #64]");                                  // tombstones crossed = 0
 
     emitter.label("__rt_hash_set_probe");
     emitter.instruction("cmp x10, x6");                                         // check if we've probed all slots
-    emitter.instruction("b.ge __rt_hash_set_done");                             // if probed all, table is full (shouldn't happen)
+    emitter.instruction("b.ge __rt_hash_set_end_of_chain");                     // every slot probed: the key is absent, claim a tombstone
 
     // -- compute entry address: base + 40 + index * 64 --
     emitter.instruction("ldr x9, [sp, #48]");                                   // load current probe index
@@ -92,7 +103,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- check occupied field --
     emitter.instruction("ldr x13, [x12]");                                      // x13 = occupied flag of this entry
     emitter.instruction("cmp x13, #1");                                         // check if slot is occupied
-    emitter.instruction("b.ne __rt_hash_set_insert");                           // if empty (0) or tombstone (2), insert here
+    emitter.instruction("b.ne __rt_hash_set_vacant");                           // empty (0) or tombstone (2)
 
     // -- slot is occupied: compare keys to check for update --
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = our key_ptr
@@ -115,6 +126,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_hash_set_update");                       // if keys match, update existing entry
 
     // -- keys don't match, advance to next slot --
+    emitter.label("__rt_hash_set_advance");
     emitter.instruction("add x9, x9, #1");                                      // index += 1
     emitter.instruction("udiv x7, x9, x6");                                     // x7 = index / capacity
     emitter.instruction("msub x9, x7, x6, x9");                                 // x9 = index % capacity (wrap around)
@@ -123,6 +135,39 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- increment probe count and continue --
     emitter.instruction("add x10, x10, #1");                                    // probe_count += 1
     emitter.instruction("b __rt_hash_set_probe");                               // try next slot
+
+    // -- vacant slot: a tombstone keeps the chain going (the key may live further on), an
+    //    empty slot ends it. The key is inserted into the first tombstone crossed, if any. --
+    emitter.label("__rt_hash_set_vacant");
+    emitter.instruction("cmp x13, #2");                                         // tombstone?
+    emitter.instruction("b.ne __rt_hash_set_end_of_chain");                     // empty slot: the key is absent
+    emitter.instruction("ldr x14, [sp, #56]");                                  // first tombstone seen so far
+    emitter.instruction("cmn x14, #1");                                         // none yet?
+    emitter.instruction("b.ne __rt_hash_set_count_tombstone");                  // keep the earliest one
+    emitter.instruction("str x9, [sp, #56]");                                   // remember this tombstone for the insert
+    emitter.label("__rt_hash_set_count_tombstone");
+    emitter.instruction("ldr x14, [sp, #64]");                                  // tombstones crossed
+    emitter.instruction("add x14, x14, #1");                                    // one more
+    emitter.instruction("str x14, [sp, #64]");                                  // store the count
+    emitter.instruction("b __rt_hash_set_advance");                             // keep probing for the key
+
+    emitter.label("__rt_hash_set_end_of_chain");
+    emitter.instruction("ldr x14, [sp, #64]");                                  // tombstones crossed by this probe
+    emitter.instruction(&format!("cmp x14, #{}", HASH_SET_TOMBSTONE_REHASH));   // has the chain degraded?
+    emitter.instruction("b.lt __rt_hash_set_pick_slot");                        // no: insert now
+    emitter.instruction("ldr x0, [sp, #0]");                                    // table pointer
+    emitter.instruction("bl __rt_hash_grow");                                   // rebuild without tombstones (same capacity when mostly dead)
+    emitter.instruction("str x0, [sp, #0]");                                    // update saved table pointer
+    emitter.instruction("b __rt_hash_set_no_grow");                             // re-probe the rebuilt table
+    emitter.label("__rt_hash_set_pick_slot");
+    emitter.instruction("ldr x14, [sp, #56]");                                  // first tombstone crossed
+    emitter.instruction("cmn x14, #1");                                         // none?
+    emitter.instruction("b.eq __rt_hash_set_pick_empty");                       // insert into the empty slot
+    emitter.instruction("str x14, [sp, #48]");                                  // reuse the first tombstone
+    emitter.instruction("b __rt_hash_set_insert");                              // insert there
+    emitter.label("__rt_hash_set_pick_empty");
+    emitter.instruction("cmp x10, x6");                                         // did the probe end on a real empty slot?
+    emitter.instruction("b.ge __rt_hash_set_done");                             // full table without tombstones (load factor prevents this)
 
     // -- insert into empty/tombstone slot --
     emitter.label("__rt_hash_set_insert");
@@ -235,8 +280,8 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- tear down stack frame and return --
     emitter.label("__rt_hash_set_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return table pointer (may be new after grow)
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -254,7 +299,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-insert spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved table/key/value tuple
-    emitter.instruction("sub rsp, 96");                                         // reserve local storage plus callee-saved register spills while keeping nested calls 16-byte aligned
+    emitter.instruction("sub rsp, 128");                                        // reserve local storage, probe state, and callee-saved register spills while keeping nested calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 72], r12");                       // preserve r12 because SysV requires callees to restore it before returning
     emitter.instruction("mov QWORD PTR [rbp - 80], r13");                       // preserve r13 because the hash probe logic reuses it as a long-lived scratch register
     emitter.instruction("mov QWORD PTR [rbp - 88], r14");                       // preserve r14 because the insertion-order linker uses it as a callee-saved scratch register
@@ -289,8 +334,15 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
     emitter.instruction("div r11");                                             // compute hash % capacity using the SysV integer divide remainder register
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save the initial probe index so the loop can survive helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 96], -1");                        // first tombstone index = none
+    emitter.instruction("mov QWORD PTR [rbp - 104], 0");                        // tombstones crossed = 0
+    emitter.instruction("mov QWORD PTR [rbp - 112], 0");                        // slots probed = 0
 
     emitter.label("__rt_hash_set_probe");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // table pointer for the full-table check
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // capacity
+    emitter.instruction("cmp QWORD PTR [rbp - 112], r11");                      // every slot probed?
+    emitter.instruction("jae __rt_hash_set_end_of_chain_x");                    // yes: the key is absent, claim a tombstone
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer at the top of every probe iteration
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index before deriving the slot address
     emitter.instruction("mov r12, r11");                                        // copy the current probe index before scaling it into a byte offset
@@ -299,7 +351,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r12, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry
     emitter.instruction("mov r13, QWORD PTR [r12]");                            // load the occupied marker for the probed hash-entry slot
     emitter.instruction("cmp r13, 1");                                          // check whether the current probe landed on an occupied entry
-    emitter.instruction("jne __rt_hash_set_insert");                            // empty or tombstone entries can be claimed immediately for insertion
+    emitter.instruction("jne __rt_hash_set_vacant_x");                          // empty (0) or tombstone (2)
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the incoming key pointer to the x86_64 string-equality helper
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the incoming key length to the x86_64 string-equality helper
     emitter.instruction("mov rdx, QWORD PTR [r12 + 8]");                        // pass the stored entry key pointer to the equality helper
@@ -309,6 +361,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_hash_set_update");                            // overwrite the existing payload instead of probing further when the keys match
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the equality helper clobbered caller-saved registers
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // reload the table capacity before advancing the linear-probe cursor
+    emitter.label("__rt_hash_set_advance_x");
+    emitter.instruction("add QWORD PTR [rbp - 112], 1");                        // one more slot probed
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // reload the table capacity
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the current probe index before incrementing it
     emitter.instruction("add rdx, 1");                                          // advance to the next linear-probe slot after a key mismatch
     emitter.instruction("cmp rdx, r11");                                        // detect wraparound once the probe index reaches the table capacity
@@ -318,6 +374,44 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_store_probe");
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // persist the updated probe index before the next loop iteration
     emitter.instruction("jmp __rt_hash_set_probe");                             // continue probing until an empty slot or existing matching key is found
+
+    // -- vacant slot: a tombstone keeps the chain going (the key may live further on), an
+    //    empty slot ends it. The key is inserted into the first tombstone crossed, if any. --
+    emitter.label("__rt_hash_set_vacant_x");
+    emitter.instruction("cmp r13, 2");                                          // tombstone?
+    emitter.instruction("jne __rt_hash_set_end_of_chain_x");                    // empty slot: the key is absent
+    emitter.instruction("cmp QWORD PTR [rbp - 96], -1");                        // first tombstone already recorded?
+    emitter.instruction("jne __rt_hash_set_count_tombstone_x");                 // keep the earliest one
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // current probe index
+    emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // remember this tombstone for the insert
+    emitter.label("__rt_hash_set_count_tombstone_x");
+    emitter.instruction("add QWORD PTR [rbp - 104], 1");                        // one more tombstone crossed
+    emitter.instruction("jmp __rt_hash_set_advance_x");                         // keep probing for the key
+
+    emitter.label("__rt_hash_set_end_of_chain_x");
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - 104], {}", HASH_SET_TOMBSTONE_REHASH)); // has the chain degraded?
+    emitter.instruction("jl __rt_hash_set_pick_slot_x");                        // no: insert now
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // table pointer
+    emitter.instruction("call __rt_hash_grow");                                 // rebuild without tombstones (same capacity when mostly dead)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the rebuilt table
+    emitter.instruction("jmp __rt_hash_set_no_grow_x");                         // re-probe the rebuilt table
+    emitter.label("__rt_hash_set_pick_slot_x");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // first tombstone crossed
+    emitter.instruction("cmp rdx, -1");                                         // none?
+    emitter.instruction("je __rt_hash_set_pick_empty_x");                       // insert into the empty slot
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // reuse the first tombstone
+    emitter.instruction("jmp __rt_hash_set_claim_x");                           // insert there
+    emitter.label("__rt_hash_set_pick_empty_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // table pointer
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // capacity
+    emitter.instruction("cmp QWORD PTR [rbp - 112], r11");                      // did the probe end on a real empty slot?
+    emitter.instruction("jae __rt_hash_set_done_full_x");                       // full table without tombstones (load factor prevents this)
+    emitter.label("__rt_hash_set_claim_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // table pointer
+    emitter.instruction("mov r12, QWORD PTR [rbp - 56]");                       // chosen slot index
+    emitter.instruction("shl r12, 6");                                          // 64-byte entries
+    emitter.instruction("add r12, r10");                                        // entry block
+    emitter.instruction("add r12, 40");                                         // skip the header
 
     emitter.label("__rt_hash_set_insert");
     emitter.instruction("mov QWORD PTR [r12], 1");                              // mark the selected entry slot as occupied before filling its payload fields
@@ -370,7 +464,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the hash-set helper
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the hash-set helper
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the hash-set helper
-    emitter.instruction("add rsp, 96");                                         // release the local spill area that held the saved table/key/value tuple
+    emitter.instruction("add rsp, 128");                                         // release the local spill area that held the saved table/key/value tuple
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the insertion caller
     emitter.instruction("ret");                                                 // return to the caller with the hash-table pointer in rax
 
@@ -397,11 +491,12 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r14], rax");                            // write the new value into the cell at cell+0
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the new value-tag
     emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // write the new inner value-tag into the cell at cell+8
+    emitter.label("__rt_hash_set_done_full_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the write-through path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the write-through path
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the write-through path
-    emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the write-through path
+    emitter.instruction("add rsp, 128");                                         // release the local spill area before leaving the write-through path
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return with the unchanged hash-table pointer in rax
 
@@ -433,7 +528,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the update path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the update path
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the update path
-    emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the update path
+    emitter.instruction("add rsp, 128");                                         // release the local spill area before leaving the update path
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the insertion caller
     emitter.instruction("ret");                                                 // return to the caller with the existing hash-table pointer in rax
 }

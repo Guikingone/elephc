@@ -256,7 +256,7 @@ On x86_64 the 8-byte kind word also carries an ownership marker: the ASCII bytes
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
+1. **Probe the segregated small bins** — requests up to 256 bytes first check `_heap_small_bins`, six power-of-two classes (`<=8`, `<=16`, ..., `<=256`) selected in O(1) from the leading-zero count of the size, and reuse a cached block from the smallest fitting class available. When every bin is empty the request is carved straight from the bump tail.
 2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
 3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
 4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
@@ -268,8 +268,8 @@ Minimum allocation is 8 bytes (to fit the next pointer when the block is later f
 The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
-2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
-3. Otherwise, payloads up to 64 bytes are cached into one of four segregated small-bin heads (`<=8`, `<=16`, `<=32`, `<=64`) so later tiny allocations can reuse them without scanning the larger free list
+2. If the block is exactly at the bump tail, shrink `_heap_off` immediately (a small tail block skips the free-list tail trim, so freeing a just-allocated temporary is O(1))
+3. Otherwise, payloads up to 256 bytes are cached into one of the six segregated small-bin heads so later small allocations can reuse them without scanning the larger free list
 4. Larger non-tail blocks are inserted into the general free list in address order, merged with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
 5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 

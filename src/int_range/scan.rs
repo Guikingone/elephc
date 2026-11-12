@@ -78,6 +78,16 @@ pub(crate) struct ProgramInfo {
     methods: HashMap<String, RefShape>,
     classes: HashSet<String>,
     int_functions: HashMap<String, bool>,
+    /// Number of declarations seen per function name (conditional duplicates share a name).
+    function_decls: HashMap<String, usize>,
+    /// Functions whose name escapes (string literal, first-class callable): they may be
+    /// invoked with arguments the analysis never sees, so their parameters stay unknown.
+    escaped_functions: HashSet<String>,
+    /// String literals passed directly as callables (matched against function names).
+    string_literals: HashSet<String>,
+    /// `true` when the program can call a function through a runtime-computed callee, which
+    /// disables call-site parameter ranges for every function.
+    pub(crate) dynamic_calls: bool,
     /// Top-level variables that a function can reach through `global` or `$GLOBALS[...]`.
     pub(crate) top_level_pinned: HashSet<String>,
 }
@@ -97,14 +107,83 @@ impl ProgramInfo {
                 if let ExprKind::Variable(name) = &expr.kind {
                     names.insert(name.clone());
                 }
+                info.observe_call_shape(expr);
             }
         });
+        let literals = std::mem::take(&mut info.string_literals);
+        for literal in literals {
+            let key = symbol_key(&literal);
+            if info.functions.contains_key(&key) {
+                info.escaped_functions.insert(key);
+            }
+        }
         for name in &names {
             if let Some(target) = global_alias_target(name) {
                 info.top_level_pinned.insert(target.to_string());
             }
         }
         info
+    }
+
+    /// Records call shapes that let a function run with arguments the analysis cannot see.
+    fn observe_call_shape(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                self.escaped_functions.insert(symbol_key(name.as_str()));
+            }
+            ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } | ExprKind::Pipe { .. } => {
+                self.dynamic_calls = true;
+            }
+            ExprKind::NewObject { class_name, .. } | ExprKind::StaticMethodCall { receiver: crate::parser::ast::StaticReceiver::Named(class_name), .. }
+                if symbol_key(class_name.as_str()).starts_with("reflection")
+                    || symbol_key(class_name.as_str()) == "closure" =>
+            {
+                self.dynamic_calls = true;
+            }
+            ExprKind::NewDynamic { .. } | ExprKind::NewDynamicObject { .. } => {}
+            ExprKind::FunctionCall { name, args } => {
+                let key = symbol_key(name.as_str());
+                if key == "eval" {
+                    self.dynamic_calls = true;
+                }
+                // A builtin taking a callable (array_map, usort, call_user_func, ...) with an
+                // argument that is neither a closure nor a literal name may call any function.
+                if let Some(sig) = crate::types::builtin_call_sig(&key) {
+                    for (index, arg) in args.iter().enumerate() {
+                        let value = match &arg.kind {
+                            ExprKind::NamedArg { value, .. } => &**value,
+                            _ => arg,
+                        };
+                        let callable_param = sig
+                            .params
+                            .get(index)
+                            .is_some_and(|(_, ty)| matches!(ty, crate::types::PhpType::Callable | crate::types::PhpType::Mixed))
+                            && matches!(key.as_str(), "call_user_func" | "call_user_func_array" | "array_map" | "array_filter" | "array_walk" | "array_walk_recursive" | "array_reduce" | "usort" | "uasort" | "uksort" | "iterator_apply" | "register_shutdown_function" | "spl_autoload_register" | "set_error_handler" | "set_exception_handler" | "forward_static_call" | "forward_static_call_array" | "is_callable" | "array_find" | "array_find_key" | "array_any" | "array_all" | "preg_replace_callback" | "preg_replace_callback_array" | "header_register_callback" | "ob_start");
+                        if callable_param {
+                            if let ExprKind::StringLiteral(text) = &value.kind {
+                                // A literal callable name: only that function escapes.
+                                self.string_literals.insert(text.clone());
+                            }
+                        }
+                        if callable_param
+                            && !matches!(value.kind, ExprKind::Closure { .. } | ExprKind::StringLiteral(_) | ExprKind::FirstClassCallable(_) | ExprKind::Null)
+                        {
+                            self.dynamic_calls = true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Returns `true` when call-site parameter ranges may be used for the user function `name`:
+    /// it is declared exactly once, its name never escapes, and no runtime-computed call exists.
+    pub(crate) fn tracks_call_sites(&self, name: &str) -> bool {
+        let key = symbol_key(name);
+        !self.dynamic_calls
+            && self.function_decls.get(&key) == Some(&1)
+            && !self.escaped_functions.contains(&key)
     }
 
     /// Records the declaration facts carried by one statement.
@@ -122,6 +201,12 @@ impl ProgramInfo {
                     .entry(key.clone())
                     .or_default()
                     .merge(&RefShape::from_params(params, *variadic_by_ref));
+                *self.function_decls.entry(key.clone()).or_insert(0) += 1;
+                if !stmt.attributes.is_empty() {
+                    // `#[Export]` and other attributes may expose the function to callers
+                    // outside the analyzed program (C ABI exports, runtime hooks).
+                    self.escaped_functions.insert(key.clone());
+                }
                 let returns_int = matches!(return_type, Some(TypeExpr::Int));
                 let entry = self.int_functions.entry(key).or_insert(true);
                 *entry &= returns_int;
@@ -148,6 +233,11 @@ impl ProgramInfo {
             .entry(symbol_key(&method.name))
             .or_default()
             .merge(&RefShape::from_params(&method.params, method.variadic_by_ref));
+    }
+
+    /// Number of positional parameters of the user function `key` (0 when unknown).
+    pub(crate) fn function_arity(&self, key: &str) -> usize {
+        self.functions.get(key).map_or(0, |shape| shape.positions.len())
     }
 
     /// Returns `true` when the user function `name` is declared with an `int` return type.

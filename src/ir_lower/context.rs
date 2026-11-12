@@ -681,6 +681,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_bound_locals.remove(name);
     }
 
+    /// Returns the slot of a plain, definitely initialized `string` local that `$name .= ...`
+    /// can grow in place: frame storage only (no global, static, eval-scope, extern, or
+    /// reference-cell aliasing) and a `string` storage type.
+    pub(crate) fn plain_string_local_slot(&self, name: &str) -> Option<LocalSlotId> {
+        let slot = *self.local_slots.get(name)?;
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        if kind != LocalKind::PhpLocal
+            || self.is_ref_bound_local(name)
+            || self.uses_global_storage(name, kind)
+            || self.should_store_to_eval_scope(name)
+            || self.extern_global_type(name).is_some()
+            || crate::globals_array::is_alias(name)
+            || !self.initialized_slots.contains(&slot)
+            || self.local_type(name) != PhpType::Str
+            || self.local_storage_php_type(name) != Some(PhpType::Str)
+        {
+            return None;
+        }
+        Some(slot)
+    }
+
     /// Returns true when a local is currently modeled as a by-reference alias.
     pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {
         self.ref_bound_locals.contains(name)

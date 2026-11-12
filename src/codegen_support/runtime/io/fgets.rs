@@ -6,6 +6,9 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
 //!
 //! Key details:
+//! - Plain fds first take whole line chunks through `__rt_fgets_fill` (socket `MSG_PEEK`, or
+//!   read-ahead plus `lseek` back on seekable fds), never consuming bytes past the newline; other
+//!   fds and every EOF/error case fall back to the one-byte `read()` loop.
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -61,6 +64,22 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("lsl w9, w9, #16");                                     // form 0x40000000 in w9
     emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
     emitter.instruction("b.ge __rt_fgets_wrapper_entry");                       // wrappers read via the feof-gated stream_read loop below
+
+    // -- fast path: consume whole line chunks (sockets via MSG_PEEK, seekable files via lseek) --
+    emitter.label("__rt_fgets_fast");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // load current write offset
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    emitter.instruction("add x1, x11, x10");                                    // destination = buf + offset
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
+    emitter.instruction("bl __rt_fgets_fill");                                  // x0 = bytes consumed (0 = use the byte loop), x1 = newline seen
+    emitter.instruction("cbz x0, __rt_fgets_loop");                             // no chunk: the byte loop handles EOF, errors and pipes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // reload current write offset
+    emitter.instruction("add x10, x10, x0");                                    // publish the consumed chunk
+    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    emitter.instruction("cbnz x1, __rt_fgets_done");                            // chunk ended with the newline: line complete
+    emitter.instruction("b __rt_fgets_fast");                                   // otherwise keep reading chunks
 
     // -- read loop: one byte at a time until \n or EOF --
     emitter.label("__rt_fgets_loop");
@@ -163,6 +182,104 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emit_fgets_fill_aarch64(emitter);
+}
+
+/// Chunk size consumed per `__rt_fgets_fill` call.
+const FGETS_CHUNK: usize = 4096;
+
+/// Emits `__rt_fgets_fill` for AArch64: reads at most one line chunk into the destination
+/// without consuming bytes past the first newline.
+///
+/// ABI contract:
+///   - input:  x0 = fd, x1 = destination (room for `FGETS_CHUNK` bytes)
+///   - output: x0 = bytes consumed (0 when no chunk could be taken without risk: EOF, read
+///             errors, would-block, or an unseekable non-socket fd), x1 = 1 when the last
+///             consumed byte is `\n`
+///   - sockets peek with `recv(MSG_PEEK)` and then read exactly up to the newline; seekable
+///     fds read a chunk and `lseek` back over the bytes past the newline.
+fn emit_fgets_fill_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label("__rt_fgets_fill");
+    emitter.instruction("sub sp, sp, #48");                                     // frame: fd, dst, chunk length, consumed
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save fd
+    emitter.instruction("str x1, [sp, #8]");                                    // save destination
+    emitter.instruction(&format!("mov x2, #{}", FGETS_CHUNK));                  // peek at most one chunk
+    emitter.instruction("mov x3, #2");                                          // MSG_PEEK
+    emitter.bl_c("recv");                                                       // peek without consuming
+    emitter.instruction("cmp x0, #0");                                          // classify the peek
+    emitter.instruction("b.lt __rt_fgets_fill_file");                           // not a socket (or would-block): try the seekable path
+    emitter.instruction("b.eq __rt_fgets_fill_none");                           // socket EOF: let the byte loop record it
+    emitter.instruction("bl __rt_fgets_fill_scan");                             // x2 = bytes up to and including the newline, x3 = newline seen
+    emitter.instruction("str x3, [sp, #24]");                                   // keep the newline flag across read()
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction("ldr x1, [sp, #8]");                                    // destination
+    emitter.instruction("str x2, [sp, #16]");                                   // requested byte count
+    emitter.bl_c("read");                                                       // consume exactly the peeked line bytes
+    emitter.instruction("cmp x0, #0");                                          // did read() take anything?
+    emitter.instruction("b.le __rt_fgets_fill_none");                           // no: fall back to the byte loop
+    emitter.instruction("ldr x2, [sp, #16]");                                   // requested byte count
+    emitter.instruction("ldr x1, [sp, #24]");                                   // newline flag
+    emitter.instruction("cmp x0, x2");                                          // short read?
+    emitter.instruction("csel x1, x1, xzr, eq");                                // a short read cannot have reached the newline
+    emitter.instruction("b __rt_fgets_fill_ret");                               // return consumed bytes
+
+    emitter.label("__rt_fgets_fill_file");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction("mov x1, #0");                                          // offset 0
+    emitter.instruction("mov x2, #1");                                          // SEEK_CUR
+    emitter.bl_c("lseek");                                                      // is the fd seekable?
+    emitter.instruction("cmp x0, #0");                                          // lseek failed?
+    emitter.instruction("b.lt __rt_fgets_fill_none");                           // pipes/ttys/sockets: byte loop
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction("ldr x1, [sp, #8]");                                    // destination
+    emitter.instruction(&format!("mov x2, #{}", FGETS_CHUNK));                  // read one chunk
+    emitter.bl_c("read");                                                       // read ahead
+    emitter.instruction("cmp x0, #0");                                          // anything read?
+    emitter.instruction("b.le __rt_fgets_fill_none");                           // EOF/error: byte loop records it
+    emitter.instruction("str x0, [sp, #16]");                                   // bytes read
+    emitter.instruction("bl __rt_fgets_fill_scan");                             // x2 = bytes to keep, x3 = newline seen
+    emitter.instruction("str x2, [sp, #24]");                                   // bytes kept
+    emitter.instruction("str x3, [sp, #8]");                                    // newline flag (destination no longer needed)
+    emitter.instruction("ldr x1, [sp, #16]");                                   // bytes read
+    emitter.instruction("subs x1, x2, x1");                                     // negative distance back to the newline end
+    emitter.instruction("b.eq __rt_fgets_fill_file_done");                      // nothing read past the newline
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd
+    emitter.instruction("mov x2, #1");                                          // SEEK_CUR
+    emitter.bl_c("lseek");                                                      // give back the bytes past the newline
+    emitter.label("__rt_fgets_fill_file_done");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // bytes consumed
+    emitter.instruction("ldr x1, [sp, #8]");                                    // newline flag
+    emitter.instruction("b __rt_fgets_fill_ret");                               // return
+
+    emitter.label("__rt_fgets_fill_none");
+    emitter.instruction("mov x0, #0");                                          // nothing consumed
+    emitter.instruction("mov x1, #0");                                          // no newline
+    emitter.label("__rt_fgets_fill_ret");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // deallocate frame
+    emitter.instruction("ret");                                                 // return to __rt_fgets
+
+    // -- leaf: scan [sp+8 of caller] destination for the first newline in x0 bytes --
+    emitter.label("__rt_fgets_fill_scan");
+    emitter.instruction("ldr x9, [sp, #8]");                                    // destination (caller frame, leaf keeps sp)
+    emitter.instruction("mov x2, #0");                                          // index
+    emitter.label("__rt_fgets_fill_scan_loop");
+    emitter.instruction("cmp x2, x0");                                          // scanned every byte?
+    emitter.instruction("b.ge __rt_fgets_fill_scan_miss");                      // no newline in the chunk
+    emitter.instruction("ldrb w10, [x9, x2]");                                  // load byte
+    emitter.instruction("add x2, x2, #1");                                      // advance
+    emitter.instruction("cmp w10, #0x0A");                                      // newline?
+    emitter.instruction("b.ne __rt_fgets_fill_scan_loop");                      // keep scanning
+    emitter.instruction("mov x3, #1");                                          // newline seen; x2 = bytes through it
+    emitter.instruction("ret");                                                 // return to the fill helper
+    emitter.label("__rt_fgets_fill_scan_miss");
+    emitter.instruction("mov x2, x0");                                          // keep the whole chunk
+    emitter.instruction("mov x3, #0");                                          // no newline
+    emitter.instruction("ret");                                                 // return to the fill helper
 }
 
 /// x86_64-specific fgets: mirrors the ARM64 path using x86_64 System V ABI.
@@ -197,6 +314,22 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rax, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jge __rt_fgets_wrapper_entry_x86");                    // wrappers read via the feof-gated stream_read loop below
+
+    // -- fast path: consume whole line chunks (sockets via MSG_PEEK, seekable files via lseek) --
+    emitter.label("__rt_fgets_fast_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // concat-buffer base
+    emitter.instruction("lea rsi, [r11 + r10]");                                // destination = buf + offset
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("call __rt_fgets_fill");                                // rax = bytes consumed (0 = use the byte loop), rdx = newline seen
+    emitter.instruction("test rax, rax");                                       // did the fast path take a chunk?
+    emitter.instruction("jz __rt_fgets_loop_x86");                              // no: the byte loop handles EOF, errors and pipes
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the concat-buffer offset
+    emitter.instruction("add r10, rax");                                        // publish the consumed chunk
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // store the updated offset
+    emitter.instruction("test rdx, rdx");                                       // did the chunk end with the newline?
+    emitter.instruction("jnz __rt_fgets_done_x86");                             // yes: line complete
+    emitter.instruction("jmp __rt_fgets_fast_x86");                             // otherwise keep reading chunks
 
     emitter.label("__rt_fgets_loop_x86");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the current concat-buffer absolute offset before reading one more byte
@@ -279,4 +412,90 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
     emitter.instruction("jmp __rt_fgets_done_x86");                             // return the possibly empty borrowed slice accumulated before EOF or read failure
+
+    emit_fgets_fill_x86_64(emitter);
+}
+
+/// Emits `__rt_fgets_fill` for x86_64 with the same contract as the AArch64 helper:
+/// rdi = fd, rsi = destination → rax = bytes consumed (0 = use the byte loop), rdx = newline seen.
+fn emit_fgets_fill_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label("__rt_fgets_fill");
+    emitter.instruction("push rbp");                                            // frame for the libc calls
+    emitter.instruction("mov rbp, rsp");                                        // stable frame base
+    emitter.instruction("sub rsp, 32");                                         // fd, dst, chunk length, kept bytes (16-byte aligned)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save destination
+    emitter.instruction(&format!("mov edx, {}", FGETS_CHUNK));                  // peek at most one chunk
+    emitter.instruction("mov ecx, 2");                                          // MSG_PEEK
+    emitter.instruction("call recv");                                           // peek without consuming
+    emitter.instruction("test rax, rax");                                       // classify the peek
+    emitter.instruction("jl __rt_fgets_fill_file_x86");                         // not a socket (or would-block): try the seekable path
+    emitter.instruction("jz __rt_fgets_fill_none_x86");                         // socket EOF: let the byte loop record it
+    emitter.instruction("call __rt_fgets_fill_scan_x86");                       // rdx = bytes through the newline, rcx = newline seen
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // requested byte count
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // newline flag
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // destination
+    emitter.instruction("call read");                                           // consume exactly the peeked line bytes
+    emitter.instruction("test rax, rax");                                       // did read() take anything?
+    emitter.instruction("jle __rt_fgets_fill_none_x86");                        // no: fall back to the byte loop
+    emitter.instruction("xor edx, edx");                                        // assume a short read (no newline)
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 24]");                       // full read?
+    emitter.instruction("cmove rdx, QWORD PTR [rbp - 32]");                     // only a full read reaches the newline
+    emitter.instruction("jmp __rt_fgets_fill_ret_x86");                         // return consumed bytes
+
+    emitter.label("__rt_fgets_fill_file_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("xor esi, esi");                                        // offset 0
+    emitter.instruction("mov edx, 1");                                          // SEEK_CUR
+    emitter.instruction("call lseek");                                          // is the fd seekable?
+    emitter.instruction("test rax, rax");                                       // lseek failed?
+    emitter.instruction("jl __rt_fgets_fill_none_x86");                         // pipes/ttys/sockets: byte loop
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // destination
+    emitter.instruction(&format!("mov edx, {}", FGETS_CHUNK));                  // read one chunk
+    emitter.instruction("call read");                                           // read ahead
+    emitter.instruction("test rax, rax");                                       // anything read?
+    emitter.instruction("jle __rt_fgets_fill_none_x86");                        // EOF/error: byte loop records it
+    emitter.instruction("mov r8, rax");                                         // bytes read
+    emitter.instruction("call __rt_fgets_fill_scan_x86");                       // rdx = bytes to keep, rcx = newline seen
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // bytes kept
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // newline flag
+    emitter.instruction("mov rsi, rdx");                                        // kept bytes
+    emitter.instruction("sub rsi, r8");                                         // negative distance back to the newline end
+    emitter.instruction("jz __rt_fgets_fill_file_done_x86");                    // nothing read past the newline
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("mov edx, 1");                                          // SEEK_CUR
+    emitter.instruction("call lseek");                                          // give back the bytes past the newline
+    emitter.label("__rt_fgets_fill_file_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // bytes consumed
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // newline flag
+    emitter.instruction("jmp __rt_fgets_fill_ret_x86");                         // return
+
+    emitter.label("__rt_fgets_fill_none_x86");
+    emitter.instruction("xor eax, eax");                                        // nothing consumed
+    emitter.instruction("xor edx, edx");                                        // no newline
+    emitter.label("__rt_fgets_fill_ret_x86");
+    emitter.instruction("add rsp, 32");                                         // release the frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to __rt_fgets
+
+    // -- leaf: scan the destination for the first newline among rax bytes --
+    emitter.label("__rt_fgets_fill_scan_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // destination (caller frame)
+    emitter.instruction("xor edx, edx");                                        // index
+    emitter.label("__rt_fgets_fill_scan_loop_x86");
+    emitter.instruction("cmp rdx, rax");                                        // scanned every byte?
+    emitter.instruction("jge __rt_fgets_fill_scan_miss_x86");                   // no newline in the chunk
+    emitter.instruction("movzx r10d, BYTE PTR [r9 + rdx]");                     // load byte
+    emitter.instruction("add rdx, 1");                                          // advance
+    emitter.instruction("cmp r10d, 0x0A");                                      // newline?
+    emitter.instruction("jne __rt_fgets_fill_scan_loop_x86");                   // keep scanning
+    emitter.instruction("mov ecx, 1");                                          // newline seen; rdx = bytes through it
+    emitter.instruction("ret");                                                 // return to the fill helper
+    emitter.label("__rt_fgets_fill_scan_miss_x86");
+    emitter.instruction("mov rdx, rax");                                        // keep the whole chunk
+    emitter.instruction("xor ecx, ecx");                                        // no newline
+    emitter.instruction("ret");                                                 // return to the fill helper
 }

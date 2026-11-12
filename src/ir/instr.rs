@@ -461,6 +461,10 @@ pub enum Op {
     /// through unchanged).
     StrOffsetSet,
     StrInterpolate,
+    /// `$s .= rhs` on a plain string local (immediate: local slot, operand: the Str to append).
+    /// Appends in place when the slot owns the only reference to a heap string with spare
+    /// capacity, otherwise reallocates with geometric growth and releases the old string.
+    StrAppendLocal,
     ConcatReset,
     WriteStrStdout,
     ArrayNew,
@@ -787,6 +791,9 @@ impl Op {
             // shared concat scratch; the empty-replacement/out-of-range cases warn.
             StrOffsetSet => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN,
             ConcatReset => E::WRITES_GLOBAL,
+            StrAppendLocal => {
+                E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
             // `(object)` reads the boxed source, allocates a fresh stdClass and its
             // property hash, and retains the inserted/passed-through payloads.
@@ -1068,6 +1075,7 @@ impl Op {
             StrCharAt => "str_char_at",
             StrOffsetSet => "str_offset_set",
             StrInterpolate => "str_interpolate",
+            StrAppendLocal => "str_append_local",
             ConcatReset => "concat_reset",
             WriteStrStdout => "write_str_stdout",
             ArrayNew => "array_new",

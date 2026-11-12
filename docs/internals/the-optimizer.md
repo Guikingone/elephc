@@ -454,6 +454,13 @@ using `goto`, runtime `include`, `extract()` or `eval()` are not analysed. Facts
 `(span, kind)`; one unsafe occurrence of a key makes it unsafe, and lowering only trusts sites
 proven both before type checking and on the final optimized AST.
 
+User functions that are only ever called directly by name (no dynamic calls, callable strings or
+`Closure::fromCallable`-style escapes, single declaration, no attributes such as `#[Export]`) are
+analysed with the join of their call-site argument ranges. The program-level fixpoint starts
+optimistically (an uncalled function's body is unreachable) and is accepted only when every
+observed call-site range is subsumed by the assumed one; otherwise every parameter falls back to
+"unknown".
+
 ## What the optimizer does not do yet
 
 The current optimizer is still intentionally local. It does not yet implement:

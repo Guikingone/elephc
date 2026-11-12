@@ -23,6 +23,7 @@ mod atoi;
 mod grapheme_strrev;
 mod strcopy;
 mod str_persist;
+mod str_append;
 mod strtolower;
 mod strtoupper;
 mod trim;
@@ -129,6 +130,7 @@ pub use atoi::emit_atoi;
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
 pub use str_persist::emit_str_persist;
+pub use str_append::emit_str_append;
 /// Emit string persistence helper.
 pub use strtolower::emit_strtolower;
 /// Emit lowercase string conversion.

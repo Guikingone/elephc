@@ -211,3 +211,87 @@ echo $sum, " ", $o, "\n";
     );
     assert_heap_clean(out, "300 1\n");
 }
+
+/// `isset($h[$k])` on a hash unboxed from a `mixed` local releases its temporary reference, so
+/// the following write does not copy-on-write split (and leak) the table on every iteration.
+#[test]
+fn test_isset_then_write_on_mixed_local_hash_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$words = ["alpha", "beta", "alpha"];
+$counts = [];
+for ($i = 0; $i < 50; $i++) {
+    foreach ($words as $w) {
+        if (isset($counts[$w])) { $counts[$w] = $counts[$w] + 1; } else { $counts[$w] = 1; }
+    }
+}
+foreach ($counts as $word => $c) { echo $word, "=", $c, " "; }
+echo "\n";
+"#,
+    );
+    assert_heap_clean(out, "alpha=100 beta=50 \n");
+}
+
+/// Re-inserting keys after `unset()` never duplicates a key that lives past a tombstone, and
+/// tombstone-heavy tables are rebuilt instead of degrading into full scans.
+#[test]
+fn test_hash_unset_reinsert_churn_keeps_unique_keys() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = [];
+for ($i = 0; $i < 64; $i++) { $m["k$i"] = $i; }
+for ($r = 0; $r < 50; $r++) {
+    for ($i = 0; $i < 64; $i += 3) { unset($m["k$i"]); }
+    for ($i = 0; $i < 64; $i++) { $m["k$i"] = $i + $r; }
+}
+echo count($m), " ", array_sum($m), " ", implode(",", array_slice(array_keys($m), 0, 5)), "\n";
+"#,
+    );
+    assert_heap_clean(out, "64 5152 k1,k2,k4,k5,k7\n");
+}
+
+/// `.=` on a string local grows a uniquely owned buffer in place but keeps copy-on-write
+/// semantics for copies, parameters, and array elements holding the same string.
+#[test]
+fn test_string_append_in_place_keeps_value_semantics() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f(string $p) { $p .= "!"; $p .= $p; return $p; }
+$s = "";
+for ($i = 0; $i < 1000; $i++) { $s .= "x"; }
+$t = $s; $t .= "y"; $s .= "z";
+echo strlen($s), substr($s, -2), " ", strlen($t), substr($t, -2), "\n";
+$a = "ab"; $b = f($a); $a .= "c"; echo $a, " ", $b, "\n";
+$n = 5; $q = "n="; $q .= $n; $q .= "/" . $a . $n; echo $q, "\n";
+$arr = [$q]; $q .= "+"; echo $arr[0], " ", $q, "\n";
+$h = "lit"; $h .= ""; $h .= $h; echo $h, "\n";
+"#,
+    );
+    assert_heap_clean(
+        out,
+        "1001xz 1001xy\nabc ab!ab!\nn=5/abc5\nn=5/abc5 n=5/abc5+\nlitlit\n",
+    );
+}
+
+/// `fgets()` reads whole lines from seekable files without consuming past the newline, so
+/// interleaved `fread()`/`fgetc()`/`ftell()` see the same stream position as PHP.
+#[test]
+fn test_fgets_chunked_reads_keep_stream_position() {
+    let dir = std::env::temp_dir().join(format!("elephc_fgets_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("data.txt");
+    let source = format!(
+        r#"<?php
+$p = "{}";
+file_put_contents($p, "a\nbb\n\nccc\nlast-no-nl");
+$f = fopen($p, "r");
+while (($l = fgets($f)) !== false) {{ echo strlen($l), feof($f) ? "E" : "-", " "; }}
+fclose($f);
+$f = fopen($p, "r");
+echo fgets($f), fread($f, 3), "|", fgetc($f), "|", ftell($f), "\n";
+"#,
+        path.display()
+    );
+    let out = compile_and_run(&source);
+    assert_eq!(out, "2- 3- 1- 4- 10E a\nbb\n|\n|6\n");
+}

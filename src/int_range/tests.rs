@@ -35,7 +35,7 @@ fn assert_not_proven(src: &str, line: u32, kind: ArithKind) {
 
 #[test]
 fn for_loop_counter_bounded_by_int_param_is_proven() {
-    let src = "<?php\nfunction f(int $n) {\n  for ($i = 0; $i < $n; $i++) {\n    echo $i;\n  }\n}\n";
+    let src = "<?php\nfunction f(int $n) {\n  for ($i = 0; $i < $n; $i++) {\n    echo $i;\n  }\n}\nf((int) $argv[1]);\n";
     assert_proven(src, 3, ArithKind::Inc);
 }
 
@@ -69,14 +69,14 @@ fn unbounded_accumulator_stays_checked() {
 
 #[test]
 fn fib_argument_arithmetic_is_proven_but_sum_is_not() {
-    let src = "<?php\nfunction fib(int $n): int {\n  return $n < 2 ? $n : fib($n - 1)\n    + fib($n - 2);\n}\n";
+    let src = "<?php\nfunction fib(int $n): int {\n  return $n < 2 ? $n : fib($n - 1)\n    + fib($n - 2);\n}\necho fib((int) $argv[1]);\n";
     assert_proven(src, 3, ArithKind::Sub);
     assert_not_proven(src, 3, ArithKind::Add);
 }
 
 #[test]
 fn guard_by_early_return_narrows() {
-    let src = "<?php\nfunction g(int $n): int {\n  if ($n <= 0) {\n    return 0;\n  }\n  return $n - 1;\n}\n";
+    let src = "<?php\nfunction g(int $n): int {\n  if ($n <= 0) {\n    return 0;\n  }\n  return $n - 1;\n}\necho g((int) $argv[1]);\n";
     assert_proven(src, 6, ArithKind::Sub);
 }
 
@@ -89,7 +89,7 @@ fn int_max_increment_stays_checked() {
 
 #[test]
 fn untyped_parameters_stay_checked() {
-    let src = "<?php\nfunction h($n) {\n  return $n + 1;\n}\n";
+    let src = "<?php\nfunction h($n) {\n  return $n + 1;\n}\necho h($argv[1]);\n";
     assert_not_proven(src, 3, ArithKind::Add);
 }
 
@@ -175,20 +175,71 @@ fn operand_order_hazard_forgets_the_variable() {
 
 #[test]
 fn count_and_strlen_bounds_are_used() {
-    let src = "<?php\nfunction c(array $a, string $s) {\n  return count($a) + strlen($s) + 1;\n}\n";
+    let src = "<?php\nfunction c(array $a, string $s) {\n  return count($a) + strlen($s) + 1;\n}\necho c($argv, $argv[0]);\n";
     assert_proven(src, 3, ArithKind::Add);
 }
 
 #[test]
 fn method_bodies_and_closures_are_analyzed() {
     let src = "<?php\nclass A {\n  public function m(int $n) {\n    for ($i = 0; $i < $n; $i++) {}\n  }\n}\n$f = function (int $n) {\n  for ($i = 0; $i < $n; $i++) {}\n};\n";
+    // Methods and closures are not call-site tracked: their bodies are always analyzed.
     assert_proven(src, 4, ArithKind::Inc);
     assert_proven(src, 8, ArithKind::Inc);
 }
 
 #[test]
 fn modulo_and_shift_ranges_are_used() {
-    let src = "<?php\nfunction m(int $x) {\n  return ($x % 1000) * 1000 + ($x >> 60) + (($x & 255) << 4);\n}\n";
+    let src = "<?php\nfunction m(int $x) {\n  return ($x % 1000) * 1000 + ($x >> 60) + (($x & 255) << 4);\n}\necho m((int) $argv[1]);\n";
     assert_proven(src, 3, ArithKind::Mul);
     assert_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn call_site_ranges_bound_typed_parameters() {
+    let src = "<?php\nfunction a(int $i, int $j): float {\n  $n = $i + $j;\n  return 1.0 / ($n * ($n + 1));\n}\nfor ($i = 0; $i < 500; $i++) {\n  for ($j = 0; $j < 500; $j++) {\n    a($i, $j);\n  }\n}\n";
+    assert_proven(src, 3, ArithKind::Add);
+    assert_proven(src, 4, ArithKind::Mul);
+}
+
+#[test]
+fn recursive_call_site_ranges_converge() {
+    let src = "<?php\nfunction fib(int $n): int {\n  return $n < 2 ? $n : fib($n - 1)\n    + fib($n - 2);\n}\necho fib(30);\n";
+    assert_proven(src, 3, ArithKind::Sub);
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn escaped_function_names_keep_unknown_parameters() {
+    let src = "<?php\nfunction a(int $i) {\n  return $i + 1;\n}\na(1);\necho array_sum(array_map('a', [9223372036854775807]));\n";
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn dynamic_calls_disable_call_site_ranges() {
+    let src = "<?php\nfunction a(int $i) {\n  return $i + 1;\n}\na(1);\n$f = 'x' . 'a';\necho $f(9223372036854775807);\n";
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn untyped_parameters_take_call_site_ranges() {
+    let src = "<?php\nfunction add($a, $b) {\n  return $a + $b;\n}\necho add(1, 2) + add(3, 4);\n";
+    assert_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn named_arguments_make_parameters_unknown() {
+    let src = "<?php\nfunction add(int $a, int $b) {\n  return $a + $b;\n}\necho add(b: 9223372036854775807, a: 1);\n";
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn never_called_functions_record_nothing() {
+    let src = "<?php\nfunction dead(int $i) {\n  return $i + 1;\n}\n";
+    assert_eq!(verdict(src, 3, ArithKind::Add), None);
+}
+
+#[test]
+fn exported_functions_keep_unknown_parameters() {
+    let src = "<?php\n#[Export]\nfunction e(int $i): int {\n  return $i + 1;\n}\necho e(1);\n";
+    assert_not_proven(src, 4, ArithKind::Add);
 }

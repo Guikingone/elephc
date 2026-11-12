@@ -273,6 +273,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
 | `__rt_sort_int` / `__rt_rsort_int` | In-place sort ascending or descending | `x0` = array | — |
 | `__rt_str_persist` | Copy string from concat_buf to heap (skips .data/heap) | `x1`/`x2` = str | `x1`/`x2` = heap str |
+| `__rt_str_append` | `$s .= $x` on a string local: append in place when the local's heap string is uniquely owned with spare capacity, otherwise reallocate at 2x capacity and release the old string | `x1`/`x2` = current, `x3`/`x4` = appended | `x1`/`x2` = owned str |
 
 Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, and `array_fill_keys`.
 
@@ -302,11 +303,11 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_hash_clone_shallow` | Clone hash storage for copy-on-write splitting, re-persisting keys and retaining nested heap values as needed | `x0` = hash | `x0` = new hash |
 | `__rt_hash_ensure_unique` | Split a shared hash table before mutation | `x0` = hash | `x0` = unique hash |
 | `__rt_hash_grow` | Double hash table capacity, rehash all entries | `x0` = hash | `x0` = new hash |
-| `__rt_hash_set` | Insert/update (grows at 75% load) | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
+| `__rt_hash_set` | Insert/update (grows at 75% load); probes past tombstones to find an existing key, reuses the first tombstone for a new key, and rebuilds the table once a probe crosses 8 tombstones | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_append` | Append with PHP's next automatic integer key (largest existing int key + 1, or 0), then delegate to `__rt_hash_set` | `x0`=hash, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_insert_owned` | Reinsert an already-owned key/value pair during hash growth | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=normalized key | `x0`=found, `x1`=val_lo, `x2`=val_hi, `x3`=value_tag |
-| `__rt_hash_unset` | Remove one key for `unset($hash[$key])`: copy-on-write split, probe like `__rt_hash_get`, release the owned key/value payloads, tombstone the slot (so probe chains stay intact), and unlink it from the insertion-order chain; missing keys are a no-op | `x0`=hash, `x1`/`x2`=normalized key | `x0` = (possibly cloned) hash |
+| `__rt_hash_unset` | Remove one key for `unset($hash[$key])`: copy-on-write split, probe like `__rt_hash_get`, release the owned key/value payloads, tombstone the slot (so probe chains stay intact), and unlink it from the insertion-order chain; releasing a container value sets `_gc_unset_pending` so the following conditional cycle collection runs; missing keys are a no-op | `x0`=hash, `x1`/`x2`=normalized key | `x0` = (possibly cloned) hash |
 | `__rt_hash_spread` | Flatten a source hash into a destination hash with PHP `[...$src]` spread semantics: integer keys are re-sequenced from the destination's next automatic key, string keys are preserved, later operands overwrite on collision, and each value is re-owned (strings persisted, refcounted payloads retained) | `x0`=dest hash, source hash | `x0` = (possibly reallocated) dest hash |
 | `__rt_hash_iter_next` | Iterate to next entry in insertion order | `x0`=hash, `x1`=cursor | `x0`=next cursor, `x1`/`x2`=key, `x3`/`x4`=value, `x5`=value_tag |
 | `__rt_hash_union` | Build PHP associative-array union: left duplicate keys win, missing right entries append in insertion order | `x0`=left hash, `x1`=right hash | `x0`=result hash |
@@ -510,7 +511,7 @@ The first table covers the file/filesystem core; the subsections after it cover 
 |---|---|
 | `__rt_cstr` | Convert PHP string (ptr+len) to null-terminated C string |
 | `__rt_fopen` | Open file via target-aware `open()` handling, or return `-1` after emitting a suppressible warning for open failures and invalid modes |
-| `__rt_fgets` | Read line from file descriptor |
+| `__rt_fgets` | Read line from file descriptor (whole-line chunks on sockets via `recv(MSG_PEEK)` and on seekable files via read-ahead + `lseek`; one-byte reads otherwise) |
 | `__rt_fgetc` | Read a single byte from a file descriptor (tail-calls `__rt_fread` with length 1) |
 | `__rt_feof` | Check end-of-file flag for a file descriptor |
 | `__rt_fread` | Read N bytes from file descriptor |

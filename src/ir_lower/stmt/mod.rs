@@ -471,6 +471,13 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         ctx.mark_local_initialized(name);
     }
 
+    if let Some(rhs) = self_append_rhs(name, value) {
+        if let Some(slot) = ctx.plain_string_local_slot(name) {
+            lower_string_local_append(ctx, name, slot, rhs, span);
+            return;
+        }
+    }
+
     // A by-reference `Closure::bind(fn &() => $this->prop, $obj, $obj)` assigned to a variable is
     // tracked as a static callable, like a closure literal, so a later `$b()` lowers to a direct
     // call that carries the property's reference-cell pointer instead of boxing it.
@@ -540,6 +547,57 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
+    }
+}
+
+/// Returns `rhs` for `$name = $name . rhs` (the parser's form of `$name .= rhs`) when `rhs`
+/// cannot observe or modify `$name`: literals, variables, and concatenations of them.
+fn self_append_rhs<'a>(name: &str, value: &'a Expr) -> Option<&'a Expr> {
+    let ExprKind::BinaryOp { left, op: BinOp::Concat, right } = &value.kind else {
+        return None;
+    };
+    if !matches!(&left.kind, ExprKind::Variable(left_name) if left_name == name) {
+        return None;
+    }
+    fn side_effect_free(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::Variable(_) => true,
+            ExprKind::BinaryOp { left, op: BinOp::Concat, right } => {
+                side_effect_free(left) && side_effect_free(right)
+            }
+            _ => false,
+        }
+    }
+    side_effect_free(right).then_some(right.as_ref())
+}
+
+/// Lowers `$name .= rhs` on a plain string local as `str_append_local`, which grows the
+/// local's uniquely owned heap string in place instead of copying it on every append.
+fn lower_string_local_append(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    slot: LocalSlotId,
+    rhs: &Expr,
+    span: Span,
+) {
+    ctx.clear_static_callable_local(name);
+    ctx.clear_reflection_class_local(name);
+    ctx.clear_reflection_function_local(name);
+    ctx.clear_reflection_property_local(name);
+    ctx.clear_reflection_method_local(name);
+    ctx.clear_reflection_arg_array_local(name);
+    ctx.clear_fiber_start_sig(name);
+    let appended = lower_expr(ctx, rhs);
+    let appended = crate::ir_lower::expr::coerce_to_string(ctx, appended, rhs);
+    ctx.emit_void(
+        Op::StrAppendLocal,
+        vec![appended.value],
+        Some(Immediate::LocalSlot(slot)),
+        Op::StrAppendLocal.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(appended) {
+        crate::ir_lower::ownership::release_if_owned(ctx, appended, Some(span));
     }
 }
 

@@ -12,8 +12,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 /// Number of segregated free-list bins. Bin `k` caches freed blocks whose payload is in
-/// `(4 << k, 8 << k]` bytes (bin 0: `(0, 8]`), i.e. power-of-two classes from 8 to 4096.
-pub(crate) const HEAP_BIN_COUNT: usize = 10;
+/// `(4 << k, 8 << k]` bytes (bin 0: `(0, 8]`), i.e. power-of-two classes from 8 to 256.
+pub(crate) const HEAP_BIN_COUNT: usize = 6;
 /// Largest payload cached in a segregated bin (blocks above it use the ordered free list).
 pub(crate) const HEAP_BIN_MAX_PAYLOAD: usize = 8 << (HEAP_BIN_COUNT - 1);
 /// Byte offset of the last bin head inside `_heap_small_bins`.

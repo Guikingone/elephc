@@ -25,6 +25,7 @@
 use crate::ir::{DataPool, Function, Module};
 
 use super::branch_simplify::BranchSimplify;
+use super::concat_reset::ConcatResetElim;
 use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
@@ -87,6 +88,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(DeadInst),
         Box::new(DeadStore),
         Box::new(BranchSimplify),
+        Box::new(ConcatResetElim),
     ]
 }
 

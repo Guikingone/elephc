@@ -114,6 +114,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::StrAppendLocal => lower_str_append_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
@@ -292,7 +293,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
-        Op::GcCollect => lower_gc_collect(ctx),
+        Op::GcCollect => lower_gc_collect(ctx, &inst),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
@@ -1711,9 +1712,30 @@ fn descriptor_entry_stack_offsets(
     (offsets, next_offset)
 }
 
-/// Lowers an explicit cycle-collection safe point.
-fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
+/// Lowers an explicit cycle-collection safe point. With an `I64(1)` immediate the collection
+/// only runs when `__rt_hash_unset` flagged a released container (`_gc_unset_pending`).
+fn lower_gc_collect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if !matches!(inst.immediate, Some(Immediate::I64(1))) {
+        abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+        return Ok(());
+    }
+    let skip = ctx.next_label("gc_unset_skip");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_gc_unset_pending");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // did an unset release a container?
+            ctx.emitter.instruction(&format!("cbz x10, {}", skip));             // no: nothing could have been orphaned
+            ctx.emitter.instruction("str xzr, [x9]");                           // consume the request
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", "_gc_unset_pending");
+            ctx.emitter.instruction("cmp QWORD PTR [r10], 0");                  // did an unset release a container?
+            ctx.emitter.instruction(&format!("je {}", skip));                   // no: nothing could have been orphaned
+            ctx.emitter.instruction("mov QWORD PTR [r10], 0");                  // consume the request
+        }
+    }
     abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    ctx.emitter.label(&skip);
     Ok(())
 }
 
@@ -7682,6 +7704,14 @@ fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
     require_integer_like(ctx.load_value_to_reg(lhs, result_reg)?, inst)?;
     require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
+    if inst.result.is_some() && ctx.fused_compare_value == inst.result {
+        // Validate now so the fused branch can only see supported predicates.
+        aarch64_condition(predicate)?;
+        ctx.emitter
+            .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands; the following cond_br branches on the flags
+        ctx.fused_compare_predicate = Some(predicate);
+        return Ok(());
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -7931,6 +7961,43 @@ fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
     }
+    Ok(())
+}
+
+/// Lowers `str_append_local`: appends a string to a raw `string` local through `__rt_str_append`,
+/// which grows the slot's owned heap string in place when it is the only reference.
+fn lower_str_append_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let value = expect_operand(inst, 0)?;
+    if ctx.local_slot_representation(slot) != super::context::LocalSlotRepresentation::Raw
+        || ctx.local_php_type(slot)?.codegen_repr() != PhpType::Str
+    {
+        return Err(CodegenIrError::unsupported(
+            "str_append_local on a non-raw or non-string local slot",
+        ));
+    }
+    let offset = ctx.local_offset(slot)?;
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x1");                              // appended string pointer
+            ctx.emitter.instruction("mov x4, x2");                              // appended string length
+            abi::emit_load(ctx.emitter, &PhpType::Str, offset);                 // x1/x2 = current local string
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rdx");                            // appended string length
+            ctx.emitter.instruction("mov r9, rax");                             // appended string pointer
+            abi::emit_load(ctx.emitter, &PhpType::Str, offset);                 // rax/rdx = current local string
+            ctx.emitter.instruction("mov rdi, rax");                            // current string pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // current string length
+            ctx.emitter.instruction("mov rdx, r9");                             // appended string pointer
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_append");
+    // The helper already returns an owned heap string: store it without re-persisting.
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::store_at_offset(ctx.emitter, ptr_reg, offset);
+    abi::store_at_offset(ctx.emitter, len_reg, offset - 8);
     Ok(())
 }
 
@@ -8887,7 +8954,7 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
 }
 
 /// Returns the AArch64 condition-code suffix for an EIR comparison predicate.
-fn aarch64_condition(predicate: CmpPredicate) -> Result<&'static str> {
+pub(super) fn aarch64_condition(predicate: CmpPredicate) -> Result<&'static str> {
     match predicate {
         CmpPredicate::Eq => Ok("eq"),
         CmpPredicate::Ne => Ok("ne"),
@@ -8903,7 +8970,7 @@ fn aarch64_condition(predicate: CmpPredicate) -> Result<&'static str> {
 }
 
 /// Returns the x86_64 setcc suffix for an EIR comparison predicate.
-fn x86_64_condition(predicate: CmpPredicate) -> Result<&'static str> {
+pub(super) fn x86_64_condition(predicate: CmpPredicate) -> Result<&'static str> {
     match predicate {
         CmpPredicate::Eq => Ok("e"),
         CmpPredicate::Ne => Ok("ne"),

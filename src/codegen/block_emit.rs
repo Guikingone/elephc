@@ -21,7 +21,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, InstId, Module};
+use crate::ir::{BasicBlock, Function, InstId, Module, Op, Terminator, ValueId};
 use crate::names::{
     enum_case_symbol, function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -1158,17 +1158,59 @@ fn emit_static_property_default_value(
 /// Emits every block in table order.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let blocks = ctx.function.blocks.clone();
+    let use_counts = value_use_counts(ctx.function);
     for block in blocks {
-        emit_block(ctx, &block)?;
+        emit_block(ctx, &block, &use_counts)?;
     }
     Ok(())
 }
 
+/// Counts operand and terminator uses of every value in `function`.
+fn value_use_counts(function: &Function) -> std::collections::HashMap<ValueId, usize> {
+    let mut counts = std::collections::HashMap::new();
+    for inst in &function.instructions {
+        for &operand in &inst.operands {
+            *counts.entry(operand).or_insert(0) += 1;
+        }
+    }
+    for block in &function.blocks {
+        if let Some(terminator) = block.terminator.as_ref() {
+            for value in crate::ir_passes::terminator_uses(terminator) {
+                *counts.entry(value).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// Returns the `icmp` result that `block`'s `cond_br` can branch on through the CPU flags:
+/// the comparison must be the block's last instruction and its only use the branch condition.
+fn fusible_compare(
+    function: &Function,
+    block: &BasicBlock,
+    use_counts: &std::collections::HashMap<ValueId, usize>,
+) -> Option<ValueId> {
+    let Some(Terminator::CondBr { cond, .. }) = block.terminator.as_ref() else {
+        return None;
+    };
+    let last = function.instruction(*block.instructions.last()?)?;
+    if last.op != Op::ICmp || last.result != Some(*cond) {
+        return None;
+    }
+    (use_counts.get(cond).copied() == Some(1)).then_some(*cond)
+}
+
 /// Emits one EIR basic block.
-fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
+fn emit_block(
+    ctx: &mut FunctionContext<'_>,
+    block: &BasicBlock,
+    use_counts: &std::collections::HashMap<ValueId, usize>,
+) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
     ctx.emitter
         .label(&ctx.block_label(&block.name, block.id.as_raw()));
+    ctx.fused_compare_value = fusible_compare(ctx.function, block, use_counts);
+    ctx.fused_compare_predicate = None;
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id)?;

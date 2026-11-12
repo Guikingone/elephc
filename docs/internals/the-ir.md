@@ -507,6 +507,7 @@ preserves PHP exponentiation result rules.
 | `StrCharAt` | `Str`, `I64` | `Str` | `may_fatal`, `alloc_concat` |
 | `StrInterpolate` | string parts and values | `Str` | combined value effects, `alloc_concat` |
 | `ConcatReset` | none | `Void` | `writes_global` |
+| `StrAppendLocal` | `Str` (immediate: local slot) | `Void` | `reads_local`, `writes_local`, `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `WriteStrStdout` | `Str` | `Void` | `output` |
 
 Concat-buffer operations are statement-boundary-sensitive. Lowering must emit
@@ -1141,6 +1142,21 @@ terminator graph, so terminator-only reachability could wrongly neutralize a liv
 handler. Removing edges only enlarges dominator sets and threaded forwarding blocks
 carry no definitions, so simplification never invalidates a use that was valid
 before; cross-block cascades converge through the fixed-point driver.
+
+### Concat-Reset Elimination
+
+The ninth registered transform (`src/ir_passes/concat_reset.rs`) removes
+`concat_reset` instructions that cannot change anything. Lowering emits one reset
+per statement so scratch strings produced by the statement are reclaimed, but most
+statements (integer and float arithmetic, local stores, element reads) never touch
+the scratch area. A forward must-analysis tracks whether the scratch offset is
+still at its function-entry value on every path: a reset makes it clean, and any
+instruction that may allocate scratch strings, write globals, print, write files or
+process state, warn, throw, or deoptimize makes it dirty (a fatal error ends the
+process, so it does not count). A reset reached only by clean paths is neutralized
+to `nop`; removing one never shortens the life of a live scratch string. Functions
+with exception handlers or generator suspension points are skipped, because their
+implicit control edges are absent from the terminator graph.
 
 ### Small-Function Inlining
 

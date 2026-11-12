@@ -38,7 +38,7 @@ impl LocalSlotAnalysis {
         let mut stored_slots = HashSet::new();
         let mut ever_ref_cell_slots = initially_ref_cell_slots.clone();
         for inst in &function.instructions {
-            if inst.op == Op::StoreLocal {
+            if matches!(inst.op, Op::StoreLocal | Op::StrAppendLocal) {
                 if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
                     stored_slots.insert(slot);
                 }

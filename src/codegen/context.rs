@@ -17,7 +17,7 @@ use crate::codegen_support::data_section::DataSection;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{
-    BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
+    BlockId, CmpPredicate, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
     ValueDef, ValueId,
 };
 use crate::ir_passes::Allocation;
@@ -32,7 +32,7 @@ use super::{CodegenIrError, Result};
 
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum LocalSlotRepresentation {
+pub(super) enum LocalSlotRepresentation {
     Raw,
     RefCell,
     Dynamic,
@@ -65,6 +65,10 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
     pub(super) epilogue_label: Option<String>,
+    /// `icmp` result consumed only by the next `cond_br`: lowered as flags, not a 0/1 value.
+    pub(super) fused_compare_value: Option<ValueId>,
+    /// Predicate left in the CPU flags by the fused `icmp`, consumed by the `cond_br`.
+    pub(super) fused_compare_predicate: Option<CmpPredicate>,
     label_counter: usize,
 }
 
@@ -108,6 +112,8 @@ impl<'a> FunctionContext<'a> {
             web: false,
             gc_stats,
             heap_debug,
+            fused_compare_value: None,
+            fused_compare_predicate: None,
             epilogue_label,
             label_counter: 0,
         }
@@ -412,7 +418,7 @@ impl<'a> FunctionContext<'a> {
     }
 
     /// Classifies the slot as raw, definitely ref-cell, or path-dependent at this instruction.
-    fn local_slot_representation(&self, slot: LocalSlotId) -> LocalSlotRepresentation {
+    pub(super) fn local_slot_representation(&self, slot: LocalSlotId) -> LocalSlotRepresentation {
         if self.is_by_ref_param_slot(slot) || self.current_inst_promoted_ref_cells.contains(&slot) {
             return LocalSlotRepresentation::RefCell;
         }

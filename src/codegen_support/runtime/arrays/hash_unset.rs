@@ -10,6 +10,8 @@
 //!   for the key exactly like `__rt_hash_get`, releasing the owned key/value payloads, marking
 //!   the slot as a tombstone (occupied = 2, so probe chains for other keys stay intact),
 //!   unlinking the entry from the insertion-order chain, and decrementing the live count.
+//! - Releasing a container (or callable) value sets `_gc_unset_pending`, so the cycle
+//!   collection that follows `unset()` only scans the heap when a cycle could have been orphaned.
 //! - A missing key (or null/empty table) is a no-op. The (possibly cloned) table pointer is
 //!   returned so the caller can store it back into the array local.
 
@@ -151,11 +153,20 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_unset_unlink");                            // scalars/bools/floats own no heap storage
 
     emitter.label("__rt_hash_unset_release_any");
+    emitter.instruction("cmp x14, #4");                                         // container payload (array/hash/object/mixed)?
+    emitter.instruction("b.lo __rt_hash_unset_release_value");                  // strings cannot form cycles
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_unset_pending");
+    emitter.instruction("mov x10, #1");                                         // a container lost a reference
+    emitter.instruction("str x10, [x9]");                                       // request the next conditional cycle collection
+    emitter.label("__rt_hash_unset_release_value");
     emitter.instruction("ldr x0, [x12, #24]");                                  // load the heap-backed value pointer
     emitter.instruction("bl __rt_decref_any");                                  // release the value through the uniform dispatcher
     emitter.instruction("b __rt_hash_unset_unlink");                            // continue to the insertion-order unlink
 
     emitter.label("__rt_hash_unset_release_callable");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_unset_pending");
+    emitter.instruction("mov x10, #1");                                         // closures may capture containers
+    emitter.instruction("str x10, [x9]");                                       // request the next conditional cycle collection
     emitter.instruction("ldr x0, [x12, #24]");                                  // load the callable descriptor pointer
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor
 
@@ -342,11 +353,18 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_unset_unlink");                          // scalars/bools/floats own no heap storage
 
     emitter.label("__rt_hash_unset_release_any");
+    emitter.instruction("cmp r9, 4");                                           // container payload (array/hash/object/mixed)?
+    emitter.instruction("jb __rt_hash_unset_release_value");                    // strings cannot form cycles
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_gc_unset_pending");
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // request the next conditional cycle collection
+    emitter.label("__rt_hash_unset_release_value");
     emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the heap-backed value pointer
     emitter.instruction("call __rt_decref_any");                                // release the value through the uniform dispatcher
     emitter.instruction("jmp __rt_hash_unset_unlink");                          // continue to the insertion-order unlink
 
     emitter.label("__rt_hash_unset_release_callable");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_gc_unset_pending");
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // closures may capture containers
     emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the callable descriptor pointer
     emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor
 

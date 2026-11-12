@@ -1233,7 +1233,14 @@ fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    // `int == int` is exactly a signed integer compare; lowering it as `icmp` lets the backend
+    // branch on the flags instead of materializing a loose-comparison boolean.
+    let int_pair = lhs.ir_type == IrType::I64
+        && rhs.ir_type == IrType::I64
+        && ctx.builder.value_php_type(lhs.value) == PhpType::Int
+        && ctx.builder.value_php_type(rhs.value) == PhpType::Int;
     let opcode = match op {
+        BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq if int_pair => Op::ICmp,
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
         BinOp::Eq => Op::LooseEq,
@@ -1367,8 +1374,8 @@ fn operand_uses_php_compare(ty: IrType) -> bool {
 /// Maps an AST comparison operator to an EIR predicate.
 fn cmp_predicate(op: &BinOp) -> CmpPredicate {
     match op {
-        BinOp::Eq => CmpPredicate::Eq,
-        BinOp::NotEq => CmpPredicate::Ne,
+        BinOp::Eq | BinOp::StrictEq => CmpPredicate::Eq,
+        BinOp::NotEq | BinOp::StrictNotEq => CmpPredicate::Ne,
         BinOp::Lt => CmpPredicate::Slt,
         BinOp::LtEq => CmpPredicate::Sle,
         BinOp::Gt => CmpPredicate::Sgt,
@@ -3461,14 +3468,15 @@ fn lower_native_isset_offset_probe_from_value(
             let index_ty = index_expr_key_type(ctx, index);
             if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-                ctx.emit_value(
+                let present = ctx.emit_value(
                     Op::ArrayIsset,
                     vec![array_value.value, index_value.value],
                     None,
                     PhpType::Bool,
                     Op::ArrayIsset.default_effects(),
                     Some(expr.span),
-                )
+                );
+                stabilize_borrowed_result_and_release_receiver(ctx, array_value, present, expr.span)
             } else {
                 // String or mixed key on indexed storage: read through the
                 // mixed-key runtime path and check if the result is null.
@@ -3508,14 +3516,17 @@ fn lower_native_isset_offset_probe_from_value(
         }
         IrType::Heap(IrHeapKind::Hash) => {
             let index_value = lower_expr(ctx, index);
-            ctx.emit_value(
+            let present = ctx.emit_value(
                 Op::HashIsset,
                 vec![array_value.value, index_value.value],
                 None,
                 PhpType::Bool,
                 Op::HashIsset.default_effects(),
                 Some(expr.span),
-            )
+            );
+            // A receiver unboxed from a `mixed` local is a retained temporary; dropping it here
+            // keeps the hash uniquely owned so the next write does not copy it.
+            stabilize_borrowed_result_and_release_receiver(ctx, array_value, present, expr.span)
         }
         _ => {
             let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
@@ -5531,6 +5542,9 @@ fn lower_unset_locals(
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
     }
+    // Decide the cycle-collection policy before the unsets reset the targets' local types.
+    let only_hash_elements = args.iter().all(|arg| unset_target_is_hash_element(ctx, arg));
+    let may_release_container = args.iter().any(|arg| unset_target_may_release_container(ctx, arg));
     let null = lower_null(ctx, expr);
     for arg in args {
         match &arg.kind {
@@ -5547,8 +5561,54 @@ fn lower_unset_locals(
             _ => {}
         }
     }
-    crate::ir_lower::ownership::collect_cycles(ctx, Some(expr.span));
+    // Only a released container can leave cyclic garbage behind; unsetting slots that hold
+    // scalars or strings skips the full-heap cycle scan.
+    if only_hash_elements {
+        // `__rt_hash_unset` flags container releases, so the scan runs only when needed.
+        crate::ir_lower::ownership::collect_cycles_if_unset_released(ctx, Some(expr.span));
+    } else if may_release_container {
+        crate::ir_lower::ownership::collect_cycles(ctx, Some(expr.span));
+    }
     Some(null)
+}
+
+/// Returns whether `unset(arg)` lowers to `HashUnset` on an associative-array local.
+fn unset_target_is_hash_element(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+        return false;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    !ctx.is_ref_bound_local(name)
+        && matches!(ctx.local_type(name).codegen_repr(), PhpType::AssocArray { .. })
+}
+
+/// Returns whether `unset(arg)` may drop a reference to an array, object, or other container.
+fn unset_target_may_release_container(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    fn is_leaf(ty: &PhpType) -> bool {
+        matches!(
+            ty.codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Void
+        )
+    }
+    match &arg.kind {
+        ExprKind::Variable(name) => !is_leaf(&ctx.local_type(name)),
+        ExprKind::ArrayAccess { array, .. } => {
+            let ExprKind::Variable(name) = &array.kind else {
+                return true;
+            };
+            if ctx.is_ref_bound_local(name) {
+                return true;
+            }
+            match ctx.local_type(name).codegen_repr() {
+                PhpType::AssocArray { value, .. } => !is_leaf(&value),
+                PhpType::Array(elem) => !is_leaf(&elem),
+                _ => true,
+            }
+        }
+        _ => true,
+    }
 }
 
 /// Returns true when an `unset(...)` target has direct EIR lowering.
@@ -17891,7 +17951,7 @@ fn coerce_to_float_at_span(
 }
 
 /// Coerces a value to string when possible.
-fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+pub(crate) fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
     coerce_to_string_at_span(ctx, value, Some(expr.span))
 }
 

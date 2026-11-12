@@ -56,6 +56,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter);
+    strings::emit_str_append(emitter);
     strings::emit_strtolower(emitter);
     strings::emit_strtoupper(emitter);
     strings::emit_trim(emitter);

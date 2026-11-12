@@ -11,13 +11,14 @@
 //! - Generator suspension remains an explicit unsupported Phase 04 path.
 
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, DataId, IrType, SwitchCase, Terminator, ValueId};
+use crate::ir::{BlockId, CmpPredicate, DataId, IrType, SwitchCase, Terminator, ValueId};
 use crate::types::PhpType;
 
 use crate::codegen::abi;
 
 use super::context::FunctionContext;
 use super::frame;
+use super::lower_inst;
 use super::{CodegenIrError, Result};
 
 /// Lowers one EIR terminator.
@@ -81,14 +82,23 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             else_target,
             else_args,
         } => {
-            ctx.load_value_to_result(*cond)?;
+            let fused = match (ctx.fused_compare_value.take(), ctx.fused_compare_predicate.take()) {
+                (Some(value), Some(predicate)) if value == *cond => Some(predicate),
+                _ => None,
+            };
+            if fused.is_none() {
+                ctx.load_value_to_result(*cond)?;
+            }
             validate_block_args(ctx, *then_target, then_args, "cond_br then")?;
             validate_block_args(ctx, *else_target, else_args, "cond_br else")?;
             let then_label = ctx.block_label_for_id(*then_target)?;
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
-            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
+            match fused {
+                Some(predicate) => emit_branch_on_flags(ctx, predicate, &then_edge)?,
+                None => abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge),
+            }
             abi::emit_jump(ctx.emitter, &else_edge);
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
             emit_edge_args(ctx, &else_edge, *else_target, else_args, "cond_br else")?;
@@ -212,6 +222,25 @@ fn lower_switch(
     emit_edge_args(ctx, &default_edge, default, default_args, "switch default")?;
     for (label, target, args) in case_edges {
         emit_edge_args(ctx, &label, target, &args, "switch case")?;
+    }
+    Ok(())
+}
+
+/// Branches to `label` when the flags left by a fused signed `icmp` satisfy `predicate`.
+fn emit_branch_on_flags(
+    ctx: &mut FunctionContext<'_>,
+    predicate: CmpPredicate,
+    label: &str,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let cond = lower_inst::aarch64_condition(predicate)?;
+            ctx.emitter.instruction(&format!("b.{} {}", cond, label)); // branch on the fused integer comparison flags
+        }
+        Arch::X86_64 => {
+            let cond = lower_inst::x86_64_condition(predicate)?;
+            ctx.emitter.instruction(&format!("j{} {}", cond, label)); // branch on the fused integer comparison flags
+        }
     }
     Ok(())
 }

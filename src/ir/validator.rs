@@ -310,8 +310,8 @@ fn validate_instruction_immediate(
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
-        LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
-        | ReleaseLocalSlot | BindRefCellPtr
+        LoadLocal | StoreLocal | StrAppendLocal | UnsetLocal | LoadRefCell | StoreRefCell
+        | ReleaseLocalRefCell | ReleaseLocalSlot | BindRefCellPtr
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalInitialized
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
@@ -473,8 +473,8 @@ fn validate_opcode_rules(
         | ReleaseLocalSlot => {
             check_count(inst_id, inst, 0, "0")
         }
-        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
-        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr
+        StoreLocal | StrAppendLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal
+        | StoreStaticProperty | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr
         | AdoptRefCell | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue
         | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | ThrowException
         | GeneratorReturn | PtrCheckNonnull => {

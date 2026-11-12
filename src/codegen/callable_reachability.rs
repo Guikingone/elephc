@@ -233,7 +233,7 @@ fn apply_local_transfer(
             set_local_state(state, *slot, names);
         }
         (
-            Op::UnsetLocal | Op::BindRefCellPtr | Op::IterCurrentValueRef,
+            Op::UnsetLocal | Op::BindRefCellPtr | Op::IterCurrentValueRef | Op::StrAppendLocal,
             Some(Immediate::LocalSlot(slot)),
         ) => {
             set_local_state(state, *slot, CallableNameSet::Unknown);

@@ -12,8 +12,9 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_hash_grow` runtime helper for the active target.
-/// Doubles hash table capacity while preserving insertion order: allocates a new
-/// table at 2× capacity, reinserts all owned entries, frees the old table, and
+/// Rebuilds a hash table while preserving insertion order: allocates a new table at 2×
+/// capacity (or the same capacity when fewer than half the slots are live, dropping
+/// tombstones), reinserts all owned entries, frees the old table, and
 /// returns the new pointer.
 /// - ARM64 input/output: x0 = old table → x0 = new table
 /// - x86_64 input/output: rdi = old table → rax = new table
@@ -47,8 +48,13 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x20, #8]");                                   // x9 = old capacity
     emitter.instruction("ldr x1, [x20, #16]");                                  // x1 = runtime value_type
 
-    // -- create new table with 2x capacity --
+    // -- create new table: 2x capacity, or the same capacity when under half the slots are live
+    //    (a tombstone-driven rebuild from `__rt_hash_set`) --
     emitter.instruction("lsl x0, x9, #1");                                      // x0 = old_capacity * 2
+    emitter.instruction("ldr x10, [x20]");                                      // x10 = live entry count
+    emitter.instruction("lsl x10, x10, #1");                                    // x10 = count * 2
+    emitter.instruction("cmp x10, x9");                                         // fewer than half the slots live?
+    emitter.instruction("csel x0, x9, x0, lt");                                 // yes: rebuild at the same capacity
                                            // x1 = value_type (already set)
     emitter.instruction("bl __rt_hash_new");                                    // allocate new table → x0
     emitter.instruction("mov x19, x0");                                         // x19 = new table (callee-saved)
@@ -111,6 +117,10 @@ fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, QWORD PTR [rax + 8]");                        // load the old table capacity
     emitter.instruction("mov rsi, QWORD PTR [rax + 16]");                       // load the table-wide runtime value tag
     emitter.instruction("lea rdi, [r12 + r12]");                                // requested capacity = old capacity * 2
+    emitter.instruction("mov r13, QWORD PTR [rax]");                            // live entry count
+    emitter.instruction("shl r13, 1");                                          // count * 2
+    emitter.instruction("cmp r13, r12");                                        // fewer than half the slots live (tombstone-driven rebuild)?
+    emitter.instruction("cmovl rdi, r12");                                      // yes: rebuild at the same capacity
     emitter.instruction("test rdi, rdi");                                       // protect callers that grow a zero-capacity hash
     emitter.instruction("jne __rt_hash_grow_capacity_ready_x");                 // non-zero capacities can be used as-is
     emitter.instruction("mov rdi, 1");                                          // minimum grown capacity for an empty table

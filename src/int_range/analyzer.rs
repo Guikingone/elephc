@@ -16,7 +16,7 @@
 //! - When two sibling operands write and read the same variable, that variable is forgotten
 //!   before evaluating them, so verdicts never depend on operand evaluation order.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{BinOp, CastType, ClassMethod, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 
@@ -48,10 +48,25 @@ struct Frame {
     continues: State,
 }
 
+/// Interprocedural parameter ranges: the input of one analysis round and the call-site
+/// observations it produces for the next one.
+#[derive(Debug, Default)]
+pub(crate) struct CallSites {
+    /// Parameter ranges assumed at function entry this round.
+    pub(crate) assumed: HashMap<String, Vec<AbsVal>>,
+    /// When `true`, a tracked function missing from `assumed` has no reachable direct call yet
+    /// and its body is analyzed as unreachable (the optimistic start of the fixpoint); when
+    /// `false` its parameters are simply unknown.
+    pub(crate) optimistic: bool,
+    /// Join of the argument values seen at reachable direct calls (`None`: position not seen).
+    pub(crate) observed: HashMap<String, Vec<Option<AbsVal>>>,
+}
+
 /// Interpreter state for one body (function, method, closure, or the top-level script).
 pub(crate) struct Analyzer<'a> {
     info: &'a ProgramInfo,
     facts: &'a mut Facts,
+    calls: &'a mut CallSites,
     recording: bool,
     pinned: HashSet<String>,
     all_pinned: bool,
@@ -64,6 +79,7 @@ impl<'a> Analyzer<'a> {
     fn new(
         info: &'a ProgramInfo,
         facts: &'a mut Facts,
+        calls: &'a mut CallSites,
         body: &[Stmt],
         pinned: HashSet<String>,
         all_pinned: bool,
@@ -71,6 +87,7 @@ impl<'a> Analyzer<'a> {
         Self {
             info,
             facts,
+            calls,
             recording: true,
             pinned,
             all_pinned,
@@ -80,7 +97,13 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Analyzes the top-level script (and, transitively, every declaration it contains).
-    pub(crate) fn analyze_script(info: &'a ProgramInfo, facts: &'a mut Facts, program: &[Stmt], web: bool) {
+    pub(crate) fn analyze_script(
+        info: &'a ProgramInfo,
+        facts: &'a mut Facts,
+        calls: &'a mut CallSites,
+        program: &[Stmt],
+        web: bool,
+    ) {
         let scan = scan_body(program, &[], info);
         let mut pinned = scan.pinned;
         pinned.extend(info.top_level_pinned.iter().cloned());
@@ -89,12 +112,18 @@ impl<'a> Analyzer<'a> {
             // The kernel caps argv at `MAX_ARG_STRINGS` (0x7FFFFFFF) entries.
             env.set("argc", AbsVal::Int(0, i32::MAX as i64));
         }
-        let mut analyzer = Analyzer::new(info, facts, program, pinned, scan.unanalyzable);
+        let mut analyzer = Analyzer::new(info, facts, calls, program, pinned, scan.unanalyzable);
         analyzer.exec(program, Some(env));
     }
 
     /// Analyzes a function-like body in a fresh scope.
-    fn analyze_function(&mut self, params: &[Param], body: &[Stmt], extra_pins: &[String]) {
+    fn analyze_function(
+        &mut self,
+        function: Option<&str>,
+        params: &[Param],
+        body: &[Stmt],
+        extra_pins: &[String],
+    ) {
         for param in params {
             if let Some(default) = &param.2 {
                 self.eval_detached(default);
@@ -104,20 +133,40 @@ impl<'a> Analyzer<'a> {
         let mut pinned = scan.pinned;
         pinned.extend(extra_pins.iter().cloned());
         let mut env = Env::default();
-        for (name, type_expr, default, by_ref) in params {
-            let null_default = matches!(default.as_ref().map(|d| &d.kind), Some(ExprKind::Null));
-            if !by_ref && !null_default && matches!(type_expr, Some(TypeExpr::Int)) {
-                env.set(name, AbsVal::FULL_INT);
+        let tracked = function.filter(|name| self.info.tracks_call_sites(name));
+        let assumed = tracked.and_then(|name| self.calls.assumed.get(&symbol_key(name)).cloned());
+        let unreachable = tracked.is_some() && assumed.is_none() && self.calls.optimistic;
+        for (index, (name, type_expr, default, by_ref)) in params.iter().enumerate() {
+            if *by_ref {
+                continue;
             }
+            let null_default = matches!(default.as_ref().map(|d| &d.kind), Some(ExprKind::Null));
+            let typed_int = !null_default && matches!(type_expr, Some(TypeExpr::Int));
+            let observed = assumed.as_ref().and_then(|ranges| ranges.get(index).copied());
+            let value = match (typed_int, observed) {
+                // Every call passed a definite int: the parameter holds exactly those values.
+                (_, Some(AbsVal::Int(lo, hi))) => AbsVal::Int(lo, hi),
+                // An `int` parameter is an int whatever the caller passed (coercion or TypeError).
+                (true, _) => AbsVal::FULL_INT,
+                (false, _) => AbsVal::Top,
+            };
+            env.set(name, value);
         }
-        let mut child = Analyzer::new(self.info, &mut *self.facts, body, pinned, scan.unanalyzable);
-        child.exec(body, Some(env));
+        let mut child = Analyzer::new(
+            self.info,
+            &mut *self.facts,
+            &mut *self.calls,
+            body,
+            pinned,
+            scan.unanalyzable,
+        );
+        child.exec(body, if unreachable { None } else { Some(env) });
     }
 
     /// Analyzes a class-like member list.
     fn analyze_members(&mut self, methods: &[ClassMethod], constants: &[crate::parser::ast::ClassConst]) {
         for method in methods {
-            self.analyze_function(&method.params, &method.body, &[]);
+            self.analyze_function(None, &method.params, &method.body, &[]);
         }
         for constant in constants {
             self.eval_detached(&constant.value);
@@ -432,9 +481,9 @@ impl<'a> Analyzer<'a> {
                 self.eval_operands(&operands, &mut state);
                 state
             }
-            StmtKind::FunctionDecl { params, body, .. } => {
+            StmtKind::FunctionDecl { name, params, body, .. } => {
                 if self.recording {
-                    self.analyze_function(params, body, &[]);
+                    self.analyze_function(Some(name), params, body, &[]);
                 }
                 state
             }
@@ -855,7 +904,7 @@ impl<'a> Analyzer<'a> {
                 ..
             } => {
                 if self.recording {
-                    self.analyze_function(params, body, capture_refs);
+                    self.analyze_function(None, params, body, capture_refs);
                 }
                 AbsVal::Top
             }
@@ -978,6 +1027,9 @@ impl<'a> Analyzer<'a> {
         let values = self.eval_operands(&refs, state);
         let positional = args.iter().all(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
         if self.info.is_user_function(name) {
+            if self.recording && state.is_some() && self.info.tracks_call_sites(name) {
+                self.observe_call(&key, args, &values, positional);
+            }
             return if self.info.user_function_returns_int(name) { AbsVal::FULL_INT } else { AbsVal::Top };
         }
         let ints = || values.iter().map(|value| value.bounds()).collect::<Option<Vec<_>>>();
@@ -1021,6 +1073,23 @@ impl<'a> Analyzer<'a> {
                 Some(sig) if sig.return_type == crate::types::PhpType::Int => AbsVal::FULL_INT,
                 _ => AbsVal::Top,
             },
+        }
+    }
+
+    /// Joins one reachable direct call's argument values into the callee's observations.
+    ///
+    /// Named or spread arguments make every position unknown. Omitted trailing arguments are
+    /// recorded as unknown too (their defaults are not modelled).
+    fn observe_call(&mut self, key: &str, args: &[Expr], values: &[AbsVal], positional: bool) {
+        let arity = self.info.function_arity(key);
+        let entry = self
+            .calls
+            .observed
+            .entry(key.to_string())
+            .or_insert_with(|| vec![None; arity]);
+        for (index, slot) in entry.iter_mut().enumerate() {
+            let value = if positional && index < args.len() { values[index] } else { AbsVal::Top };
+            *slot = Some(slot.map_or(value, |seen| seen.join(value)));
         }
     }
 
