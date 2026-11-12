@@ -49,7 +49,7 @@ impl Checker {
                 span,
                 &format!("{} cannot use type void", context),
             )),
-            _ if Self::type_contains_never(&ty) => Err(CompileError::new(
+            _ if Self::type_contains_never(&ty) || Self::type_expr_contains_never(type_expr) => Err(CompileError::new(
                 span,
                 &format!("{} cannot use type never", context),
             )),
@@ -121,7 +121,7 @@ impl Checker {
         context: &str,
     ) -> Result<PhpType, CompileError> {
         let ty = self.resolve_type_expr(type_expr, span)?;
-        if Self::type_contains_never(&ty) {
+        if Self::type_contains_never(&ty) || Self::type_expr_contains_never(type_expr) {
             return Err(CompileError::new(
                 span,
                 &format!("{} cannot use type never", context),
@@ -145,7 +145,7 @@ impl Checker {
                 &format!("{} cannot use type void", context),
             ));
         }
-        if Self::type_contains_never(&ty) {
+        if Self::type_contains_never(&ty) || Self::type_expr_contains_never(type_expr) {
             return Err(CompileError::new(
                 span,
                 &format!("{} cannot use type never", context),

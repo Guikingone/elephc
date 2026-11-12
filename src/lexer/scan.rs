@@ -15,12 +15,13 @@ use crate::errors::CompileError;
 
 /// Scans the full PHP source into a stream of syntax tokens with source metadata.
 ///
-/// Requires `<?php` as the first five characters. Dispatches to `literals` for
+/// Requires an open tag (`<?php` or `<?=`); text before it and after each `?>` closing
+/// tag is emitted as `echo` statements of inline HTML. Dispatches to `literals` for
 /// strings (which may contain interpolation), heredoc/nowdoc, numbers, variables,
 /// and keywords. Returns `Token::Eof` at end-of-input.
 ///
 /// # Errors
-/// Returns `CompileError` if the file does not open with `<?php`.
+/// Returns `CompileError` if the file contains no open tag.
 pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
@@ -28,15 +29,18 @@ pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     let mut cursor = Cursor::new(source);
     let mut tokens = Vec::new();
 
-    skip_whitespace_and_comments(&mut cursor);
+    // The CLI ignores a `#!` interpreter line before the first open tag.
+    if cursor.remaining().starts_with("#!") {
+        while let Some(ch) = cursor.advance() {
+            if ch == '\n' { break; }
+        }
+    }
 
     let span = cursor.span();
-    if cursor.remaining().starts_with("<?php") {
-        for _ in 0..5 {
-            cursor.advance();
-        }
-        tokens.push(spanned(Token::OpenTag, span));
-    } else {
+    tokens.push(spanned(Token::OpenTag, span));
+    // Text before the first open tag is inline HTML; a file with no open tag at all is
+    // still rejected, since compiling a pure template is almost always a mistake.
+    if !scan_inline_html(&mut cursor, &mut tokens) {
         return Err(CompileError::new(span, "Expected '<?php' at start of file"));
     }
 
@@ -49,6 +53,21 @@ pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
         }
 
         let span = cursor.span();
+        if cursor.remaining().starts_with("?>") {
+            // A closing tag ends the statement like `;`, swallows one directly following
+            // newline, and switches to inline HTML, which is echoed verbatim.
+            cursor.advance();
+            cursor.advance();
+            if cursor.remaining().starts_with("\r\n") {
+                cursor.advance();
+                cursor.advance();
+            } else if cursor.peek() == Some('\n') {
+                cursor.advance();
+            }
+            tokens.push(spanned(Token::Semicolon, span));
+            scan_inline_html(&mut cursor, &mut tokens);
+            continue;
+        }
         if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
@@ -84,6 +103,55 @@ pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
     Ok(tokens)
 }
 
+/// Scans inline HTML up to the next open tag and emits it as `echo "<html>";`.
+///
+/// Consumes the open tag: `<?php` (any case, followed by whitespace or EOF) or `<?=`,
+/// which additionally emits `echo` so the following expression is printed. Returns
+/// whether an open tag was found before the end of the input.
+fn scan_inline_html(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) -> bool {
+    let span = cursor.span();
+    let rest = cursor.remaining();
+    let bytes = rest.as_bytes();
+    let mut at = 0;
+    let mut tag: Option<(usize, bool)> = None;
+    while let Some(pos) = rest[at..].find("<?") {
+        let start = at + pos;
+        let after = &bytes[start + 2..];
+        if after.first() == Some(&b'=') {
+            tag = Some((start, true));
+            break;
+        }
+        if after.len() >= 3
+            && after[..3].eq_ignore_ascii_case(b"php")
+            && after.get(3).is_none_or(|b| b.is_ascii_whitespace())
+        {
+            tag = Some((start, false));
+            break;
+        }
+        at = start + 2;
+    }
+    let html_len = tag.map_or(rest.len(), |(start, _)| start);
+    if html_len > 0 {
+        let html = rest[..html_len].to_string();
+        tokens.push(spanned(Token::Echo, span));
+        tokens.push(spanned(Token::StringLiteral(html), span));
+        tokens.push(spanned(Token::Semicolon, span));
+    }
+    let consumed = html_len + match tag {
+        Some((_, true)) => 3,
+        Some((_, false)) => 5 + usize::from(bytes.get(html_len + 5).is_some_and(|b| b.is_ascii_whitespace())),
+        None => 0,
+    };
+    let target = rest.len() - consumed;
+    while cursor.remaining().len() > target {
+        cursor.advance();
+    }
+    if let Some((_, true)) = tag {
+        tokens.push(spanned(Token::Echo, cursor.span()));
+    }
+    tag.is_some()
+}
+
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute
 /// groups), and `/* */` block comments. Uses `continue` to re-check after each comment
 /// type so adjacent comment forms are all skipped.
@@ -97,17 +165,16 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
             }
         }
 
-        if cursor.remaining().starts_with("//") {
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
-            continue;
-        }
-
-        if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
-            // PHP line comment introduced by `#` (but `#[` opens an attribute group).
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
+        if cursor.remaining().starts_with("//")
+            || (cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#["))
+        {
+            // Line comments (`//`, or `#` when it does not open a `#[` attribute group)
+            // end at the newline or right before a `?>` closing tag, like in PHP.
+            while !cursor.remaining().starts_with("?>") {
+                match cursor.advance() {
+                    Some('\n') | None => break,
+                    _ => {}
+                }
             }
             continue;
         }

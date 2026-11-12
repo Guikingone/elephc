@@ -37,7 +37,9 @@ pub(super) fn lower_load_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     })?;
     abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
     let result_ty = ctx.value_php_type(result)?;
-    coerce_loaded_local_to_result_type(ctx, &slot.php_type, &result_ty)?;
+    let borrowed = ctx.value_ownership(result)? != crate::ir::Ownership::Owned
+        && !ctx.released_values.contains(&result);
+    coerce_loaded_local_to_result_type(ctx, &slot.php_type, &result_ty, borrowed)?;
     ctx.store_result_value(result)
 }
 

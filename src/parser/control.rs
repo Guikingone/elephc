@@ -1,6 +1,8 @@
 //! Purpose:
 //! Parses PHP control-flow statements and inline loop/header expressions.
-//! Covers if/ifdef, loops, foreach, try/catch/finally, switch, and control headers.
+//! Covers if/ifdef, loops, foreach, try/catch/finally, switch, and control headers, in both
+//! the brace form and the alternative `: ... endif;` / `endwhile;` / `endfor;` /
+//! `endforeach;` / `endswitch;` form (which builds the same AST nodes).
 //!
 //! Called from:
 //! - `crate::parser::stmt::parse_stmt()`.
@@ -27,6 +29,9 @@ pub fn parse_if(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'if'")?;
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after if condition")?;
+    if at(tokens, *pos, &Token::Colon) {
+        return parse_alt_if(tokens, pos, span, condition);
+    }
     let then_body = parse_body(tokens, pos)?;
 
     let mut elseif_clauses = Vec::new();
@@ -105,7 +110,7 @@ pub fn parse_while(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'while'")?;
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after while condition")?;
-    let body = parse_body(tokens, pos)?;
+    let body = parse_body_or_alt(tokens, pos, "endwhile")?;
     Ok(Stmt::new(StmtKind::While { condition, body }, span))
 }
 
@@ -221,7 +226,7 @@ pub fn parse_foreach(
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
-    let mut body = parse_body(tokens, pos)?;
+    let mut body = parse_body_or_alt(tokens, pos, "endforeach")?;
 
     let (value_var, value_store) = lower_foreach_binding(value_binding, "val", span)?;
     let (key_var, key_store) = match key_binding {
@@ -276,7 +281,7 @@ fn finish_foreach_destructure(
         Expr::new(ExprKind::Variable(temp.clone()), span),
     )?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
-    let mut body = parse_body(tokens, pos)?;
+    let mut body = parse_body_or_alt(tokens, pos, "endforeach")?;
     body.insert(0, destructure_stmt);
     Ok(Stmt::new(
         StmtKind::Foreach {
@@ -328,7 +333,7 @@ pub fn parse_for(
     let update = parse_for_clause_list(tokens, pos, &Token::RParen)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after for clauses")?;
 
-    let body = parse_body(tokens, pos)?;
+    let body = parse_body_or_alt(tokens, pos, "endfor")?;
 
     Ok(Stmt::new(
         StmtKind::For {
@@ -643,37 +648,59 @@ pub fn parse_switch(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'switch'")?;
     let subject = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after switch expression")?;
-    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after switch")?;
+    let alternative = at(tokens, *pos, &Token::Colon);
+    if alternative {
+        *pos += 1;
+    } else {
+        expect_token(tokens, pos, &Token::LBrace, "Expected '{' after switch")?;
+    }
+    // Inside an alternative-syntax switch, `endswitch` closes the case list like `}`.
+    let closes = |tokens: &[SpannedToken], pos: usize| {
+        if alternative { at_end_word(tokens, pos, "endswitch") } else { at(tokens, pos, &Token::RBrace) }
+    };
+    // PHP also accepts a `;` right after the opening `:` / `{`.
+    if at(tokens, *pos, &Token::Semicolon) {
+        *pos += 1;
+    }
 
     let mut cases: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
     let mut default: Option<Vec<Stmt>> = None;
 
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+    while *pos < tokens.len() && !closes(tokens, *pos) {
         if tokens[*pos].0 == Token::Case {
             // Parse one or more case values
             let mut values = Vec::new();
             while *pos < tokens.len() && tokens[*pos].0 == Token::Case {
                 *pos += 1;
                 values.push(parse_expr(tokens, pos)?);
-                expect_token(tokens, pos, &Token::Colon, "Expected ':' after case value")?;
+                if at(tokens, *pos, &Token::Semicolon) {
+                    *pos += 1; // `case X;` is an accepted spelling of `case X:`
+                } else {
+                    expect_token(tokens, pos, &Token::Colon, "Expected ':' after case value")?;
+                }
             }
             // Parse case body (statements until next case/default/})
             let mut body = Vec::new();
             while *pos < tokens.len()
                 && tokens[*pos].0 != Token::Case
                 && tokens[*pos].0 != Token::Default
-                && tokens[*pos].0 != Token::RBrace
+                && !closes(tokens, *pos)
             {
                 body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
             }
             cases.push((values, body));
         } else if tokens[*pos].0 == Token::Default {
             *pos += 1;
-            expect_token(tokens, pos, &Token::Colon, "Expected ':' after 'default'")?;
+            if at(tokens, *pos, &Token::Semicolon) {
+                *pos += 1;
+            } else {
+                expect_token(tokens, pos, &Token::Colon, "Expected ':' after 'default'")?;
+            }
             let mut body = Vec::new();
             while *pos < tokens.len()
                 && tokens[*pos].0 != Token::Case
-                && tokens[*pos].0 != Token::RBrace
+                && tokens[*pos].0 != Token::Default
+                && !closes(tokens, *pos)
             {
                 body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
             }
@@ -686,13 +713,106 @@ pub fn parse_switch(
         }
     }
 
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' to close switch")?;
+    if alternative {
+        expect_end_word(tokens, pos, "endswitch")?;
+    } else {
+        expect_token(tokens, pos, &Token::RBrace, "Expected '}' to close switch")?;
+    }
 
     Ok(Stmt::new(
         StmtKind::Switch {
             subject,
             cases,
             default,
+        },
+        span,
+    ))
+}
+
+/// Returns whether the token at `pos` is `token`.
+fn at(tokens: &[SpannedToken], pos: usize, token: &Token) -> bool {
+    tokens.get(pos).is_some_and(|(t, _)| t == token)
+}
+
+/// Returns whether the token at `pos` is the alternative-syntax terminator `word`
+/// (`endif`, `endwhile`, `endfor`, `endforeach`, `endswitch`), matched case-insensitively.
+fn at_end_word(tokens: &[SpannedToken], pos: usize, word: &str) -> bool {
+    matches!(tokens.get(pos), Some((Token::Identifier(name), _)) if name.eq_ignore_ascii_case(word))
+}
+
+/// Consumes the terminator `word` and the `;` (or `?>`) that must follow it.
+fn expect_end_word(tokens: &[SpannedToken], pos: &mut usize, word: &str) -> Result<(), CompileError> {
+    if !at_end_word(tokens, *pos, word) {
+        let span = tokens.get(*pos).or(tokens.last()).map(|(_, m)| m.span).unwrap_or(Span::dummy());
+        return Err(CompileError::new(span, &format!("Expected '{}'", word)));
+    }
+    *pos += 1;
+    expect_semicolon(tokens, pos)
+}
+
+/// Parses statements until `stop` holds for the current token (or the input ends).
+fn parse_stmts_until(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    stop: impl Fn(&[SpannedToken], usize) -> bool,
+) -> Result<Vec<Stmt>, CompileError> {
+    let mut body = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::Eof && !stop(tokens, *pos) {
+        body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
+    }
+    Ok(body)
+}
+
+/// Parses a loop body: a regular body, or the alternative syntax `: stmts end_word;`.
+fn parse_body_or_alt(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    end_word: &str,
+) -> Result<Vec<Stmt>, CompileError> {
+    if !at(tokens, *pos, &Token::Colon) {
+        return parse_body(tokens, pos);
+    }
+    *pos += 1;
+    let body = parse_stmts_until(tokens, pos, |tokens, pos| at_end_word(tokens, pos, end_word))?;
+    expect_end_word(tokens, pos, end_word)?;
+    Ok(body)
+}
+
+/// Parses the alternative `if (c): ... elseif (c): ... else: ... endif;` form after the
+/// condition; it builds the same `If` node as the brace form.
+fn parse_alt_if(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    condition: Expr,
+) -> Result<Stmt, CompileError> {
+    let branch_end = |tokens: &[SpannedToken], pos: usize| {
+        at(tokens, pos, &Token::ElseIf) || at(tokens, pos, &Token::Else) || at_end_word(tokens, pos, "endif")
+    };
+    *pos += 1; // ':'
+    let then_body = parse_stmts_until(tokens, pos, branch_end)?;
+    let mut elseif_clauses = Vec::new();
+    let mut else_body = None;
+    while at(tokens, *pos, &Token::ElseIf) {
+        *pos += 1;
+        expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'elseif'")?;
+        let cond = parse_expr(tokens, pos)?;
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after elseif condition")?;
+        expect_token(tokens, pos, &Token::Colon, "Expected ':' after elseif condition")?;
+        elseif_clauses.push((cond, parse_stmts_until(tokens, pos, branch_end)?));
+    }
+    if at(tokens, *pos, &Token::Else) {
+        *pos += 1;
+        expect_token(tokens, pos, &Token::Colon, "Expected ':' after 'else'")?;
+        else_body = Some(parse_stmts_until(tokens, pos, |tokens, pos| at_end_word(tokens, pos, "endif"))?);
+    }
+    expect_end_word(tokens, pos, "endif")?;
+    Ok(Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
         },
         span,
     ))

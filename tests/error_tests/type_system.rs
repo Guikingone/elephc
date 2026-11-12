@@ -529,11 +529,12 @@ fn test_error_is_kind_predicates_arity() {
 // --- Error positions ---
 
 /// Verifies that the null coalesce operator widens the inferred return type to float
-/// when one branch is int and the other is a float literal.
-/// Input: `function fallback_pi($x) { return $x ?? 3.14159; }`
+/// when one branch is int and the other is a float literal, and that returning an untyped
+/// parameter through `??` keeps the boxed `mixed` return (any caller value flows through).
+/// Input: `function fallback_pi(int $x) { return $x ?? 3.14159; }` / untyped `$x`
 #[test]
 fn test_null_coalesce_widens_function_return_type_in_checker() {
-    let tokens = tokenize("<?php function fallback_pi($x) { return $x ?? 3.14159; }")
+    let tokens = tokenize("<?php function fallback_pi(?int $x) { return $x ?? 3.14159; }")
         .expect("tokenize failed");
     let ast = parse(&tokens).expect("parse failed");
     let ast = elephc::optimize::fold_constants(ast);
@@ -544,6 +545,13 @@ fn test_null_coalesce_widens_function_return_type_in_checker() {
         .get("fallback_pi")
         .expect("missing function signature for fallback_pi");
     assert_eq!(sig.return_type, PhpType::Float);
+
+    let tokens = tokenize("<?php function fallback_any($x) { return $x ?? 3.14159; }")
+        .expect("tokenize failed");
+    let ast = elephc::optimize::fold_constants(parse(&tokens).expect("parse failed"));
+    let check_result = types::check(&ast).expect("type check failed");
+    let sig = check_result.functions.get("fallback_any").expect("missing fallback_any");
+    assert_eq!(sig.return_type, PhpType::Mixed);
 
     // Verifies that `array` return hints preserve the element type through property storage
     // and method return inference, using a `Wad` class with `Entry` objects.

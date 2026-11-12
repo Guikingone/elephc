@@ -7945,7 +7945,9 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
         .ok_or_else(|| CodegenIrError::invalid_module("load_local missing result value"))?;
     let source_ty = ctx.load_local_to_result(slot)?;
     let result_ty = ctx.value_php_type(result)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    let borrowed = ctx.value_ownership(result)? != Ownership::Owned
+        && !ctx.released_values.contains(&result);
+    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty, borrowed)?;
     ctx.store_result_value(result)
 }
 
@@ -7962,7 +7964,9 @@ fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         let source_ty = ctx.load_raw_local_to_result(slot)?;
-        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        let borrowed = ctx.value_ownership(result)? != Ownership::Owned
+        && !ctx.released_values.contains(&result);
+        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty, borrowed)?;
         return ctx.store_result_value(result);
     }
     let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
@@ -7985,7 +7989,9 @@ fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
         }
     }
     let source_ty = ctx.load_raw_local_to_result(slot)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    let borrowed = ctx.value_ownership(result)? != Ownership::Owned
+        && !ctx.released_values.contains(&result);
+    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty, borrowed)?;
     ctx.emit_branch(&done);
     ctx.emitter.label(&ref_cell);
     load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
@@ -8049,7 +8055,9 @@ fn load_ref_cell_local_to_result_as(
 ///
 /// A boxed string yields the box's own payload (borrowed like any string local); other tags go
 /// through `__rt_mixed_cast_string`, which formats numbers into the concat buffer. Casting a
-/// boxed string that way returned a persisted copy the borrowed load never released.
+/// boxed string that way returned a persisted copy the borrowed load never released. Only used
+/// for loads whose result is neither `Owned` nor explicitly released: those keep the copying
+/// cast, since their consumer takes or releases the result.
 fn emit_borrow_mixed_local_as_string(ctx: &mut FunctionContext<'_>) {
     let cast = ctx.next_label("mixed_local_str_cast");
     let done = ctx.next_label("mixed_local_str_done");
@@ -8088,6 +8096,7 @@ pub(super) fn coerce_loaded_local_to_result_type(
     ctx: &mut FunctionContext<'_>,
     source_ty: &PhpType,
     result_ty: &PhpType,
+    result_borrowed: bool,
 ) -> Result<()> {
     let source_ty = source_ty.codegen_repr();
     let result_ty = result_ty.codegen_repr();
@@ -8111,7 +8120,12 @@ pub(super) fn coerce_loaded_local_to_result_type(
             Ok(())
         }
         (PhpType::Mixed, PhpType::Str) => {
-            emit_borrow_mixed_local_as_string(ctx);
+            if result_borrowed {
+                emit_borrow_mixed_local_as_string(ctx);
+            } else {
+                move_int_result_to_first_arg(ctx);
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            }
             Ok(())
         }
         (PhpType::Mixed, PhpType::Array(elem))

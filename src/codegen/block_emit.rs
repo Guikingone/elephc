@@ -1180,6 +1180,12 @@ fn collect_rematerialized_consts(ctx: &mut FunctionContext<'_>) {
 /// with an overflow fallback (the cast and the release are then skipped).
 fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
     let function = ctx.function;
+    ctx.released_values = function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::Release)
+        .filter_map(|inst| inst.operands.first().copied())
+        .collect();
     let mut use_counts: std::collections::HashMap<ValueId, usize> = std::collections::HashMap::new();
     for inst in &function.instructions {
         for operand in &inst.operands {

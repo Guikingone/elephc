@@ -4,6 +4,10 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- PHP tags: text outside `<?php ... ?>` is printed as inline HTML, `?>` terminates a statement (swallowing one following newline), `<?=` short echo tags work, line comments end at `?>`, and a lone `;` is accepted as PHP's empty statement.
+- Alternative control syntax: `if (): ... elseif (): ... else: ... endif;`, `endwhile`, `endfor`, `endforeach`, `endswitch` (and `case X;`) parse into the same statements as the brace forms.
+- Fixed: reading a `mixed`-stored local as a string borrowed the boxed payload even when the consumer released the result (double free with `settype()` or a string param reassigned to an int); the borrow is now limited to reads that are never released.
+- Fixed: `int|never` parameter, property and local hints are rejected again (union normalization had dropped the `never` member before the check).
 - A checked integer `+`/`-`/`*` whose `int|float` result is immediately converted back to `int` (`($a * $b) & 0xFFFF`, `($s + $x) ^ 1`) runs natively with an overflow branch; only an actual overflow boxes the intermediate and converts it like before.
 - The loop-storage fixed point defers an assignment that reads an array still empty at that point (`$a = []` refilled later in the same loop body) until the array has its element type, so the assigned local keeps native storage instead of `mixed`.
 - `array_sum()` accepts hashes with `int`/`bool` values (now that such hashes keep native value types).

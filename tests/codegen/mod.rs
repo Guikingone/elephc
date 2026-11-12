@@ -60,6 +60,7 @@ mod runtime_gc;
 mod runtime_reachability;
 mod math;
 mod misc;
+mod inline_html;
 mod pointers;
 mod ffi;
 mod oop;

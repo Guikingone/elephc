@@ -115,3 +115,29 @@ fn test_open_tag_with_block_comment_no_code() {
     let t = tokens("<?php /* empty */");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
+
+/// Verifies `?>` lexes as a statement terminator followed by an `echo` of the inline HTML,
+/// and `<?=` re-opens PHP mode with an `echo`.
+#[test]
+fn test_closing_tag_emits_inline_html_echo() {
+    let tokens: Vec<Token> = tokenize("<?php $a ?>\nhi <?= $a ?>")
+        .unwrap()
+        .into_iter()
+        .map(|(token, _)| token)
+        .collect();
+    assert_eq!(
+        tokens,
+        vec![
+            Token::OpenTag,
+            Token::Variable("a".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("hi ".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::Variable("a".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}

@@ -80,6 +80,8 @@ pub(crate) struct FunctionContext<'a> {
     /// Checked int add/sub/mul instructions lowered together with the cast to `int` that
     /// consumes their boxed result (checked instruction -> cast instruction).
     pub(super) fused_checked_casts: HashMap<InstId, InstId>,
+    /// Values with an explicit `release` instruction; their producers must hand out an owned result.
+    pub(super) released_values: HashSet<ValueId>,
     label_counter: usize,
 }
 
@@ -130,6 +132,7 @@ impl<'a> FunctionContext<'a> {
             skipped_consts: HashSet::new(),
             borrowed_read: false,
             fused_checked_casts: HashMap::new(),
+            released_values: HashSet::new(),
             epilogue_label,
             label_counter: 0,
         }

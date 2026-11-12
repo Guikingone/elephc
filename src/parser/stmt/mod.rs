@@ -118,6 +118,11 @@ fn parse_stmt_dispatch(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
+        // A lone `;` (also produced by a `?>` closing tag) is PHP's empty statement.
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
+        }
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),

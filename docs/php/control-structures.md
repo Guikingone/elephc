@@ -44,6 +44,25 @@ declare(ticks=1):
 enddeclare;
 ```
 
+## Alternative syntax and inline HTML
+
+Every block statement also has PHP's alternative form (`if (...): ... elseif (...): ...
+else: ... endif;`, `while (...): ... endwhile;`, `for (...): ... endfor;`,
+`foreach (...): ... endforeach;`, `switch (...): ... endswitch;`). It builds the same
+statement as the brace form.
+
+Text outside `<?php ... ?>` blocks is inline HTML and is printed as is; `?>` ends the
+current statement like `;` and swallows one directly following newline, and `<?= expr ?>`
+echoes an expression. A file still needs at least one open tag.
+
+```php
+<ul>
+<?php foreach ($items as $item): ?>
+  <li><?= $item ?></li>
+<?php endforeach; ?>
+</ul>
+```
+
 ## if / elseif / else
 
 ```php
