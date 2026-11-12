@@ -29,6 +29,13 @@ impl Checker {
         if flat.iter().any(|member| !matches!(member, PhpType::Never)) {
             flat.retain(|member| !matches!(member, PhpType::Never));
         }
+        // An empty list (`array<never>`, e.g. `$row = []` before it is filled) fits any list
+        // storage, so `array<never>|array<T>` is just `array<T>` instead of a boxed union.
+        let is_empty_list =
+            |member: &PhpType| matches!(member, PhpType::Array(element) if **element == PhpType::Never);
+        if flat.iter().any(|member| matches!(member, PhpType::Array(_)) && !is_empty_list(member)) {
+            flat.retain(|member| !is_empty_list(member));
+        }
 
         let mut deduped = Vec::new();
         for member in flat {
@@ -598,6 +605,8 @@ impl Checker {
 
         match (existing, new_ty) {
             (PhpType::Object(left), PhpType::Object(right)) => self.common_object_type(left, right),
+            // `false` is the literal subtype of `bool` and shares its storage.
+            (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool) => Some(PhpType::Bool),
             _ => None,
         }
     }

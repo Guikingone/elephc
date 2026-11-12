@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- `array<never>|array<T>` (an empty list such as `$row = []` joined with its filled form) now normalizes to `array<T>` instead of a boxed union, so arrays of rows built in loops keep native element storage (integer matrix multiply ~3.5x faster).
+- Writing `false` into a `bool` array no longer widens the elements to `mixed` (`false` is the literal subtype of `bool`); a boolean sieve over 2M entries is ~4x faster.
 - Fixed a bare `array` parameter keeping the element type and storage of its first call site: a later call with other element types or a hash read its values through the first layout (`first(["x" => "hello"])` returned `int(7)`). Such parameters now widen across call sites (`mixed` elements, hash storage when lists and hashes mix), and each call site converts its argument to the shared representation (by-reference locals are promoted in place).
 - The x86_64 cycle collector counts incoming heap edges in one linear scan (a saturating counter in transient kind-word bits) instead of rescanning the whole heap for every candidate node, which was quadratic in the number of live blocks. A reference-heavy `unset()` loop drops from a timeout to ~25 ms.
 - `array_sum()` over a `mixed`-valued hash counts raw scalar slots (ints stored without boxing) instead of skipping them.
