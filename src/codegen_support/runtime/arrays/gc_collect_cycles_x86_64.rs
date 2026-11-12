@@ -7,15 +7,18 @@
 //!
 //! Key details:
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
+//! - Incoming edges are counted in one linear heap scan (the previous per-candidate full-heap
+//!   rescan was quadratic in the number of live blocks).
 
 use crate::codegen_support::emit::Emitter;
 
 /// Emits the `__rt_gc_collect_cycles` and `__rt_gc_collect_cycles_done` runtime helpers for Linux x86_64.
 ///
-/// This is a three-pass mark-sweep collector tailored to PHP array/hash/object storage on the managed heap:
-/// - **Pass 1 (clear):** clears the transient reachable bit on every live heap block while preserving kind, value_type, and heap marker bits.
-/// - **Pass 2 (root scan):** finds externally rooted nodes by recounting incoming heap edges for each candidate; nodes whose refcount exceeds incoming edges are marked reachable via `__rt_gc_mark_reachable`.
-/// - **Pass 3 (free):** frees every still-unreachable live refcounted node by dispatching to `__rt_array_free_deep`, `__rt_hash_free_deep`, `__rt_mixed_free_deep`, or `__rt_object_free_deep`.
+/// This is a four-pass mark-sweep collector tailored to PHP array/hash/object storage on the managed heap:
+/// - **Pass 1 (clear):** clears the transient metadata (bits 16..31) on every live heap block while preserving kind, value_type, and heap marker bits.
+/// - **Pass 2 (count):** one heap scan adds every outgoing child edge to the child's saturating incoming-edge counter (bits 17..31) through `__rt_gc_note_child_ref_x86`.
+/// - **Pass 3 (roots):** nodes whose refcount exceeds their incoming heap edges are externally rooted and marked reachable via `__rt_gc_mark_reachable`.
+/// - **Pass 4 (free):** frees every still-unreachable live refcounted node by dispatching to `__rt_array_free_deep`, `__rt_hash_free_deep`, `__rt_mixed_free_deep`, or `__rt_object_free_deep`.
 ///
 /// Re-entry is guarded by the `_gc_collecting` flag — nested collection attempts are silently skipped.
 ///
@@ -37,9 +40,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 8]  = heap base
     //   [rbp - 16] = initial heap end
     //   [rbp - 24] = outer scan header
-    //   [rbp - 32] = current target user pointer
+    //   [rbp - 32] = (unused)
     //   [rbp - 40] = scratch / saved next header
-    //   [rbp - 48] = incoming heap-edge count for the current target
+    //   [rbp - 48] = (unused)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving x86_64 collector locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the x86_64 collector locals
     emitter.instruction("sub rsp, 48");                                         // reserve collector locals for heap bounds, scan pointers, and incoming counts
@@ -57,7 +60,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_clear_loop");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current heap header scan pointer for the metadata-clear pass
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // have we reached the initial heap end for this collection pass?
-    emitter.instruction("jae __rt_gc_collect_cycles_root_init");                // yes — move on once every live block has its transient x86_64 mark cleared
+    emitter.instruction("jae __rt_gc_collect_cycles_count_init");               // yes — count incoming edges once every live block has its transient metadata cleared
     emitter.instruction("mov r9d, DWORD PTR [r8]");                             // load this block payload size before advancing to the next heap header
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this block refcount so free-list blocks can be skipped during metadata clearing
     emitter.instruction("test r10d, r10d");                                     // is this heap block currently live?
@@ -72,47 +75,15 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save the next heap header scan pointer for the following clear iteration
     emitter.instruction("jmp __rt_gc_collect_cycles_clear_loop");               // continue clearing transient metadata across the managed heap window
 
-    // -- pass 2: find externally rooted nodes by recounting incoming heap edges on demand --
-    emitter.label("__rt_gc_collect_cycles_root_init");
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the heap base before starting the externally rooted node scan
-    emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // restart the outer scan pointer at the heap base
-    emitter.label("__rt_gc_collect_cycles_root_loop");
-    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header for the x86_64 root scan
-    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // have we scanned every block in the initial heap window?
-    emitter.instruction("jae __rt_gc_collect_cycles_free_init");                // yes — move on to freeing the still-unreachable graph nodes
-    emitter.instruction("mov r9d, DWORD PTR [r8]");                             // load this candidate block payload size before any nested rescans
-    emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this candidate block refcount from the heap header
-    emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
-    emitter.instruction("jz __rt_gc_collect_cycles_root_next");                 // free-list blocks cannot be GC roots
-    emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the candidate kind word before deciding whether it participates in cycle collection
-    emitter.instruction("mov rcx, r11");                                        // preserve the full kind word while isolating the low-byte heap kind tag
-    emitter.instruction("and rcx, 0xff");                                       // isolate the low-byte heap kind tag for candidate dispatch
-    emitter.instruction("cmp rcx, 2");                                          // is this candidate at least an indexed array?
-    emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // strings and raw buffers never participate in cycle collection
-    emitter.instruction("cmp rcx, 7");                                          // is this candidate within the array/hash/object/mixed/refcell range?
-    emitter.instruction("ja __rt_gc_collect_cycles_root_next");                 // unknown/raw heap kinds are ignored by the collector
-    emitter.instruction("cmp rcx, 2");                                          // is this candidate an indexed array?
-    emitter.instruction("jne __rt_gc_collect_cycles_root_candidate_ready");     // hashes, objects, mixed boxes, and reference cells remain collector candidates
-    emitter.instruction("mov rdx, r11");                                        // preserve the full array kind word while unpacking the runtime array value_type tag
-    emitter.instruction("shr rdx, 8");                                          // move the packed array value_type tag into the low bits
-    emitter.instruction("and rdx, 0x7f");                                       // isolate the array value_type without the persistent COW flag bit
-    emitter.instruction("cmp rdx, 4");                                          // does this array contain refcounted element payloads?
-    emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // scalar and string arrays cannot participate in heap cycles
-    emitter.instruction("cmp rdx, 7");                                          // is the array value_type within the supported refcounted range?
-    emitter.instruction("ja __rt_gc_collect_cycles_root_next");                 // unknown array payload tags are ignored by the collector
-    emitter.label("__rt_gc_collect_cycles_root_candidate_ready");
-    emitter.instruction("lea rdx, [r8 + 16]");                                  // compute the current candidate user pointer for the incoming-edge recount
-    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the candidate user pointer across the nested full-heap rescan
-    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // reset the incoming heap-edge count before rescanning the entire heap
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the heap base before starting the nested incoming-edge rescan
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // initialize the nested scan pointer to the heap base
-
-    // -- nested rescan: count heap edges that point at the current candidate --
+    emitter.label("__rt_gc_collect_cycles_count_init");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // heap base
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // start the edge-count scan at the heap base
+    // -- pass 2: count incoming heap edges for every block in one scan (saturating counter in
+    //    kind-word bits 17..31; bit 16 stays the reachable mark) --
     emitter.label("__rt_gc_collect_cycles_count_loop");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the current source heap header for the incoming-edge rescan
     emitter.instruction("cmp rdx, QWORD PTR [rbp - 16]");                       // have we finished rescanning the initial heap window?
-    emitter.instruction("jae __rt_gc_collect_cycles_root_compare");             // yes — compare the candidate refcount against the recounted incoming edges
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the current candidate user pointer for outgoing-edge comparisons
+    emitter.instruction("jae __rt_gc_collect_cycles_root_init");                // every edge counted: find the externally rooted nodes
     emitter.instruction("mov ecx, DWORD PTR [rdx]");                            // load this source block payload size before deciding whether it emits outgoing edges
     emitter.instruction("mov rdi, rcx");                                        // preserve the source block payload size across the outgoing-edge dispatch loops
     emitter.instruction("mov r8d, DWORD PTR [rdx + 4]");                        // load the source block refcount so free-list blocks can be skipped
@@ -152,9 +123,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, r11");                                         // preserve the logical array index while scaling it into a byte offset
     emitter.instruction("shl r8, 3");                                           // scale the array index by eight bytes per child pointer slot
     emitter.instruction("add r8, 24");                                          // skip the 24-byte array header to reach the selected child slot
-    emitter.instruction("cmp QWORD PTR [r9 + r8], rsi");                        // does this source array child point at the current candidate node?
-    emitter.instruction("jne __rt_gc_collect_cycles_count_array_next");         // no — this child does not contribute an incoming edge to the candidate
-    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count one incoming heap edge from this array slot into the current candidate
+    emitter.instruction("push QWORD PTR [r9 + r8]");                             // pass the child pointer on the stack
+    emitter.instruction("call __rt_gc_note_child_ref_x86"); // count one incoming heap edge into the child
+    emitter.instruction("add rsp, 8"); // drop the argument
     emitter.label("__rt_gc_collect_cycles_count_array_next");
     emitter.instruction("add r11, 1");                                          // advance to the next child slot in the source array
     emitter.instruction("jmp __rt_gc_collect_cycles_count_array_loop");         // continue comparing source array children against the current candidate
@@ -180,9 +151,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 7");                                          // is the runtime value_tag within the supported heap-backed range?
     emitter.instruction("ja __rt_gc_collect_cycles_count_hash_next");           // unknown runtime tags are ignored by the collector
     emitter.label("__rt_gc_collect_cycles_count_hash_child");
-    emitter.instruction("cmp QWORD PTR [r8 + 24], rsi");                        // does this hash value payload point at the current candidate node?
-    emitter.instruction("jne __rt_gc_collect_cycles_count_hash_next");          // no — this entry does not contribute an incoming edge to the candidate
-    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count one incoming heap edge from this hash entry into the current candidate
+    emitter.instruction("push QWORD PTR [r8 + 24]");                             // pass the child pointer on the stack
+    emitter.instruction("call __rt_gc_note_child_ref_x86"); // count one incoming heap edge into the child
+    emitter.instruction("add rsp, 8"); // drop the argument
     emitter.label("__rt_gc_collect_cycles_count_hash_next");
     emitter.instruction("add r11, 1");                                          // advance to the next hash entry slot in the source table
     emitter.instruction("jmp __rt_gc_collect_cycles_count_hash_loop");          // continue comparing source hash children against the current candidate
@@ -194,9 +165,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_gc_collect_cycles_count_next");                // scalar, string, and null boxed values contribute no incoming edge
     emitter.instruction("cmp r10, 7");                                          // is the boxed runtime tag within the supported heap-backed range?
     emitter.instruction("ja __rt_gc_collect_cycles_count_next");                // unknown boxed runtime tags are ignored by the collector
-    emitter.instruction("cmp QWORD PTR [r9 + 8], rsi");                         // does the boxed mixed child pointer equal the current candidate node?
-    emitter.instruction("jne __rt_gc_collect_cycles_count_next");               // no — this mixed box does not contribute an incoming edge to the candidate
-    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count one incoming heap edge from this mixed box into the current candidate
+    emitter.instruction("push QWORD PTR [r9 + 8]");                              // pass the child pointer on the stack
+    emitter.instruction("call __rt_gc_note_child_ref_x86"); // count one incoming heap edge into the child
+    emitter.instruction("add rsp, 8"); // drop the argument
     emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // boxed mixed-child comparison is complete for this source block
 
     emitter.label("__rt_gc_collect_cycles_count_refcell");
@@ -206,9 +177,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_gc_collect_cycles_count_next");                // scalar, string, and null inner values contribute no incoming edge
     emitter.instruction("cmp r10, 7");                                          // is the inner value-tag within the supported heap-backed range?
     emitter.instruction("ja __rt_gc_collect_cycles_count_next");                // unknown inner value-tags are ignored by the collector
-    emitter.instruction("cmp QWORD PTR [r9], rsi");                             // does the cell's inner value pointer equal the current candidate node?
-    emitter.instruction("jne __rt_gc_collect_cycles_count_next");               // no — this reference cell does not contribute an incoming edge to the candidate
-    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count one incoming heap edge from this reference cell into the current candidate
+    emitter.instruction("push QWORD PTR [r9]");                                  // pass the child pointer on the stack
+    emitter.instruction("call __rt_gc_note_child_ref_x86"); // count one incoming heap edge into the child
+    emitter.instruction("add rsp, 8"); // drop the argument
     emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // reference-cell inner-child comparison is complete for this source block
 
     emitter.label("__rt_gc_collect_cycles_count_object");
@@ -245,9 +216,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 7");                                          // is the mixed runtime tag within the supported heap-backed range?
     emitter.instruction("ja __rt_gc_collect_cycles_count_object_next");         // unknown mixed runtime tags are ignored by the collector
     emitter.label("__rt_gc_collect_cycles_count_object_child");
-    emitter.instruction("cmp QWORD PTR [r9 + r8], rsi");                        // does the selected object property point at the current candidate node?
-    emitter.instruction("jne __rt_gc_collect_cycles_count_object_next");        // no — this property does not contribute an incoming heap edge
-    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // count one incoming heap edge from this object property into the candidate
+    emitter.instruction("push QWORD PTR [r9 + r8]");                             // pass the child pointer on the stack
+    emitter.instruction("call __rt_gc_note_child_ref_x86"); // count one incoming heap edge into the child
+    emitter.instruction("add rsp, 8"); // drop the argument
     emitter.label("__rt_gc_collect_cycles_count_object_next");
     emitter.instruction("add r10, 1");                                          // advance to the next object property slot in the source object
     emitter.instruction("jmp __rt_gc_collect_cycles_count_object_loop");        // continue comparing source object property children against the candidate
@@ -259,14 +230,42 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // persist the next source heap header for the incoming-edge rescan loop
     emitter.instruction("jmp __rt_gc_collect_cycles_count_loop");               // continue rescanning heap edges into the current candidate node
 
-    emitter.label("__rt_gc_collect_cycles_root_compare");
-    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header after the nested incoming-edge rescan clobbered caller-saved registers
-    emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // reload the candidate refcount after the nested full-heap incoming-edge recount
-    emitter.instruction("cmp r10, QWORD PTR [rbp - 48]");                       // does this candidate still have an external reference beyond heap-internal edges?
-    emitter.instruction("jbe __rt_gc_collect_cycles_root_next");                // no — refcount less than or equal to incoming edges means the node is only heap-rooted
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the candidate user pointer before marking it reachable from an external root
-    emitter.instruction("call __rt_gc_mark_reachable");                         // recursively mark the externally rooted graph component reachable
-
+    // -- pass 3: a block whose refcount exceeds its incoming heap edges is externally rooted --
+    emitter.label("__rt_gc_collect_cycles_root_init");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the heap base before starting the externally rooted node scan
+    emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // restart the outer scan pointer at the heap base
+    emitter.label("__rt_gc_collect_cycles_root_loop");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header for the x86_64 root scan
+    emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // have we scanned every block in the initial heap window?
+    emitter.instruction("jae __rt_gc_collect_cycles_free_init");                // yes — move on to freeing the still-unreachable graph nodes
+    emitter.instruction("mov r9d, DWORD PTR [r8]");                             // load this candidate block payload size before any nested rescans
+    emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this candidate block refcount from the heap header
+    emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
+    emitter.instruction("jz __rt_gc_collect_cycles_root_next");                 // free-list blocks cannot be GC roots
+    emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the candidate kind word before deciding whether it participates in cycle collection
+    emitter.instruction("mov rcx, r11");                                        // preserve the full kind word while isolating the low-byte heap kind tag
+    emitter.instruction("and rcx, 0xff");                                       // isolate the low-byte heap kind tag for candidate dispatch
+    emitter.instruction("cmp rcx, 2");                                          // is this candidate at least an indexed array?
+    emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // strings and raw buffers never participate in cycle collection
+    emitter.instruction("cmp rcx, 7");                                          // is this candidate within the array/hash/object/mixed/refcell range?
+    emitter.instruction("ja __rt_gc_collect_cycles_root_next");                 // unknown/raw heap kinds are ignored by the collector
+    emitter.instruction("cmp rcx, 2");                                          // is this candidate an indexed array?
+    emitter.instruction("jne __rt_gc_collect_cycles_root_candidate_ready");     // hashes, objects, mixed boxes, and reference cells remain collector candidates
+    emitter.instruction("mov rdx, r11");                                        // preserve the full array kind word while unpacking the runtime array value_type tag
+    emitter.instruction("shr rdx, 8");                                          // move the packed array value_type tag into the low bits
+    emitter.instruction("and rdx, 0x7f");                                       // isolate the array value_type without the persistent COW flag bit
+    emitter.instruction("cmp rdx, 4");                                          // does this array contain refcounted element payloads?
+    emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // scalar and string arrays cannot participate in heap cycles
+    emitter.instruction("cmp rdx, 7");                                          // is the array value_type within the supported refcounted range?
+    emitter.instruction("ja __rt_gc_collect_cycles_root_next");                 // unknown array payload tags are ignored by the collector
+    emitter.label("__rt_gc_collect_cycles_root_candidate_ready");
+    emitter.instruction("mov rdx, r11");                                        // kind word with the incoming-edge counter
+    emitter.instruction("shr rdx, 17");                                         // move the counter to the low bits
+    emitter.instruction("and edx, 0x7fff");                                     // isolate the 15-bit saturating counter
+    emitter.instruction("cmp r10, rdx");                                        // refcount beyond the heap-internal edges?
+    emitter.instruction("jbe __rt_gc_collect_cycles_root_next");                // no: only reachable from inside the heap
+    emitter.instruction("lea rax, [r8 + 16]");                                  // user pointer of the externally rooted node
+    emitter.instruction("call __rt_gc_mark_reachable");                         // mark everything reachable from it
     emitter.label("__rt_gc_collect_cycles_root_next");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header after any nested mark traversal
     emitter.instruction("mov r9d, DWORD PTR [r8]");                             // reload the candidate payload size so the outer scan can advance correctly
@@ -275,7 +274,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // persist the next candidate heap header for the outer root scan
     emitter.instruction("jmp __rt_gc_collect_cycles_root_loop");                // continue looking for externally rooted graph nodes
 
-    // -- pass 3: free every still-unreachable live refcounted node --
+    // -- pass 4: free every still-unreachable live refcounted node --
     emitter.label("__rt_gc_collect_cycles_free_init");
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the heap base before starting the unreachable-node free scan
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // restart the outer scan pointer at the heap base for the free pass
@@ -344,4 +343,48 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return immediately when collection is skipped or after a full x86_64 cycle pass
+
+    emit_gc_note_child_ref_x86_64(emitter);
+}
+
+/// Emits the x86_64 `__rt_gc_note_child_ref_x86` edge counter used by the collector.
+///
+/// The child user pointer is passed on the stack (`[rsp + 8]`) so the caller's scan registers
+/// survive; the helper preserves every register it touches. Pointers outside the managed heap
+/// or without the elephc heap marker are ignored. The counter lives in kind-word bits 17..31
+/// and saturates at 0x7fff: a saturated count only makes a node look externally referenced,
+/// which keeps it alive (never frees a live node).
+pub(super) fn emit_gc_note_child_ref_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label("__rt_gc_note_child_ref_x86");
+    emitter.instruction("push rax");                                            // preserve scratch
+    emitter.instruction("push rcx");                                            // preserve scratch
+    emitter.instruction("push rdx");                                            // preserve scratch
+    emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // child user pointer
+    emitter.instruction("test rax, rax");                                       // null child?
+    emitter.instruction("jz __rt_gc_note_child_ref_x86_done");                  // nothing to count
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_buf");
+    emitter.instruction("cmp rax, rcx");                                        // below the managed heap?
+    emitter.instruction("jb __rt_gc_note_child_ref_x86_done");                  // foreign pointer
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "rdx", "_heap_off", 0);
+    emitter.instruction("add rdx, rcx");                                        // heap end
+    emitter.instruction("cmp rax, rdx");                                        // beyond the managed heap?
+    emitter.instruction("jae __rt_gc_note_child_ref_x86_done");                 // foreign pointer
+    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // child kind word
+    emitter.instruction("mov rdx, rcx");                                        // copy for the marker check
+    emitter.instruction("shr rdx, 32");                                         // high-word heap marker
+    emitter.instruction(&format!("cmp edx, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // elephc heap block?
+    emitter.instruction("jne __rt_gc_note_child_ref_x86_done");                 // not an elephc block
+    emitter.instruction("mov rdx, rcx");                                        // copy for the counter
+    emitter.instruction("shr rdx, 17");                                         // counter to the low bits
+    emitter.instruction("and edx, 0x7fff");                                     // isolate it
+    emitter.instruction("cmp edx, 0x7fff");                                     // saturated?
+    emitter.instruction("je __rt_gc_note_child_ref_x86_done");                  // keep the saturated value
+    emitter.instruction("add rcx, 0x20000");                                    // one more incoming edge
+    emitter.instruction("mov QWORD PTR [rax - 8], rcx");                        // store the kind word back
+    emitter.label("__rt_gc_note_child_ref_x86_done");
+    emitter.instruction("pop rdx");                                             // restore scratch
+    emitter.instruction("pop rcx");                                             // restore scratch
+    emitter.instruction("pop rax");                                             // restore scratch
+    emitter.instruction("ret");                                                 // return to the edge scan
 }

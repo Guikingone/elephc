@@ -21,6 +21,25 @@ mod analyzer;
 mod domain;
 mod scan;
 
+pub(crate) use scan::Node;
+
+/// Walks statements and expressions of one body without entering nested function, class,
+/// or closure bodies.
+pub(crate) fn walk_stmts_shallow<'a>(stmts: &'a [crate::parser::ast::Stmt], f: &mut dyn FnMut(Node<'a>)) {
+    scan::walk_stmts(stmts, false, f);
+}
+
+/// Walks one expression and everything evaluated inside it (closure bodies excluded).
+pub(crate) fn walk_expr_shallow<'a>(expr: &'a crate::parser::ast::Expr, f: &mut dyn FnMut(Node<'a>)) {
+    scan::walk_expr(expr, false, f);
+}
+
+/// Walks every statement and expression of a program, including nested function, method,
+/// and closure bodies (shared AST traversal for other passes).
+pub(crate) fn walk_program<'a>(stmts: &'a [crate::parser::ast::Stmt], f: &mut dyn FnMut(Node<'a>)) {
+    scan::walk_stmts(stmts, true, f);
+}
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -190,6 +209,12 @@ thread_local! {
 /// Installs the facts consulted by [`is_proven`] on the current thread.
 pub fn install(facts: OverflowFacts) {
     ACTIVE.with(|active| *active.borrow_mut() = Some(Rc::new(facts)));
+}
+
+/// Removes the installed facts so later, unrelated compilations on this thread (tests that
+/// type-check directly) never consult a previous program's proofs.
+pub fn clear() {
+    ACTIVE.with(|active| *active.borrow_mut() = None);
 }
 
 /// Returns `true` when the installed facts prove the site overflow-free.

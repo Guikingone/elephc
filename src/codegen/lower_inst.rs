@@ -1712,26 +1712,48 @@ fn descriptor_entry_stack_offsets(
     (offsets, next_offset)
 }
 
-/// Lowers an explicit cycle-collection safe point. With an `I64(1)` immediate the collection
-/// only runs when `__rt_hash_unset` flagged a released container (`_gc_unset_pending`).
+/// Number of `unset()` safe points between two cycle collections (PHP's default GC root
+/// buffer threshold); the program epilogue always runs a final collection.
+const GC_SAFEPOINT_THRESHOLD: i64 = 10_000;
+
+/// Lowers an `unset()` cycle-collection safe point.
+///
+/// Collection is lazy like PHP's: a safe point only counts towards `GC_SAFEPOINT_THRESHOLD`,
+/// and the full-heap scan runs when the threshold is reached. With an `I64(1)` immediate the
+/// safe point only counts when `__rt_hash_unset` flagged a released container
+/// (`_gc_unset_pending`).
 fn lower_gc_collect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if !matches!(inst.immediate, Some(Immediate::I64(1))) {
-        abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
-        return Ok(());
-    }
-    let skip = ctx.next_label("gc_unset_skip");
+    let conditional = matches!(inst.immediate, Some(Immediate::I64(1)));
+    let skip = ctx.next_label("gc_safepoint_skip");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_gc_unset_pending");
-            ctx.emitter.instruction("ldr x10, [x9]");                           // did an unset release a container?
-            ctx.emitter.instruction(&format!("cbz x10, {}", skip));             // no: nothing could have been orphaned
-            ctx.emitter.instruction("str xzr, [x9]");                           // consume the request
+            if conditional {
+                abi::emit_symbol_address(ctx.emitter, "x9", "_gc_unset_pending");
+                ctx.emitter.instruction("ldr x10, [x9]");                       // did an unset release a container?
+                ctx.emitter.instruction(&format!("cbz x10, {}", skip));         // no: nothing could have been orphaned
+                ctx.emitter.instruction("str xzr, [x9]");                       // consume the request
+            }
+            abi::emit_symbol_address(ctx.emitter, "x9", "_gc_safepoint_count");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // safe points since the last collection
+            ctx.emitter.instruction("add x10, x10, #1");                        // count this one
+            abi::emit_load_int_immediate(ctx.emitter, "x11", GC_SAFEPOINT_THRESHOLD);
+            ctx.emitter.instruction("cmp x10, x11");                            // threshold reached?
+            ctx.emitter.instruction("csel x12, xzr, x10, ge");                  // reset the counter when collecting
+            ctx.emitter.instruction("str x12, [x9]");                           // store the updated counter
+            ctx.emitter.instruction(&format!("b.lt {}", skip));                 // below the threshold: defer collection
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r10", "_gc_unset_pending");
-            ctx.emitter.instruction("cmp QWORD PTR [r10], 0");                  // did an unset release a container?
-            ctx.emitter.instruction(&format!("je {}", skip));                   // no: nothing could have been orphaned
-            ctx.emitter.instruction("mov QWORD PTR [r10], 0");                  // consume the request
+            if conditional {
+                abi::emit_symbol_address(ctx.emitter, "r10", "_gc_unset_pending");
+                ctx.emitter.instruction("cmp QWORD PTR [r10], 0");              // did an unset release a container?
+                ctx.emitter.instruction(&format!("je {}", skip));               // no: nothing could have been orphaned
+                ctx.emitter.instruction("mov QWORD PTR [r10], 0");              // consume the request
+            }
+            abi::emit_symbol_address(ctx.emitter, "r10", "_gc_safepoint_count");
+            ctx.emitter.instruction("add QWORD PTR [r10], 1");                  // count this safe point
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [r10], {}", GC_SAFEPOINT_THRESHOLD)); // threshold reached?
+            ctx.emitter.instruction(&format!("jl {}", skip));                   // below the threshold: defer collection
+            ctx.emitter.instruction("mov QWORD PTR [r10], 0");                  // reset the counter
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");

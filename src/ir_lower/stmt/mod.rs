@@ -2208,6 +2208,11 @@ fn lower_array_assign(
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value_value, span);
         return;
     }
+    let array_value = if op == Op::HashSet {
+        widen_hash_local_for_value(ctx, array, array_value, value_value, span)
+    } else {
+        array_value
+    };
     ctx.emit_void(
         op,
         vec![array_value.value, index_value.value, value_value.value],
@@ -2217,6 +2222,47 @@ fn lower_array_assign(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Widens an associative-array local to `mixed` values before storing a value of another type.
+///
+/// A function local's type comes from its first assignment (top-level code instead starts from
+/// the checker's final environment), so `$m = ["k" => "s"]; $m["n"] = 1;` would otherwise store
+/// an int into string-typed slots. The table is converted with `HashToMixed` (copy-on-write
+/// safe) and the local now carries `array<K, mixed>`.
+fn widen_hash_local_for_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    value_value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let PhpType::AssocArray { key, value } = ctx.builder.value_php_type(array_value.value).codegen_repr() else {
+        return array_value;
+    };
+    let storage = value.codegen_repr();
+    let incoming = ctx.builder.value_php_type(value_value.value).codegen_repr();
+    // Boxed `mixed`/union values (e.g. checked `int|float` arithmetic) keep the existing
+    // store coercion; only a concrete type change needs wider slots. Reference-bound locals
+    // keep their cell representation.
+    if matches!(storage, PhpType::Mixed | PhpType::Never | PhpType::Void)
+        || storage == incoming
+        || matches!(incoming, PhpType::Mixed | PhpType::Union(_))
+        || ctx.is_ref_bound_local(array)
+    {
+        return array_value;
+    }
+    let widened_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
+    let converted = ctx.emit_value(
+        Op::HashToMixed,
+        vec![array_value.value],
+        None,
+        widened_ty.clone(),
+        Op::HashToMixed.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(array, converted, widened_ty, Some(span));
+    ctx.load_local(array, Some(span))
 }
 
 /// Lowers `$s[$i] = $c` on a plain string local (PHP string offset assignment).

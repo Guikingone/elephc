@@ -301,7 +301,7 @@ pub(crate) fn merge_try_constant_env_paths(
     if block_may_throw(try_body) {
         for catch in catches {
             if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
-                fallthrough_paths.push(simulate_catch_constant_env(catch, incoming_env.clone()));
+                fallthrough_paths.push(simulate_catch_constant_env(catch, HashMap::new()));
             }
         }
     }

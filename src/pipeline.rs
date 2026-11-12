@@ -574,6 +574,8 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("ir-lower", phase_started);
+    // Lowering was the last consumer of the overflow proofs.
+    crate::int_range::clear();
 
     crate::progress::phase("ir-opt");
     let phase_started = Instant::now();

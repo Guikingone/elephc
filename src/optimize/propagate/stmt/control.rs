@@ -192,6 +192,15 @@ pub(super) fn propagate_switch_stmt(
         expr_invalidation(&subject).apply(&mut base_env);
         base_env
     };
+    // A case body can also be entered by falling through from the previous body, whose
+    // constants differ from the switch entry. When any body may fall through, bodies start
+    // without constant facts instead of the entry environment.
+    let may_fall_through = cases
+        .iter()
+        .map(|(_, body)| body.as_slice())
+        .chain(default.as_deref())
+        .any(|body| !switch_body_ends_with_jump(body));
+    let body_env = if may_fall_through { HashMap::new() } else { base_env.clone() };
     let cases: Vec<_> = cases
         .into_iter()
         .map(|(patterns, body)| {
@@ -199,11 +208,11 @@ pub(super) fn propagate_switch_stmt(
                 .into_iter()
                 .map(|pattern| propagate_expr(pattern, &base_env))
                 .collect();
-            let (body, _) = propagate_block(body, base_env.clone());
+            let (body, _) = propagate_block(body, body_env.clone());
             (patterns, body)
         })
         .collect();
-    let default = default.map(|body| propagate_block(body, base_env.clone()).0);
+    let default = default.map(|body| propagate_block(body, body_env.clone()).0);
     let next_env = merge_switch_constant_env_paths(&subject, &cases, default.as_deref(), &base_env);
     (
         Stmt::new(
@@ -215,6 +224,15 @@ pub(super) fn propagate_switch_stmt(
             span,
         ),
         next_env,
+    )
+}
+
+/// Returns whether a switch case body always leaves through `break`/`continue`/`return`/`throw`
+/// as its last statement (an empty body falls through).
+fn switch_body_ends_with_jump(body: &[Stmt]) -> bool {
+    matches!(
+        body.last().map(|stmt| &stmt.kind),
+        Some(StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Return(_) | StmtKind::Throw(_))
     )
 }
 
@@ -234,7 +252,9 @@ pub(super) fn propagate_try_stmt(
         .map(|catch| crate::parser::ast::CatchClause {
             exception_types: catch.exception_types,
             variable: catch.variable,
-            body: propagate_block(catch.body, env.clone()).0,
+            // The exception may be thrown after any write in the try body, so a catch body
+            // cannot assume the constants that held before the try.
+            body: propagate_block(catch.body, HashMap::new()).0,
         })
         .collect();
     let finally_body = finally_body.map(|body| propagate_block(body, HashMap::new()).0);

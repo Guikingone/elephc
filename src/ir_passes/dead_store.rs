@@ -43,6 +43,11 @@ impl IrPass for DeadStore {
     /// store changed. The literal pool is unused because the pass never
     /// materializes new constants.
     fn run(&self, function: &mut Function, data: &mut DataPool) -> bool {
+        // A throw reaches its catch handler through an edge the terminator graph does not
+        // show, so a store before the throw can be read by the handler: skip such functions.
+        if super::cfg::has_exception_handlers(function) {
+            return false;
+        }
         let eligible = eligible_slots(function, data);
         if eligible.is_empty() {
             return false;

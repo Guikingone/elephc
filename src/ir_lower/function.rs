@@ -135,6 +135,15 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     collect_global_var_names_in_body(statements, &mut names);
+    // `global $x;` inside closures, arrow functions and methods (bodies nested in expressions
+    // or classes) also binds the top-level variable, so it must live in global storage too.
+    crate::int_range::walk_program(statements, &mut |node| {
+        if let crate::int_range::Node::Stmt(stmt) = node {
+            if let crate::parser::ast::StmtKind::Global { vars } = &stmt.kind {
+                names.extend(vars.iter().cloned());
+            }
+        }
+    });
     let mut usage = crate::ast_usage::Usage::default();
     for stmt in statements {
         usage.merge(crate::ast_usage::collect_stmt(stmt));

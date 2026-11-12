@@ -306,6 +306,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    // Like PHP's shutdown GC: collect cyclic garbage that lazy `unset()` safe points left
+    // behind, running its destructors before the process exits.
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {

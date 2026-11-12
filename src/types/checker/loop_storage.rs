@@ -7,7 +7,8 @@
 //! Key details:
 //! - The analysis iterates assignment and array-growth evidence until local types stop changing.
 //! - Only entry array locals whose stable representation needs boxed payloads (or a boxed whole
-//!   value) are reported; ordinary scalar-flow inference remains checker-owned.
+//!   value), and `int`/`float` locals that a loop-carried `int|float` result turns into a boxed
+//!   whole value, are reported; other scalar-flow inference remains checker-owned.
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
 
@@ -62,6 +63,8 @@ pub fn loop_carried_storage_types(
         collect_array_write_stmt(update, &mut writes);
     }
 
+    let unset_targets = collect_element_unset_targets(body);
+
     let mut fixed = entry.clone();
     let mut whole_mixed_sources = HashSet::new();
     loop {
@@ -73,6 +76,17 @@ pub fn loop_carried_storage_types(
             &mut whole_mixed_sources,
         );
         apply_array_write_evidence(&writes, &mut fixed, infer_value);
+        // `unset($a[$k])` turns an indexed array into a hash (keys are no longer dense), so a
+        // loop-carried indexed local needs hash storage before the loop.
+        for name in &unset_targets {
+            if let Some(PhpType::Array(element)) = fixed.get(name.as_str()).map(|ty| ty.codegen_repr()) {
+                let value = if *element == PhpType::Never { PhpType::Mixed } else { *element };
+                fixed.insert(
+                    name.clone(),
+                    PhpType::AssocArray { key: Box::new(PhpType::Int), value: Box::new(value) },
+                );
+            }
+        }
         if fixed == previous {
             break;
         }
@@ -81,7 +95,7 @@ pub fn loop_carried_storage_types(
     let mut contracts = entry
         .iter()
         .filter_map(|(name, entry_ty)| {
-            if !is_array_like(entry_ty) {
+            if !is_array_like(entry_ty) && !is_numeric_scalar(entry_ty) {
                 return None;
             }
             let fixed_ty = fixed.get(name)?;
@@ -95,6 +109,32 @@ pub fn loop_carried_storage_types(
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
     contracts
+}
+
+/// Collects locals whose elements are removed with `unset($local[...])` in a loop body.
+fn collect_element_unset_targets(body: &[Stmt]) -> Vec<String> {
+    let mut names = Vec::new();
+    crate::int_range::walk_stmts_shallow(body, &mut |node| {
+        let crate::int_range::Node::Expr(expr) = node else {
+            return;
+        };
+        let ExprKind::FunctionCall { name, args } = &expr.kind else {
+            return;
+        };
+        if crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')) != "unset" {
+            return;
+        }
+        for arg in args {
+            if let ExprKind::ArrayAccess { array, .. } = &arg.kind {
+                if let ExprKind::Variable(target) = &array.kind {
+                    if !names.contains(target) {
+                        names.push(target.clone());
+                    }
+                }
+            }
+        }
+    });
+    names
 }
 
 /// Applies every collected local assignment monotonically to one fixed-point iteration.
@@ -112,7 +152,7 @@ fn apply_assignment_evidence(
             AssignedValue::Known(ty) => ty.clone(),
             AssignedValue::Opaque => PhpType::Mixed,
         };
-        if env.get(*name).is_some_and(is_array_like)
+        if env.get(*name).is_some_and(|ty| is_array_like(ty) || is_numeric_scalar(ty))
             && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
             && !matches!(source, AssignedValue::Opaque)
         {
@@ -429,6 +469,12 @@ fn representation_contract(
         }
         _ => None,
     }
+}
+
+/// Returns whether a loop-entry type is an `int`/`float` scalar that a loop-carried checked
+/// arithmetic result (`int|float`) can turn into a boxed whole value.
+fn is_numeric_scalar(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Int | PhpType::Float)
 }
 
 /// Returns whether a loop-entry type is an indexed or associative array local.

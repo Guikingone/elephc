@@ -1904,7 +1904,7 @@ fn lower_hash_sort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1, // PHP sort builtins return true
     );
     store_if_result(ctx, inst)
 }
@@ -2558,7 +2558,7 @@ pub(crate) fn lower_array_multisort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1, // PHP sort builtins return true
     );
     store_if_result(ctx, inst)
 }
@@ -2843,7 +2843,7 @@ fn lower_indexed_array_sort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1, // PHP sort builtins return true
     );
     store_if_result(ctx, inst)
 }
@@ -2870,7 +2870,7 @@ fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1, // PHP sort builtins return true
     );
     store_if_result(ctx, inst)
 }
@@ -2923,7 +2923,7 @@ fn lower_user_sort_static_callback(
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+                1, // PHP sort builtins return true
             );
             store_if_result(ctx, inst)?;
             return Ok(());
@@ -2950,7 +2950,7 @@ fn lower_user_sort_static_callback(
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+                1, // PHP sort builtins return true
             );
             store_if_result(ctx, inst)?;
             return Ok(());
@@ -2988,7 +2988,7 @@ fn lower_user_sort_with_static_callback_binding(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1, // PHP sort builtins return true
     );
     store_if_result(ctx, inst)
 }
@@ -3095,7 +3095,7 @@ fn lower_array_key_sort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1, // PHP sort builtins return true
     );
     store_if_result(ctx, inst)
 }

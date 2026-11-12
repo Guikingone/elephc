@@ -24,6 +24,8 @@ pub(crate) mod error_constants;
 pub(crate) mod php_runtime_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// Detection of untyped bodies returning their dynamic parameters.
+pub(crate) mod returns_dynamic;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).

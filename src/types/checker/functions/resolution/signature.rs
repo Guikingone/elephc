@@ -245,6 +245,29 @@ impl Checker {
             for return_info in &all_return_infos[1..] {
                 return_type = Self::wider_type(&return_type, &return_info.ty);
             }
+            // Untyped by-value parameters are boxed `mixed` at the EIR boundary and their
+            // body types come from the first call site only, so a body that returns one
+            // directly must return `mixed` (a recursive call may pass an int|float).
+            let dynamic_params: std::collections::HashSet<String> = decl
+                .params
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    decl.param_types.get(*index).is_some_and(|ty| ty.is_none())
+                        && !decl.ref_params.get(*index).copied().unwrap_or(false)
+                        // Only numbers can be truncated by the int/float return slot;
+                        // arrays and objects round-trip losslessly.
+                        && param_types
+                            .get(*index)
+                            .is_some_and(|(_, ty)| matches!(ty, PhpType::Int | PhpType::Float))
+                })
+                .map(|(_, name)| name.clone())
+                .collect();
+            if !dynamic_params.is_empty()
+                && crate::types::returns_dynamic::body_returns_dynamic_param(&decl.body, &dynamic_params)
+            {
+                return_type = PhpType::Mixed;
+            }
         }
 
         let mut sig = FunctionSig {

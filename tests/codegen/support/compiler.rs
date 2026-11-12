@@ -121,6 +121,10 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
     let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);
     let resolved = elephc::optimize::prune_dead_static_branches(resolved);
+    // Mirror `pipeline::compile`: install the integer-range proofs before checking (the oracle
+    // is thread-local, so a fixture must never see a previous fixture's facts).
+    let overflow_facts = elephc::int_range::analyze_program(&resolved, false);
+    elephc::int_range::install(overflow_facts.clone());
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
@@ -153,6 +157,8 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let final_overflow_facts = elephc::int_range::analyze_program(&optimized, false);
+    elephc::int_range::install(overflow_facts.intersect(&final_overflow_facts));
     let requires_elephc_tls = check_result
         .required_libraries
         .iter()
@@ -164,6 +170,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         &class_source_files,
         &function_source_files,
     );
+    elephc::int_range::clear();
     let exported_functions = HashMap::new();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.

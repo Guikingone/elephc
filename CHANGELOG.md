@@ -4,6 +4,20 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- The x86_64 cycle collector counts incoming heap edges in one linear scan (a saturating counter in transient kind-word bits) instead of rescanning the whole heap for every candidate node, which was quadratic in the number of live blocks. A reference-heavy `unset()` loop drops from a timeout to ~25 ms.
+- `array_sum()` over a `mixed`-valued hash counts raw scalar slots (ints stored without boxing) instead of skipping them.
+- The codegen test harness installs the integer-range proofs like the real pipeline, and the thread-local proof oracle is cleared after lowering so later compilations on the same thread never see stale facts.
+- Fixed `switch` fallthrough: constant propagation started every case body from the switch entry, so `case 1: $v = 100; case 2: $v++;` ignored the fallthrough write.
+- Fixed `catch` bodies not seeing locals written in the `try` body before the throw: constant propagation and EIR dead-store elimination ignored the implicit throw-to-handler edge.
+- `sort()`, `rsort()`, `usort()`, `uasort()`, `uksort()`, `asort()`, `arsort()`, `ksort()`, `krsort()`, `natsort()`, `natcasesort()`, `shuffle()` and `array_multisort()` return `true` like PHP instead of `null`.
+- An untyped function that returns one of its untyped `int`/`float` parameters now returns `mixed`: its type had been inferred from the first call site, so a recursive accumulator that overflowed to float came back as `int` (e.g. `-9223372036854775808`).
+- Loop-carried `int`/`float` locals that receive an `int|float` result in the loop are stored as `mixed` from the loop head, so a value that overflows to float on one iteration is no longer reloaded as a truncated int on the next.
+- `echo` of floats in exponent form prints PHP's format: `1.0E+25` (not `1E+25`) and `2.5E-7` (not `2.5E-07`).
+- Writing a value of another type into a string/int-valued hash local inside a function widens the hash to `mixed` values instead of storing it through the old slot layout (which printed `""` and then segfaulted).
+- `global $x` inside closures, arrow functions and methods now binds the top-level variable (top-level code kept `$x` in a frame slot the closure never wrote).
+- A by-value argument that a later argument reassigns (`f($s, $s .= "x")`) is retained, so the callee gets the old value instead of a freed string.
+- `unset($a[$k])` on an indexed-array local inside a loop promotes the local to hash storage before the loop; the next iteration used to write into the hash as if it were a packed array (wrong results and a hang).
+- Cycle collection after `unset()` is lazy like PHP's: it runs once 10,000 qualifying `unset()` safe points have accumulated, and the program epilogue always runs a final collection so destructors of cyclic garbage run at shutdown (they never ran before, and `--heap-debug` reported the cycles as leaks).
 - `ksort()`, `krsort()`, `asort()` and `arsort()` now sort associative arrays (with the default `SORT_REGULAR` or `SORT_STRING` flags) through a new stable merge-sort helper, `__rt_hash_sort`, that relinks the insertion order and preserves keys. `ksort()`/`krsort()` on a hash used to be silent no-ops, and `asort()`/`arsort()` on a hash failed to compile. Other flag values, and receivers that are not plain local variables (properties, by-reference parameters), are reported as unsupported instead of being silently ignored.
 - Fixed PHP 8 ordered comparison (`<`, `<=`, `>`, `>=`, `<=>`) of non-numeric strings held in `mixed` values leaking both stringified operands on every comparison.
 - `$s .= $x` on a plain string local appends in place when the local owns the only reference to its heap string, and otherwise reallocates with doubled capacity (new `str_append_local` EIR op and `__rt_str_append` runtime helper). Building a string by repeated appends was quadratic: every append copied the whole string twice. 30M one-byte appends drop from a timeout to ~0.3 s.

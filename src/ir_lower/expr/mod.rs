@@ -7021,7 +7021,10 @@ fn lower_args_with_signature_labeled(
         let operands: Vec<crate::ir::ValueId> = args
             .iter()
             .enumerate()
-            .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+            .map(|(index, arg)| {
+                let value = lower_arg_with_signature(ctx, sig, index, arg);
+                retain_arg_rewritten_by_later_arg(ctx, sig, index, args, value)
+            })
             .collect();
         // A non-variadic callee reached here with MORE args than declared params only when the
         // checker's callable-variable upper-bound relaxation (campaign H1 PART A,
@@ -7036,7 +7039,10 @@ fn lower_args_with_signature_labeled(
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
         .iter()
         .enumerate()
-        .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+        .map(|(index, arg)| {
+            let value = lower_arg_with_signature(ctx, sig, index, arg);
+            retain_arg_rewritten_by_later_arg(ctx, sig, index, args, value)
+        })
         .collect();
     for idx in fixed_arg_count..regular_param_count {
         let Some(Some(default)) = sig.defaults.get(idx) else {
@@ -7053,6 +7059,55 @@ fn lower_args_with_signature_labeled(
         operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
     coerce_operands_to_params(ctx, sig, operands, callee)
+}
+
+/// Retains a by-value variable argument that a later argument reassigns.
+///
+/// `f($s, $s .= "x")` evaluates `$s` first, but the borrowed value would be released by the
+/// later assignment before the call. PHP passes the old value, so the loaded value is acquired
+/// into an owned temporary that the post-call argument cleanup releases.
+fn retain_arg_rewritten_by_later_arg(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    args: &[Expr],
+    value: crate::ir::ValueId,
+) -> crate::ir::ValueId {
+    let ExprKind::Variable(name) = &args[index].kind else {
+        return value;
+    };
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return value;
+    }
+    let rewritten = args[index + 1..].iter().any(|later| {
+        let mut writes = false;
+        crate::int_range::walk_expr_shallow(later, &mut |node| {
+            if let crate::int_range::Node::Expr(expr) = node {
+                match &expr.kind {
+                    ExprKind::Assignment { target, .. } => {
+                        if matches!(&target.kind, ExprKind::Variable(n) if n == name) {
+                            writes = true;
+                        }
+                    }
+                    ExprKind::PreIncrement(n)
+                    | ExprKind::PostIncrement(n)
+                    | ExprKind::PreDecrement(n)
+                    | ExprKind::PostDecrement(n) => {
+                        if n == name {
+                            writes = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        writes
+    });
+    if !rewritten {
+        return value;
+    }
+    let ir_type = ctx.builder.value_type(value);
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, LoweredValue { value, ir_type }, None).value
 }
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.

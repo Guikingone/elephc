@@ -23,7 +23,8 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// # Behavior
 /// Formats the float using `snprintf` with `"%.14G"` format into the global
 /// `_concat_buf` buffer at the current `_concat_off` cursor, then advances
-/// `_concat_off` by the number of characters written.
+/// `_concat_off` by the number of characters written. An exponent form whose mantissa has no
+/// fraction gets PHP's `.0` (`1E+25` becomes `1.0E+25`).
 ///
 /// # ABI Notes
 /// - Apple ARM64: variadic floats are passed on the stack, not in SIMD registers
@@ -62,6 +63,68 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
 
     // -- x0 = number of chars written --
     emitter.instruction("mov x2, x0");                                          // save string length as return value
+
+    // -- PHP prints an integral exponent mantissa with ".0" (1.0E+25): insert it before 'E' --
+    emitter.instruction("ldr x3, [sp, #24]");                                   // formatted text
+    emitter.instruction("mov x4, #0");                                          // scan index
+    emitter.label("__rt_ftoa_exp_scan");
+    emitter.instruction("cmp x4, x2");                                          // end of text?
+    emitter.instruction("b.ge __rt_ftoa_exp_done");                             // no exponent: nothing to fix
+    emitter.instruction("ldrb w5, [x3, x4]");                                   // current byte
+    emitter.instruction("cmp w5, #0x2E");                                       // '.'?
+    emitter.instruction("b.eq __rt_ftoa_exp_done");                             // mantissa already has a fraction
+    emitter.instruction("cmp w5, #0x45");                                       // 'E'?
+    emitter.instruction("b.eq __rt_ftoa_exp_insert");                           // insert ".0" here
+    emitter.instruction("add x4, x4, #1");                                      // next byte
+    emitter.instruction("b __rt_ftoa_exp_scan");                                // continue
+    emitter.label("__rt_ftoa_exp_insert");
+    emitter.instruction("mov x6, x2");                                          // shift cursor = end
+    emitter.label("__rt_ftoa_exp_shift");
+    emitter.instruction("cmp x6, x4");                                          // shifted the exponent suffix?
+    emitter.instruction("b.le __rt_ftoa_exp_put");                              // yes
+    emitter.instruction("sub x6, x6, #1");                                      // previous byte
+    emitter.instruction("ldrb w5, [x3, x6]");                                   // load it
+    emitter.instruction("add x7, x6, #2");                                      // two bytes to the right
+    emitter.instruction("strb w5, [x3, x7]");                                   // move it
+    emitter.instruction("b __rt_ftoa_exp_shift");                               // continue
+    emitter.label("__rt_ftoa_exp_put");
+    emitter.instruction("mov w5, #0x2E");                                       // '.'
+    emitter.instruction("strb w5, [x3, x4]");                                   // write it before 'E'
+    emitter.instruction("add x7, x4, #1");                                      // next position
+    emitter.instruction("mov w5, #0x30");                                       // '0'
+    emitter.instruction("strb w5, [x3, x7]");                                   // write it
+    emitter.instruction("add x2, x2, #2");                                      // two more bytes
+    emitter.label("__rt_ftoa_exp_done");
+
+    // -- PHP does not pad the exponent to two digits (1.0E-7, not 1.0E-07) --
+    emitter.instruction("mov x4, #0");                                          // scan index
+    emitter.label("__rt_ftoa_exp0_scan");
+    emitter.instruction("cmp x4, x2");                                          // end of text?
+    emitter.instruction("b.ge __rt_ftoa_exp0_done");                            // no exponent
+    emitter.instruction("ldrb w5, [x3, x4]");                                   // current byte
+    emitter.instruction("cmp w5, #0x45");                                       // 'E'?
+    emitter.instruction("b.eq __rt_ftoa_exp0_found");                           // inspect the exponent digits
+    emitter.instruction("add x4, x4, #1");                                      // next byte
+    emitter.instruction("b __rt_ftoa_exp0_scan");                               // continue
+    emitter.label("__rt_ftoa_exp0_found");
+    emitter.instruction("add x4, x4, #2");                                      // first exponent digit (after the sign)
+    emitter.instruction("sub x6, x2, x4");                                      // number of exponent digits
+    emitter.instruction("cmp x6, #2");                                          // padded two-digit exponent?
+    emitter.instruction("b.lt __rt_ftoa_exp0_done");                            // single digit: keep
+    emitter.instruction("ldrb w5, [x3, x4]");                                   // first exponent digit
+    emitter.instruction("cmp w5, #0x30");                                       // leading zero?
+    emitter.instruction("b.ne __rt_ftoa_exp0_done");                            // no
+    emitter.label("__rt_ftoa_exp0_shift");
+    emitter.instruction("add x7, x4, #1");                                      // next digit
+    emitter.instruction("cmp x7, x2");                                          // past the end?
+    emitter.instruction("b.ge __rt_ftoa_exp0_shrink");                          // shifted every digit
+    emitter.instruction("ldrb w5, [x3, x7]");                                   // load it
+    emitter.instruction("strb w5, [x3, x4]");                                   // move it left
+    emitter.instruction("mov x4, x7");                                          // advance
+    emitter.instruction("b __rt_ftoa_exp0_shift");                              // continue
+    emitter.label("__rt_ftoa_exp0_shrink");
+    emitter.instruction("sub x2, x2, #1");                                      // one byte shorter
+    emitter.label("__rt_ftoa_exp0_done");
 
     // -- update concat_off by chars written --
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload offset variable address
@@ -114,6 +177,63 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call snprintf");                                       // format xmm0 using "%.14G" into the concat scratch buffer
 
     emitter.instruction("mov rdx, rax");                                        // return the formatted byte count in the string-length result register
+
+    // -- PHP prints an integral exponent mantissa with ".0" (1.0E+25): insert it before 'E' --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // formatted text
+    emitter.instruction("xor ecx, ecx");                                        // scan index
+    emitter.label("__rt_ftoa_exp_scan");
+    emitter.instruction("cmp rcx, rdx");                                        // end of text?
+    emitter.instruction("jge __rt_ftoa_exp_done");                              // no exponent: nothing to fix
+    emitter.instruction("movzx eax, BYTE PTR [rdi + rcx]");                     // current byte
+    emitter.instruction("cmp eax, 0x2E");                                       // '.'?
+    emitter.instruction("je __rt_ftoa_exp_done");                               // mantissa already has a fraction
+    emitter.instruction("cmp eax, 0x45");                                       // 'E'?
+    emitter.instruction("je __rt_ftoa_exp_insert");                             // insert ".0" here
+    emitter.instruction("add rcx, 1");                                          // next byte
+    emitter.instruction("jmp __rt_ftoa_exp_scan");                              // continue
+    emitter.label("__rt_ftoa_exp_insert");
+    emitter.instruction("mov rsi, rdx");                                        // shift cursor = end
+    emitter.label("__rt_ftoa_exp_shift");
+    emitter.instruction("cmp rsi, rcx");                                        // shifted the exponent suffix?
+    emitter.instruction("jle __rt_ftoa_exp_put");                               // yes
+    emitter.instruction("sub rsi, 1");                                          // previous byte
+    emitter.instruction("movzx eax, BYTE PTR [rdi + rsi]");                     // load it
+    emitter.instruction("mov BYTE PTR [rdi + rsi + 2], al");                    // move it two bytes to the right
+    emitter.instruction("jmp __rt_ftoa_exp_shift");                             // continue
+    emitter.label("__rt_ftoa_exp_put");
+    emitter.instruction("mov BYTE PTR [rdi + rcx], 0x2E");                      // '.'
+    emitter.instruction("mov BYTE PTR [rdi + rcx + 1], 0x30");                  // '0'
+    emitter.instruction("add rdx, 2");                                          // two more bytes
+    emitter.label("__rt_ftoa_exp_done");
+
+    // -- PHP does not pad the exponent to two digits (1.0E-7, not 1.0E-07) --
+    emitter.instruction("xor ecx, ecx");                                        // scan index
+    emitter.label("__rt_ftoa_exp0_scan");
+    emitter.instruction("cmp rcx, rdx");                                        // end of text?
+    emitter.instruction("jge __rt_ftoa_exp0_done");                             // no exponent
+    emitter.instruction("cmp BYTE PTR [rdi + rcx], 0x45");                      // 'E'?
+    emitter.instruction("je __rt_ftoa_exp0_found");                             // inspect the exponent digits
+    emitter.instruction("add rcx, 1");                                          // next byte
+    emitter.instruction("jmp __rt_ftoa_exp0_scan");                             // continue
+    emitter.label("__rt_ftoa_exp0_found");
+    emitter.instruction("add rcx, 2");                                          // first exponent digit (after the sign)
+    emitter.instruction("mov rsi, rdx");                                        // end
+    emitter.instruction("sub rsi, rcx");                                        // number of exponent digits
+    emitter.instruction("cmp rsi, 2");                                          // padded two-digit exponent?
+    emitter.instruction("jl __rt_ftoa_exp0_done");                              // single digit: keep
+    emitter.instruction("cmp BYTE PTR [rdi + rcx], 0x30");                      // leading zero?
+    emitter.instruction("jne __rt_ftoa_exp0_done");                             // no
+    emitter.label("__rt_ftoa_exp0_shift");
+    emitter.instruction("lea rsi, [rcx + 1]");                                  // next digit
+    emitter.instruction("cmp rsi, rdx");                                        // past the end?
+    emitter.instruction("jge __rt_ftoa_exp0_shrink");                           // shifted every digit
+    emitter.instruction("movzx eax, BYTE PTR [rdi + rsi]");                     // load it
+    emitter.instruction("mov BYTE PTR [rdi + rcx], al");                        // move it left
+    emitter.instruction("mov rcx, rsi");                                        // advance
+    emitter.instruction("jmp __rt_ftoa_exp0_shift");                            // continue
+    emitter.label("__rt_ftoa_exp0_shrink");
+    emitter.instruction("sub rdx, 1");                                          // one byte shorter
+    emitter.label("__rt_ftoa_exp0_done");
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the concat cursor symbol address
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the original concat cursor
     emitter.instruction("add r9, rdx");                                         // advance the concat cursor by the number of formatted bytes

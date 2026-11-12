@@ -21,7 +21,7 @@ builtin! {
     name: "uksort",
     area: Array,
     params: [ref array: Mixed, callback: Mixed],
-    returns: Void,
+    returns: Bool,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Uksort,
@@ -34,7 +34,7 @@ builtin! {
 ///
 /// `uksort` compares array keys, which are always integers in the supported subset.
 /// The comparator is validated with two integer literal dummy arguments. Arity
-/// (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
+/// (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
@@ -49,5 +49,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         &label,
     )?;
-    Ok(PhpType::Void)
+    Ok(PhpType::Bool)
 }

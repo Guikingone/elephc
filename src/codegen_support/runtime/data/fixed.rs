@@ -337,6 +337,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _json_error_location_ptr, 8, 3\n");
     // Set by `__rt_hash_unset` when it releases a container; consumed by conditional cycle collection.
     out.push_str(".comm _gc_unset_pending, 8, 3\n");
+    // Number of `unset()` safe points reached since the last cycle collection.
+    out.push_str(".comm _gc_safepoint_count, 8, 3\n");
     out.push_str(".comm _json_error_line, 8, 3\n");
     out.push_str(".comm _json_error_column, 8, 3\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
