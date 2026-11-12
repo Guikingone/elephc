@@ -4,6 +4,9 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- php-src conformance suite: 195 `.phpt` tests from php-src (`ext/standard/tests/{array,strings,math}`, `ext/json/tests`) rewritten as Rust tests under `tests/codegen/php_src/`, with the triage/migration scripts in `scripts/php-src/`.
+- Builtin aliases `sizeof`, `join`, `is_integer`, `is_long`, `is_double`, `key_exists`, `pos`, `strchr`, `doubleval`, `fputs`, `ini_alter`, `show_source`, `diskfreespace`, `is_writeable` (and the other PHP function aliases) resolve to their canonical builtin.
+- `SORT_REGULAR`, `SORT_NUMERIC` and `SORT_LOCALE_STRING` constants are defined.
 - PHP tags: text outside `<?php ... ?>` is printed as inline HTML, `?>` terminates a statement (swallowing one following newline), `<?=` short echo tags work, line comments end at `?>`, and a lone `;` is accepted as PHP's empty statement.
 - Alternative control syntax: `if (): ... elseif (): ... else: ... endif;`, `endwhile`, `endfor`, `endforeach`, `endswitch` (and `case X;`) parse into the same statements as the brace forms.
 - Fixed: reading a `mixed`-stored local as a string borrowed the boxed payload even when the consumer released the result (double free with `settype()` or a string param reassigned to an int); the borrow is now limited to reads that are never released.

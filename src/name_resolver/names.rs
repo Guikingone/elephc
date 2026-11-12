@@ -230,6 +230,52 @@ pub(super) fn resolve_function_name(
     imports: &Imports,
     symbols: &Symbols,
 ) -> String {
+    let resolved = resolve_function_name_inner(name, current_namespace, imports, symbols);
+    // PHP's builtin aliases (`sizeof`, `join`, `is_integer`, ...) name the same function as
+    // their canonical builtin; a call that did not resolve to a user function is rewritten
+    // to the canonical name so every later pass sees a single builtin.
+    if symbols.declares_function(&resolved) || !(name.is_unqualified() || name.is_fully_qualified()) {
+        return resolved;
+    }
+    match name.last_segment().and_then(builtin_function_alias) {
+        Some(canonical) if crate::name_resolver::is_builtin_function(canonical) => canonical.to_string(),
+        _ => resolved,
+    }
+}
+
+/// Maps a PHP builtin alias to the canonical builtin it names (case-insensitive).
+pub(crate) fn builtin_function_alias(name: &str) -> Option<&'static str> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "sizeof" => "count",
+        "join" => "implode",
+        "is_integer" | "is_long" => "is_int",
+        "is_double" => "is_float",
+        "key_exists" => "array_key_exists",
+        "pos" => "current",
+        "strchr" => "strstr",
+        "doubleval" => "floatval",
+        "fputs" => "fwrite",
+        "ini_alter" => "ini_set",
+        "show_source" => "highlight_file",
+        "diskfreespace" => "disk_free_space",
+        "is_writeable" => "is_writable",
+        "set_file_buffer" => "stream_set_write_buffer",
+        "stream_register_wrapper" => "stream_wrapper_register",
+        "socket_getopt" => "socket_get_option",
+        "socket_setopt" => "socket_set_option",
+        "checkdnsrr" => "dns_check_record",
+        "getmxrr" => "dns_get_mx",
+        _ => return None,
+    })
+}
+
+/// Resolves a function name without applying builtin aliases.
+fn resolve_function_name_inner(
+    name: &Name,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> String {
     if name.is_fully_qualified() {
         let candidate = name.as_canonical();
         return symbols

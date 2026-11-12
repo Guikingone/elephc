@@ -61,6 +61,7 @@ mod runtime_reachability;
 mod math;
 mod misc;
 mod inline_html;
+mod php_src;
 mod pointers;
 mod ffi;
 mod oop;

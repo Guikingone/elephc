@@ -17,7 +17,10 @@
 /// is a modifier bit combined (bitwise-or) with `SORT_STRING`/`SORT_NATURAL`
 /// to request case-insensitive comparison.
 pub(crate) const SORT_INT_CONSTANTS: &[(&str, i64)] = &[
+    ("SORT_REGULAR", 0),
+    ("SORT_NUMERIC", 1),
     ("SORT_STRING", 2),
+    ("SORT_LOCALE_STRING", 5),
     ("SORT_NATURAL", 6),
     ("SORT_FLAG_CASE", 8),
 ];

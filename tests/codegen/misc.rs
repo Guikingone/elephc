@@ -548,3 +548,16 @@ echo t();
     );
     assert_eq!(out, "setunsetDEF");
 }
+
+/// PHP's builtin aliases (`sizeof`, `join`, `is_integer`, `is_long`, `is_double`, `key_exists`,
+/// `doubleval`, `strchr`) call their canonical builtin, and the `SORT_*` flag constants exist.
+#[test]
+fn test_builtin_function_aliases_and_sort_constants() {
+    let out = compile_and_run(r#"<?php
+$a = [3, 1, 2];
+echo sizeof($a), SIZEOF([]), " ", join("-", $a), " ", is_integer(5) ? "i" : "n", is_long("5") ? "l" : "n", is_double(1.5) ? "d" : "n";
+echo " ", key_exists(1, $a) ? "k" : "n", " ", doubleval("2.5") + 1, " ", strchr("user@host", "@"), "\n";
+sort($a, SORT_REGULAR); echo implode(",", $a), " ", SORT_REGULAR, SORT_NUMERIC, SORT_STRING, SORT_LOCALE_STRING, "\n";
+"#);
+    assert_eq!(out, "30 3-1-2 ind k 3.5 @host\n1,2,3 0125\n");
+}
