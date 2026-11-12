@@ -9,7 +9,7 @@
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
 
 use crate::codegen_support::emit::Emitter;
-use super::heap_alloc::{emit_bin_offset_aarch64, emit_bin_offset_x86_64, HEAP_BIN_MAX_PAYLOAD};
+use super::heap_alloc::{emit_free_bin_offset_aarch64, emit_free_bin_offset_x86_64, HEAP_BIN_MAX_PAYLOAD};
 use crate::codegen_support::platform::Arch;
 
 
@@ -117,7 +117,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x11, #{}", HEAP_BIN_MAX_PAYLOAD));        // does this payload fit in the segregated bin cache?
     emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emit_bin_offset_aarch64(emitter, "x11", "x12", "x16");                      // x12 = byte offset of the freed block's size-class bin
+    emit_free_bin_offset_aarch64(emitter, "x11", "x12", "x16");                 // x12 = byte offset of the largest class the freed block can serve
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
@@ -185,18 +185,32 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_merge_prev");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_free_list");
     emitter.instruction("cmp x10, x14");                                        // was the block inserted at the head of the list?
-    emitter.instruction("b.eq __rt_heap_free_trim_tail");                       // yes — there is no previous block to merge with
+    emitter.instruction("b.eq __rt_heap_free_check_inserted_tail");             // yes — there is no previous block to merge with
     emitter.instruction("sub x14, x10, #16");                                   // x14 = previous free block header (prev_next_addr - 16)
     emitter.instruction("ldr w12, [x14]");                                      // x12 = previous block size
     emitter.instruction("add x16, x14, x12");                                   // x16 = previous header + previous payload size
     emitter.instruction("add x16, x16, #16");                                   // x16 = end of previous free block including header
     emitter.instruction("cmp x16, x9");                                         // does the previous free block end where the inserted one begins?
-    emitter.instruction("b.ne __rt_heap_free_trim_tail");                       // no — nothing more to merge locally
+    emitter.instruction("b.ne __rt_heap_free_check_inserted_tail");             // no — nothing more to merge locally
     emitter.instruction("add x12, x12, x11");                                   // accumulate current payload size into the previous block
     emitter.instruction("add x12, x12, #16");                                   // include the inserted block header in the merged payload size
     emitter.instruction("str w12, [x14]");                                      // write merged size back to the previous block header
     emitter.instruction("ldr x16, [x9, #16]");                                  // x16 = inserted_block->next
     emitter.instruction("str x16, [x14, #16]");                                 // previous->next = inserted_block->next
+    emitter.instruction("mov x9, x14");                                         // the merged previous block now holds the freed bytes
+    emitter.instruction("mov x11, x12");                                        // x11 = payload size of the merged block
+
+    // -- only the block holding the freed bytes can newly reach the bump tail: neighbours that
+    // touched it were merged, and no free block reached the tail before this free --
+    emitter.label("__rt_heap_free_check_inserted_tail");
+    emitter.instruction("add x16, x9, x11");                                    // x16 = merged block header + payload size
+    emitter.instruction("add x16, x16, #16");                                   // x16 = end of the block holding the freed bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
+    emitter.instruction("ldr x14, [x13]");                                      // x14 = current heap offset
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
+    emitter.instruction("add x14, x15, x14");                                   // x14 = current heap end
+    emitter.instruction("cmp x16, x14");                                        // does that block reach the bump tail?
+    emitter.instruction("b.ne __rt_heap_free_post_validate");                   // no — the ordered list needs no tail trimming
 
     // -- repeatedly trim any free block that now touches the bump tail --
     emitter.label("__rt_heap_free_trim_tail");
@@ -385,7 +399,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r11, {}", HEAP_BIN_MAX_PAYLOAD));         // does the freed payload fit in the segregated bin cache?
     emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
-    emit_bin_offset_x86_64(emitter, "r11", "rcx");                              // rcx = byte offset of the freed block's size-class bin
+    emit_free_bin_offset_x86_64(emitter, "r11", "rcx", "rdx");                  // rcx = byte offset of the largest class the freed block can serve
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
@@ -454,17 +468,30 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_merge_prev");
     crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_free_list");
     emitter.instruction("cmp r10, rcx");                                        // was the block inserted at the head of the ordered free list?
-    emitter.instruction("je __rt_heap_free_trim_tail");                         // yes — there is no previous free block to merge with
+    emitter.instruction("je __rt_heap_free_check_inserted_tail");               // yes — there is no previous free block to merge with
     emitter.instruction("lea rcx, [r10 - 16]");                                 // recover the previous free block header from prev_next_addr
     emitter.instruction("mov edx, DWORD PTR [rcx]");                            // load the previous free block payload size before checking adjacency
     emitter.instruction("lea r8, [rcx + rdx + 16]");                            // compute the end address of the previous free block
     emitter.instruction("cmp r8, r9");                                          // does the previous free block end where the inserted block begins?
-    emitter.instruction("jne __rt_heap_free_trim_tail");                        // no — there is no previous neighbor to coalesce with
+    emitter.instruction("jne __rt_heap_free_check_inserted_tail");              // no — there is no previous neighbor to coalesce with
     emitter.instruction("add rdx, r11");                                        // accumulate the inserted block payload size into the previous block
     emitter.instruction("add rdx, 16");                                         // include the inserted block header in the merged previous block size
     emitter.instruction("mov DWORD PTR [rcx], edx");                            // write the merged payload size back into the previous block header
     emitter.instruction("mov r8, QWORD PTR [r9 + 16]");                         // preserve the inserted block successor before unlinking the merged header
     emitter.instruction("mov QWORD PTR [rcx + 16], r8");                        // splice the merged previous block directly to the inserted block successor
+    emitter.instruction("mov r9, rcx");                                         // the merged previous block now holds the freed bytes
+    emitter.instruction("mov r11, rdx");                                        // r11 = payload size of the merged block
+
+    // -- only the block holding the freed bytes can newly reach the bump tail: neighbours that
+    // touched it were merged, and no free block reached the tail before this free --
+    emitter.label("__rt_heap_free_check_inserted_tail");
+    emitter.instruction("lea rdx, [r9 + r11 + 16]");                            // end of the block holding the freed bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the current bump offset
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("lea rcx, [r10 + rcx]");                                // compute the current heap end
+    emitter.instruction("cmp rdx, rcx");                                        // does that block reach the bump tail?
+    emitter.instruction("jne __rt_heap_free_count");                            // no — the ordered list needs no tail trimming
 
     // -- repeatedly trim any ordered free block that now touches the bump tail --
     emitter.label("__rt_heap_free_trim_tail");

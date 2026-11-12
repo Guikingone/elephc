@@ -53,6 +53,7 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_ftoa (serialize_precision=-1 shortest round-trip) ---");
     emitter.label_global("__rt_json_ftoa");
+    emit_short_decimal_fast_path_aarch64(emitter);
 
     // -- set up stack frame (128 bytes) --
     emitter.instruction("sub sp, sp, #144");                                    // variadic area, scratch, saved double, saved regs, exp char
@@ -226,6 +227,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_ftoa (serialize_precision=-1 shortest round-trip) ---");
     emitter.label_global("__rt_json_ftoa");
+    emit_short_decimal_fast_path_x86_64(emitter);
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
@@ -392,6 +394,189 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbx");                                             // restore callee-saved rbx
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return result pointer (rax) and length (rdx)
+}
+
+/// Highest fraction-digit count the short-decimal fast path tries.
+pub(crate) const JSON_FTOA_FAST_MAX_FRACTION_DIGITS: usize = 6;
+
+/// Emits the AArch64 short-decimal fast path of `__rt_json_ftoa`.
+///
+/// For a non-zero `x` with `1e-4 <= |x| < 1e15` (the magnitudes PHP prints in decimal
+/// layout), the smallest `k` in `0..=6` with `(double)round(x * 10^k) / 10^k == x` gives the
+/// shortest round-trip digits: the division of two exact values is correctly rounded, so the
+/// decimal `m / 10^k` parses back to `x`, and no shorter decimal exists because it would have
+/// matched at a smaller `k`. The digits of `m` are written with a point `k` digits from the
+/// right (no trailing `.0` for integers), so the output equals the `snprintf`/`strtod` probe's.
+/// Other values fall through to the probe. Clobbers only caller-saved scratch registers and
+/// keeps `w0` (the exponent marker) for the fallback.
+fn emit_short_decimal_fast_path_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("fabs d1, d0");                                         // d1 = |x|
+    abi::emit_symbol_address(emitter, "x9", "_json_ftoa_fast_consts");
+    emitter.instruction("ldp d2, d3, [x9]");                                    // d2 = 1e-4 lower bound, d3 = 1e15 upper bound
+    emitter.instruction("fcmp d1, d2");                                         // is |x| below the decimal-layout fast range (or zero)?
+    emitter.instruction("b.lo __rt_json_ftoa_slow");                            // yes — use the general probe
+    emitter.instruction("fcmp d1, d3");                                         // is |x| at or above 1e15?
+    emitter.instruction("b.hs __rt_json_ftoa_slow");                            // yes — use the general probe
+    emitter.instruction("add x9, x9, #16");                                     // x9 = powers-of-ten table (1, 10, ..., 1e6)
+    emitter.instruction("mov x10, #0");                                         // k = 0 fraction digits
+    emitter.label("__rt_json_ftoa_fast_try");
+    emitter.instruction("ldr d2, [x9, x10, lsl #3]");                           // d2 = 10^k
+    emitter.instruction("fmul d3, d0, d2");                                     // x * 10^k
+    emitter.instruction("fcvtns x11, d3");                                      // m = round-to-nearest(x * 10^k)
+    emitter.instruction("scvtf d3, x11");                                       // (double)m, exact because |m| < 2^53
+    emitter.instruction("fdiv d3, d3, d2");                                     // correctly rounded m / 10^k
+    emitter.instruction("fcmp d3, d0");                                         // does the k-digit decimal round-trip to x?
+    emitter.instruction("b.eq __rt_json_ftoa_fast_found");                      // yes — it is the shortest representation
+    emitter.instruction("add x10, x10, #1");                                    // try one more fraction digit
+    emitter.instruction(&format!("cmp x10, #{}", JSON_FTOA_FAST_MAX_FRACTION_DIGITS)); // tried every fast fraction width?
+    emitter.instruction("b.ls __rt_json_ftoa_fast_try");                        // no — keep trying
+    emitter.instruction("b __rt_json_ftoa_slow");                               // no short decimal — use the general probe
+
+    emitter.label("__rt_json_ftoa_fast_found");
+    abi::emit_symbol_address(emitter, "x12", "_concat_off");
+    emitter.instruction("ldr x13, [x12]");                                      // x13 = current concat offset
+    abi::emit_symbol_address(emitter, "x14", "_concat_buf");
+    emitter.instruction("add x1, x14, x13");                                    // x1 = result start inside the concat buffer
+    emitter.instruction("mov x14, x1");                                         // x14 = write cursor
+    emitter.instruction("tbz x11, #63, __rt_json_ftoa_fast_positive");          // non-negative m needs no sign
+    emitter.instruction("mov w15, #45");                                        // '-'
+    emitter.instruction("strb w15, [x14], #1");                                 // emit the sign
+    emitter.instruction("neg x11, x11");                                        // m = |m|
+    emitter.label("__rt_json_ftoa_fast_positive");
+    // -- count the digits to print: at least k + 1 so a leading "0." appears --
+    emitter.instruction("mov x15, x11");                                        // x15 = remaining value
+    emitter.instruction("mov x16, #0");                                         // x16 = digit count
+    emitter.instruction("mov x17, #10");                                        // divisor
+    emitter.label("__rt_json_ftoa_fast_count");
+    emitter.instruction("udiv x15, x15, x17");                                  // drop one decimal digit
+    emitter.instruction("add x16, x16, #1");                                    // count it
+    emitter.instruction("cbnz x15, __rt_json_ftoa_fast_count");                 // more significant digits remain
+    emitter.instruction("add x15, x10, #1");                                    // minimum digits = k + 1
+    emitter.instruction("cmp x16, x15");                                        // fewer digits than that?
+    emitter.instruction("csel x16, x15, x16, lo");                              // pad with leading zeros up to k + 1 digits
+    // -- write the digits right to left, with the point k digits from the right --
+    emitter.instruction("add x15, x14, x16");                                   // x15 = end of the digit run
+    emitter.instruction("cmp x10, #0");                                         // any fraction digits?
+    emitter.instruction("cinc x15, x15, ne");                                   // reserve one byte for the decimal point
+    emitter.instruction("mov x2, x15");                                         // x2 = end cursor (result end)
+    emitter.instruction("mov x13, #0");                                         // x13 = digits written so far
+    emitter.label("__rt_json_ftoa_fast_digit");
+    emitter.instruction("cmp x13, x10");                                        // reached the decimal point position?
+    emitter.instruction("b.ne __rt_json_ftoa_fast_no_point");                   // not yet
+    emitter.instruction("cbz x10, __rt_json_ftoa_fast_no_point");               // integers have no point
+    emitter.instruction("mov w12, #46");                                        // '.'
+    emitter.instruction("strb w12, [x15, #-1]!");                               // emit the decimal point
+    emitter.label("__rt_json_ftoa_fast_no_point");
+    emitter.instruction("udiv x12, x11, x17");                                  // q = m / 10
+    emitter.instruction("msub x3, x12, x17, x11");                              // digit = m - q * 10
+    emitter.instruction("add w3, w3, #48");                                     // ASCII digit
+    emitter.instruction("strb w3, [x15, #-1]!");                                // emit it right to left
+    emitter.instruction("mov x11, x12");                                        // m = q
+    emitter.instruction("add x13, x13, #1");                                    // one more digit written
+    emitter.instruction("cmp x13, x16");                                        // all digits written?
+    emitter.instruction("b.lo __rt_json_ftoa_fast_digit");                      // no — continue
+    emitter.instruction("sub x2, x2, x1");                                      // x2 = result length
+    abi::emit_symbol_address(emitter, "x12", "_concat_off");
+    emitter.instruction("ldr x13, [x12]");                                      // original concat offset
+    emitter.instruction("add x13, x13, x2");                                    // advance past the emitted bytes
+    emitter.instruction("str x13, [x12]");                                      // publish the new concat offset
+    emitter.instruction("ret");                                                 // return x1/x2
+    emitter.label("__rt_json_ftoa_slow");
+}
+
+/// Emits the x86_64 short-decimal fast path of `__rt_json_ftoa` (see the AArch64 variant).
+///
+/// Clobbers only caller-saved scratch registers and keeps `dil` (the exponent marker) for
+/// the fallback.
+fn emit_short_decimal_fast_path_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("movq rax, xmm0");                                      // raw bits of x
+    emitter.instruction("btr rax, 63");                                         // clear the sign bit
+    emitter.instruction("movq xmm1, rax");                                      // xmm1 = |x|
+    abi::emit_symbol_address(emitter, "r8", "_json_ftoa_fast_consts");
+    emitter.instruction("ucomisd xmm1, QWORD PTR [r8]");                        // is |x| below 1e-4 (or zero)?
+    emitter.instruction("jb __rt_json_ftoa_slow_x");                            // yes — use the general probe
+    emitter.instruction("ucomisd xmm1, QWORD PTR [r8 + 8]");                    // is |x| at or above 1e15?
+    emitter.instruction("jae __rt_json_ftoa_slow_x");                           // yes — use the general probe
+    emitter.instruction("add r8, 16");                                          // r8 = powers-of-ten table (1, 10, ..., 1e6)
+    emitter.instruction("xor ecx, ecx");                                        // k = 0 fraction digits
+    emitter.label("__rt_json_ftoa_fast_try_x");
+    emitter.instruction("movapd xmm2, xmm0");                                   // copy x
+    emitter.instruction("mulsd xmm2, QWORD PTR [r8 + rcx * 8]");                // x * 10^k
+    emitter.instruction("cvtsd2si r9, xmm2");                                   // m = round-to-nearest(x * 10^k)
+    emitter.instruction("cvtsi2sd xmm3, r9");                                   // (double)m, exact because |m| < 2^53
+    emitter.instruction("divsd xmm3, QWORD PTR [r8 + rcx * 8]");                // correctly rounded m / 10^k
+    emitter.instruction("ucomisd xmm3, xmm0");                                  // does the k-digit decimal round-trip to x?
+    emitter.instruction("je __rt_json_ftoa_fast_found_x");                      // yes — it is the shortest representation
+    emitter.instruction("add ecx, 1");                                          // try one more fraction digit
+    emitter.instruction(&format!("cmp ecx, {}", JSON_FTOA_FAST_MAX_FRACTION_DIGITS)); // tried every fast fraction width?
+    emitter.instruction("jbe __rt_json_ftoa_fast_try_x");                       // no — keep trying
+    emitter.instruction("jmp __rt_json_ftoa_slow_x");                           // no short decimal — use the general probe
+
+    emitter.label("__rt_json_ftoa_fast_found_x");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // r10 = current concat offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    emitter.instruction("lea rax, [r11 + r10]");                                // rax = result start inside the concat buffer
+    emitter.instruction("mov r11, rax");                                        // r11 = write cursor
+    emitter.instruction("test r9, r9");                                         // is m negative?
+    emitter.instruction("jns __rt_json_ftoa_fast_positive_x");                  // no — no sign
+    emitter.instruction("mov BYTE PTR [r11], 45");                              // emit '-'
+    emitter.instruction("add r11, 1");                                          // advance past the sign
+    emitter.instruction("neg r9");                                              // m = |m|
+    emitter.label("__rt_json_ftoa_fast_positive_x");
+    emitter.instruction("push rsi");                                            // preserve rsi for the caller
+    // -- count the digits to print: at least k + 1 so a leading "0." appears --
+    emitter.instruction("mov r10, r9");                                         // r10 = remaining value
+    emitter.instruction("xor esi, esi");                                        // rsi = digit count
+    emitter.instruction("mov r8, 10");                                          // divisor
+    emitter.label("__rt_json_ftoa_fast_count_x");
+    emitter.instruction("push rax");                                            // keep the result start across the division
+    emitter.instruction("mov rax, r10");                                        // dividend
+    emitter.instruction("xor edx, edx");                                        // zero-extend the dividend
+    emitter.instruction("div r8");                                              // drop one decimal digit
+    emitter.instruction("mov r10, rax");                                        // remaining value
+    emitter.instruction("pop rax");                                             // restore the result start
+    emitter.instruction("add rsi, 1");                                          // count the digit
+    emitter.instruction("test r10, r10");                                       // more significant digits remain?
+    emitter.instruction("jnz __rt_json_ftoa_fast_count_x");                     // yes — keep counting
+    emitter.instruction("lea r10, [rcx + 1]");                                  // minimum digits = k + 1
+    emitter.instruction("cmp rsi, r10");                                        // fewer digits than that?
+    emitter.instruction("cmovb rsi, r10");                                      // pad with leading zeros up to k + 1 digits
+    // -- write the digits right to left, with the point k digits from the right --
+    emitter.instruction("lea r10, [r11 + rsi]");                                // r10 = end of the digit run
+    emitter.instruction("test ecx, ecx");                                       // any fraction digits?
+    emitter.instruction("jz __rt_json_ftoa_fast_end_x");                        // integers have no point
+    emitter.instruction("add r10, 1");                                          // reserve one byte for the decimal point
+    emitter.label("__rt_json_ftoa_fast_end_x");
+    emitter.instruction("push r10");                                            // remember the result end
+    emitter.instruction("push rax");                                            // keep the result start across the divisions
+    emitter.instruction("xor r11d, r11d");                                      // r11 = digits written so far
+    emitter.label("__rt_json_ftoa_fast_digit_x");
+    emitter.instruction("cmp r11, rcx");                                        // reached the decimal point position?
+    emitter.instruction("jne __rt_json_ftoa_fast_no_point_x");                  // not yet
+    emitter.instruction("test ecx, ecx");                                       // integers have no point
+    emitter.instruction("jz __rt_json_ftoa_fast_no_point_x");                   // skip the point
+    emitter.instruction("sub r10, 1");                                          // step left
+    emitter.instruction("mov BYTE PTR [r10], 46");                              // emit '.'
+    emitter.label("__rt_json_ftoa_fast_no_point_x");
+    emitter.instruction("mov rax, r9");                                         // dividend
+    emitter.instruction("xor edx, edx");                                        // zero-extend the dividend
+    emitter.instruction("div r8");                                              // q = m / 10, rdx = digit
+    emitter.instruction("add dl, 48");                                          // ASCII digit
+    emitter.instruction("sub r10, 1");                                          // step left
+    emitter.instruction("mov BYTE PTR [r10], dl");                              // emit the digit
+    emitter.instruction("mov r9, rax");                                         // m = q
+    emitter.instruction("add r11, 1");                                          // one more digit written
+    emitter.instruction("cmp r11, rsi");                                        // all digits written?
+    emitter.instruction("jb __rt_json_ftoa_fast_digit_x");                      // no — continue
+    emitter.instruction("pop rax");                                             // rax = result start
+    emitter.instruction("pop rdx");                                             // rdx = result end
+    emitter.instruction("sub rdx, rax");                                        // rdx = result length
+    emitter.instruction("pop rsi");                                             // restore the caller's rsi
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // original concat offset
+    emitter.instruction("add r10, rdx");                                        // advance past the emitted bytes
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the new concat offset
+    emitter.instruction("ret");                                                 // return rax/rdx
+    emitter.label("__rt_json_ftoa_slow_x");
 }
 
 /// Emits `__rt_var_dump_ftoa`, the float formatter behind `var_dump()`.

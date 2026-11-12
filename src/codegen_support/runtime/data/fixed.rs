@@ -342,6 +342,23 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _json_error_line, 8, 3\n");
     out.push_str(".comm _json_error_column, 8, 3\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
+    // json_encode string escaping: 1 marks bytes that need an escape or a flag check
+    // (controls, '"', '\\', '/', '<', '>', '&', '\'', and every non-ASCII byte).
+    out.push_str(".globl _json_escape_class\n_json_escape_class:\n");
+    for byte in 0u32..256 {
+        let special = byte < 0x20 || byte >= 0x80 || matches!(byte, 34 | 92 | 47 | 60 | 62 | 38 | 39);
+        out.push_str(if special { "    .byte 1\n" } else { "    .byte 0\n" });
+    }
+    // `__rt_json_ftoa` short-decimal fast path: magnitude bounds, then 10^0..=10^k.
+    out.push_str(".p2align 3\n.globl _json_ftoa_fast_consts\n_json_ftoa_fast_consts:\n");
+    out.push_str("    .double 0.0001\n    .double 1000000000000000.0\n");
+    for k in 0..=crate::codegen_support::runtime::system::JSON_FTOA_FAST_MAX_FRACTION_DIGITS {
+        out.push_str(&format!("    .double {}.0\n", 10u64.pow(k as u32)));
+    }
+    out.push_str(".p2align 3\n.globl _heap_bin_sizes\n_heap_bin_sizes:\n");
+    for size in crate::codegen_support::runtime::arrays::HEAP_BIN_CLASS_SIZES {
+        out.push_str(&format!("    .quad {}\n", size));
+    }
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");

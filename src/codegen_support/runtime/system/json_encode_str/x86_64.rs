@@ -97,6 +97,27 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer before entering the source-byte loop
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the source-byte index to the beginning of the input string
 
+    // -- fast path: copy runs of bytes that never need escaping with the cursors in registers --
+    emitter.label("__rt_json_str_fast");
+    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // load the source-byte index
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the source string pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // load the concat-buffer write pointer
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // load the source length
+    abi::emit_symbol_address(emitter, "r8", "_json_escape_class");             // r8 = per-byte escape class table (0 = copy verbatim)
+    emitter.label("__rt_json_str_fast_loop");
+    emitter.instruction("cmp r13, r9");                                         // have we consumed every source byte?
+    emitter.instruction("jae __rt_json_str_fast_exit");                         // yes — let the general loop write the closing quote
+    emitter.instruction("movzx r14, BYTE PTR [r10 + r13]");                     // load the next source byte
+    emitter.instruction("cmp BYTE PTR [r8 + r14], 0");                          // can this byte be copied without any escaping or flag check?
+    emitter.instruction("jne __rt_json_str_fast_exit");                         // no — hand it to the general escape logic
+    emitter.instruction("mov BYTE PTR [r11], r14b");                            // copy the plain byte into the concat buffer
+    emitter.instruction("add r11, 1");                                          // advance the write pointer
+    emitter.instruction("add r13, 1");                                          // advance the source index
+    emitter.instruction("jmp __rt_json_str_fast_loop");                         // keep copying plain bytes
+    emitter.label("__rt_json_str_fast_exit");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the write pointer for the general loop
+    emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the source index for the general loop
+
     emitter.label("__rt_json_str_loop");
     emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the current source-byte index at the top of the JSON escape loop
     emitter.instruction("cmp r13, QWORD PTR [rbp - 16]");                       // have we consumed every byte of the source string?
@@ -164,7 +185,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after copying the ordinary byte
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after copying the ordinary byte
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_slash");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // write the escape backslash that prefixes a JSON slash escape
@@ -173,7 +194,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the slash escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the slash
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_quote");
     // Honor JSON_HEX_QUOT (bit 8): when set, embedded quotes become the
@@ -186,7 +207,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the quote escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the embedded quote
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     // -- JSON_HEX_TAG dispatch: hex-escape '<'/'>' when bit 1 is set --
     emitter.label("__rt_json_str_check_hex_tag_x");
@@ -235,7 +256,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer
     emitter.instruction("add r13, 1");                                          // advance to the next source byte
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_backslash");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // write the first backslash of the escaped backslash pair
@@ -244,7 +265,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the backslash escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the backslash
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_n");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // write the escape backslash that prefixes a JSON newline escape
@@ -253,7 +274,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the newline escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the newline
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_r");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // write the escape backslash that prefixes a JSON carriage-return escape
@@ -262,7 +283,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the carriage-return escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the carriage return
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_t");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // write the escape backslash that prefixes a JSON tab escape
@@ -271,7 +292,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the tab escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the tab
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_b");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // write the escape backslash that prefixes a JSON backspace escape
@@ -280,7 +301,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the backspace escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the backspace
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     emitter.label("__rt_json_str_esc_f");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // write the escape backslash that prefixes a JSON form-feed escape
@@ -289,7 +310,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after expanding the form-feed escape
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after consuming the form-feed
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue escaping the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue escaping the remaining source bytes
 
     // -- emit a generic control byte (< 0x20) as \\u00XX --
     // Reuses the existing __rt_json_str_emit_u16_x helper, which expects
@@ -302,7 +323,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the source index
     emitter.instruction("add r13, 1");                                          // advance past the control byte
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source-byte index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // resume scanning the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // resume scanning the remaining source bytes
 
     // -- UTF-8 dispatcher: classify the lead byte and decode the codepoint --
     emitter.label("__rt_json_str_utf8_dispatch_x");
@@ -433,7 +454,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the source index
     emitter.instruction("add r13, 4");                                          // advance past the 4-byte UTF-8 sequence
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // save the updated source index
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue scanning the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue scanning the remaining source bytes
 
     // -- emit a BMP codepoint as a single \uXXXX --
     emitter.label("__rt_json_str_utf8_emit_bmp_x");
@@ -444,7 +465,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the source index
     emitter.instruction("add r13, r12");                                        // advance past the consumed source bytes
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // save the updated source index
-    emitter.instruction("jmp __rt_json_str_loop");                              // continue scanning the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // continue scanning the remaining source bytes
 
     // -- malformed UTF-8 handler (x86_64) --
     // Reached from any UTF-8 dispatch site that detected an invalid lead
@@ -482,7 +503,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the source index parked above
     emitter.instruction("add r13, 1");                                          // advance past exactly one malformed byte (PHP-faithful recovery)
     emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // persist the updated source index for the next loop iteration
-    emitter.instruction("jmp __rt_json_str_loop");                              // resume scanning the remaining source bytes
+    emitter.instruction("jmp __rt_json_str_fast");                              // resume scanning the remaining source bytes
 
     // -- helper: write \uXXXX to [r11], advance r11 by 6, persist write pos --
     // Inputs: rdi = 16-bit codepoint, r11 = current write pointer
@@ -495,7 +516,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // mask to four bits
     emitter.instruction("cmp rax, 10");                                         // is the nibble in 0..9?
     emitter.instruction("jl __rt_json_str_emit_u16_n3_dec_x");                  // decimal-digit branch
-    emitter.instruction("add rax, 7");                                          // shift A..F up to ASCII range
+    emitter.instruction("add rax, 39");                                         // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n3_dec_x");
     emitter.instruction("add rax, 48");                                         // convert nibble to ASCII digit
     emitter.instruction("mov BYTE PTR [r11 + 2], al");                          // emit the digit
@@ -505,7 +526,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // update the JSON string encoder cursor or counter
     emitter.instruction("cmp rax, 10");                                         // check the current JSON string encoder condition
     emitter.instruction("jl __rt_json_str_emit_u16_n2_dec_x");                  // branch on the current JSON string encoder condition
-    emitter.instruction("add rax, 7");                                          // update the JSON string encoder cursor or counter
+    emitter.instruction("add rax, 39");                                         // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n2_dec_x");
     emitter.instruction("add rax, 48");                                         // update the JSON string encoder cursor or counter
     emitter.instruction("mov BYTE PTR [r11 + 3], al");                          // load or prepare JSON string encoder state
@@ -515,7 +536,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // update the JSON string encoder cursor or counter
     emitter.instruction("cmp rax, 10");                                         // check the current JSON string encoder condition
     emitter.instruction("jl __rt_json_str_emit_u16_n1_dec_x");                  // branch on the current JSON string encoder condition
-    emitter.instruction("add rax, 7");                                          // update the JSON string encoder cursor or counter
+    emitter.instruction("add rax, 39");                                         // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n1_dec_x");
     emitter.instruction("add rax, 48");                                         // update the JSON string encoder cursor or counter
     emitter.instruction("mov BYTE PTR [r11 + 4], al");                          // load or prepare JSON string encoder state
@@ -524,7 +545,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0xF");                                        // update the JSON string encoder cursor or counter
     emitter.instruction("cmp rax, 10");                                         // check the current JSON string encoder condition
     emitter.instruction("jl __rt_json_str_emit_u16_n0_dec_x");                  // branch on the current JSON string encoder condition
-    emitter.instruction("add rax, 7");                                          // update the JSON string encoder cursor or counter
+    emitter.instruction("add rax, 39");                                         // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n0_dec_x");
     emitter.instruction("add rax, 48");                                         // update the JSON string encoder cursor or counter
     emitter.instruction("mov BYTE PTR [r11 + 5], al");                          // load or prepare JSON string encoder state

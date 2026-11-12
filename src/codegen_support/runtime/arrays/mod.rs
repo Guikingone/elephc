@@ -425,7 +425,7 @@ pub use hash_unset::emit_hash_unset;
 /// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;
 /// Number of segregated heap free-list bins (see `heap_alloc`).
-pub(crate) use heap_alloc::HEAP_BIN_COUNT;
+pub(crate) use heap_alloc::{HEAP_BIN_CLASS_SIZES, HEAP_BIN_COUNT};
 pub(crate) use hash_sort::{HASH_SORT_BY_VALUE, HASH_SORT_DESCENDING, HASH_SORT_STRING};
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;

@@ -549,7 +549,7 @@ fn test_json_encode_preserve_zero_fraction_does_not_affect_int() {
 #[test]
 fn test_json_encode_default_escapes_2byte_utf8() {
     let out = compile_and_run(r#"<?php echo json_encode("café");"#);
-    assert_eq!(out, "\"caf\\u00E9\"");
+    assert_eq!(out, "\"caf\\u00e9\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` outputs the raw UTF-8 character for 2-byte sequences.
@@ -565,7 +565,7 @@ fn test_json_encode_unescaped_unicode_passes_2byte_utf8() {
 #[test]
 fn test_json_encode_default_escapes_3byte_utf8() {
     let out = compile_and_run(r#"<?php echo json_encode("你好");"#);
-    assert_eq!(out, "\"\\u4F60\\u597D\"");
+    assert_eq!(out, "\"\\u4f60\\u597d\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` outputs the raw UTF-8 character for 3-byte sequences.
@@ -582,7 +582,7 @@ fn test_json_encode_unescaped_unicode_passes_3byte_utf8() {
 #[test]
 fn test_json_encode_default_escapes_4byte_utf8_as_surrogate_pair() {
     let out = compile_and_run(r#"<?php echo json_encode("😀");"#);
-    assert_eq!(out, "\"\\uD83D\\uDE00\"");
+    assert_eq!(out, "\"\\ud83d\\ude00\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` outputs the raw 4-byte UTF-8 character without surrogate escaping.
@@ -605,7 +605,7 @@ fn test_json_encode_default_keeps_ascii_unchanged() {
 #[test]
 fn test_json_encode_default_mixes_ascii_and_escaped_unicode() {
     let out = compile_and_run(r#"<?php echo json_encode("Hi café!");"#);
-    assert_eq!(out, "\"Hi caf\\u00E9!\"");
+    assert_eq!(out, "\"Hi caf\\u00e9!\"");
 }
 
 /// Verifies that `JSON_UNESCAPED_UNICODE` applies to each element of an indexed array.

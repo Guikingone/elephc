@@ -67,6 +67,14 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.instruction("mov x3, x0");                                          // x3 = destination (heap pointer)
     emitter.instruction("mov x4, x2");                                          // x4 = byte count for loop
 
+    emitter.label("__rt_str_persist_copy8");
+    emitter.instruction("cmp x4, #8");                                          // at least one whole 8-byte word left?
+    emitter.instruction("b.lo __rt_str_persist_copy");                          // no — finish byte by byte
+    emitter.instruction("ldr x5, [x1], #8");                                    // load eight source bytes, advance
+    emitter.instruction("str x5, [x3], #8");                                    // store eight bytes to the heap, advance
+    emitter.instruction("sub x4, x4, #8");                                      // decrement remaining count by a word
+    emitter.instruction("b __rt_str_persist_copy8");                            // continue copying whole words
+
     emitter.label("__rt_str_persist_copy");
     emitter.instruction("cbz x4, __rt_str_persist_ret");                        // all bytes copied
     emitter.instruction("ldrb w5, [x1], #1");                                   // load byte from source, advance
@@ -122,19 +130,15 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the source byte length after the allocator helper returns
 
     // -- copy the source bytes into the owned heap allocation --
-    emitter.label("__rt_str_persist_copy");
-    emitter.instruction("test rcx, rcx");                                       // stop copying once every source byte has been moved into owned storage
-    emitter.instruction("jz __rt_str_persist_ret");                             // the destination payload is fully initialized once no bytes remain
-    emitter.instruction("mov r10b, BYTE PTR [r9]");                             // load the next source byte from the original transient string payload
-    emitter.instruction("mov BYTE PTR [r8], r10b");                             // store the copied byte into the owned destination payload
-    emitter.instruction("add r9, 1");                                           // advance the source cursor after copying one byte
-    emitter.instruction("add r8, 1");                                           // advance the destination cursor after copying one byte
-    emitter.instruction("sub rcx, 1");                                          // decrement the number of remaining bytes left to duplicate
-    emitter.instruction("jmp __rt_str_persist_copy");                           // continue the byte-copy loop until the entire payload is duplicated
+    emitter.instruction("push rsi");                                            // preserve rsi, which callers may still hold live across this helper
+    emitter.instruction("push rdi");                                            // preserve rdi, which callers may still hold live across this helper
+    emitter.instruction("mov rdi, r8");                                         // rdi = destination payload
+    emitter.instruction("mov rsi, r9");                                         // rsi = source payload
+    emitter.instruction("rep movsb");                                           // copy rcx bytes into the owned allocation
+    emitter.instruction("pop rdi");                                             // restore the caller's rdi
+    emitter.instruction("pop rsi");                                             // restore the caller's rsi
 
-    emitter.label("__rt_str_persist_ret");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the original string length for the x86_64 string result pair
-    emitter.instruction("sub r8, rdx");                                         // recover the base pointer of the owned payload after the post-increment copy loop
     emitter.instruction("mov rax, r8");                                         // return the owned string pointer in the x86_64 string result register
     emitter.instruction("add rsp, 16");                                         // release the temporary spill slots used by the persist helper
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning

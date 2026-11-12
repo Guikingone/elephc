@@ -74,16 +74,10 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.instruction("je __rt_heap_debug_validate_free_list_ret");       // yes — both the ordered free list and cached bins are valid
         emitter.instruction("lea r8, [r11 + rax]");                             // compute the address of the current small-bin head slot
         emitter.instruction("mov rdx, QWORD PTR [r8]");                         // load the current cached block header for this size class
-        // Bin k (offset k * 8) holds payloads in (4 << k, 8 << k]; bin 0 holds (0, 8].
-        emitter.instruction("mov ecx, eax");                                    // copy the bin-head byte offset
-        emitter.instruction("shr ecx, 3");                                      // k = bin index
-        emitter.instruction("mov edi, 8");                                      // inclusive upper bound base
-        emitter.instruction("shl edi, cl");                                     // upper bound = 8 << k
-        emitter.instruction("mov esi, 4");                                      // exclusive lower bound base
-        emitter.instruction("shl esi, cl");                                     // lower bound = 4 << k
-        emitter.instruction("xor ecx, ecx");                                    // bin 0 has no lower bound
-        emitter.instruction("test eax, eax");                                   // is this bin 0?
-        emitter.instruction("cmovnz ecx, esi");                                 // other bins use the 4 << k exclusive lower bound
+        // Bin k holds blocks of at least `_heap_bin_sizes[k]` and below `_heap_bin_sizes[k + 1]`.
+        crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_bin_sizes");
+        emitter.instruction("mov ecx, DWORD PTR [rsi + rax]");                  // inclusive lower bound = this class's payload size
+        emitter.instruction("mov edi, DWORD PTR [rsi + rax + 8]");              // exclusive upper bound = the next class's payload size
 
         emitter.label("__rt_heap_debug_validate_small_bin_ready");
         crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
@@ -102,9 +96,9 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
         emitter.instruction("cmp esi, 8");                                      // can the cached block still hold the minimum reusable payload?
         emitter.instruction("jb __rt_heap_debug_validate_free_list_fail");      // undersized cached blocks indicate header corruption
         emitter.instruction("cmp esi, ecx");                                    // is the cached block too small for this size class?
-        emitter.instruction("jbe __rt_heap_debug_validate_free_list_fail");     // blocks that belong in a smaller bin corrupt the cached size class
+        emitter.instruction("jb __rt_heap_debug_validate_free_list_fail");      // blocks that belong in a smaller bin corrupt the cached size class
         emitter.instruction("cmp esi, edi");                                    // is the cached block too large for this size class?
-        emitter.instruction("ja __rt_heap_debug_validate_free_list_fail");      // blocks that belong in a larger structure corrupt the cached size class
+        emitter.instruction("jae __rt_heap_debug_validate_free_list_fail");     // blocks that belong in a larger bin corrupt the cached size class
         emitter.instruction("lea rsi, [rdx + rsi + 16]");                       // compute the end address of the cached block including its header
         emitter.instruction("cmp rsi, r10");                                    // does the cached block overrun the current heap end?
         emitter.instruction("ja __rt_heap_debug_validate_free_list_fail");      // cached blocks must remain fully inside the live heap window
@@ -176,14 +170,10 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_heap_debug_validate_free_list_ret");         // yes — the entire cached free state is valid
     emitter.instruction("add x13, x11, x12");                                   // x13 = address of the current small-bin head slot
     emitter.instruction("ldr x14, [x13]");                                      // x14 = current cached block header for this size class
-    // Bin k (offset k * 8) holds payloads in (4 << k, 8 << k]; bin 0 holds (0, 8].
-    emitter.instruction("lsr x17, x12, #3");                                    // k = bin index
-    emitter.instruction("mov x16, #8");                                         // inclusive upper bound base
-    emitter.instruction("lsl x16, x16, x17");                                   // x16 = 8 << k
-    emitter.instruction("mov x15, #4");                                         // exclusive lower bound base
-    emitter.instruction("lsl x15, x15, x17");                                   // x15 = 4 << k
-    emitter.instruction("cmp x12, #0");                                         // is this bin 0?
-    emitter.instruction("csel x15, xzr, x15, eq");                              // bin 0 has no lower bound
+    // Bin k holds blocks of at least `_heap_bin_sizes[k]` and below `_heap_bin_sizes[k + 1]`.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x17", "_heap_bin_sizes");
+    emitter.instruction("add x17, x17, x12");                                   // x17 = address of this class's size entry
+    emitter.instruction("ldp x15, x16, [x17]");                                 // x15 = inclusive lower bound, x16 = exclusive upper bound
 
     emitter.label("__rt_heap_debug_validate_small_bin_ready");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
@@ -201,9 +191,9 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("cmp x17, #8");                                         // can the cached block still hold the minimum payload?
     emitter.instruction("b.lo __rt_heap_debug_validate_free_list_fail");        // undersized cached blocks indicate header corruption
     emitter.instruction("cmp x17, x15");                                        // is the cached block too small for this size class?
-    emitter.instruction("b.ls __rt_heap_debug_validate_free_list_fail");        // the block belongs in a smaller bin, so the cache is corrupt
+    emitter.instruction("b.lo __rt_heap_debug_validate_free_list_fail");        // the block belongs in a smaller bin, so the cache is corrupt
     emitter.instruction("cmp x17, x16");                                        // is the cached block too large for this size class?
-    emitter.instruction("b.hi __rt_heap_debug_validate_free_list_fail");        // the block belongs in a larger structure, so the cache is corrupt
+    emitter.instruction("b.hs __rt_heap_debug_validate_free_list_fail");        // the block belongs in a larger bin, so the cache is corrupt
     emitter.instruction("add x17, x14, x17");                                   // x17 = header + payload size
     emitter.instruction("add x17, x17, #16");                                   // x17 = end of the cached block including its 16-byte header
     emitter.instruction("cmp x17, x10");                                        // does the cached block run past the current heap end?

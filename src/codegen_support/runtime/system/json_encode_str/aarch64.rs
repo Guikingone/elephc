@@ -98,6 +98,25 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- loop through source string, escaping special chars --
     emitter.instruction("mov x13, #0");                                         // source index
+
+    // -- fast path: copy runs of bytes that never need escaping with the cursors in registers --
+    emitter.label("__rt_json_str_fast");
+    emitter.instruction("ldr x2, [sp, #8]");                                    // load the source length
+    emitter.instruction("ldr x1, [sp, #0]");                                    // load the source pointer
+    emitter.instruction("ldr x11, [sp, #24]");                                  // load the concat-buffer write pointer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_json_escape_class"); // x10 = per-byte escape class table (0 = copy verbatim)
+    emitter.label("__rt_json_str_fast_loop");
+    emitter.instruction("cmp x13, x2");                                         // have we consumed every source byte?
+    emitter.instruction("b.ge __rt_json_str_fast_exit");                        // yes — let the general loop write the closing quote
+    emitter.instruction("ldrb w14, [x1, x13]");                                 // load the next source byte
+    emitter.instruction("ldrb w12, [x10, x14]");                                // load its escape class
+    emitter.instruction("cbnz w12, __rt_json_str_fast_exit");                   // escaped or flag-dependent byte — hand it to the general logic
+    emitter.instruction("strb w14, [x11], #1");                                 // copy the plain byte and advance the write pointer
+    emitter.instruction("add x13, x13, #1");                                    // advance the source index
+    emitter.instruction("b __rt_json_str_fast_loop");                           // keep copying plain bytes
+    emitter.label("__rt_json_str_fast_exit");
+    emitter.instruction("str x11, [sp, #24]");                                  // persist the write pointer for the general loop
+
     emitter.label("__rt_json_str_loop");
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload source len
     emitter.instruction("cmp x13, x2");                                         // check if done
@@ -180,7 +199,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #1");                                    // advance
     emitter.instruction("str x11, [sp, #24]");                                  // save write pos
     emitter.instruction("add x13, x13, #1");                                    // next source char
-    emitter.instruction("b __rt_json_str_loop");                                // continue
+    emitter.instruction("b __rt_json_str_fast");                                // continue
 
     emitter.label("__rt_json_str_esc_slash");
     emitter.instruction("mov w15, #92");                                        // backslash
@@ -190,7 +209,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance past \/
     emitter.instruction("str x11, [sp, #24]");                                  // save write pos
     emitter.instruction("add x13, x13, #1");                                    // next source char
-    emitter.instruction("b __rt_json_str_loop");                                // continue
+    emitter.instruction("b __rt_json_str_fast");                                // continue
 
     // -- escape sequences --
     emitter.label("__rt_json_str_esc_quote");
@@ -205,7 +224,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance by 2
     emitter.instruction("str x11, [sp, #24]");                                  // save write pos
     emitter.instruction("add x13, x13, #1");                                    // next source char
-    emitter.instruction("b __rt_json_str_loop");                                // continue
+    emitter.instruction("b __rt_json_str_fast");                                // continue
 
     // -- JSON_HEX_TAG dispatch: hex-escape '<'/'>'  when bit 1 is set --
     emitter.label("__rt_json_str_check_hex_tag");
@@ -253,7 +272,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #6");                                    // advance the write pointer past the 6-byte escape
     emitter.instruction("str x11, [sp, #24]");                                  // persist the updated write pointer
     emitter.instruction("add x13, x13, #1");                                    // advance to the next source byte
-    emitter.instruction("b __rt_json_str_loop");                                // continue the main escape loop
+    emitter.instruction("b __rt_json_str_fast");                                // continue the main escape loop
 
     emitter.label("__rt_json_str_esc_backslash");
     emitter.instruction("mov w15, #92");                                        // backslash
@@ -262,7 +281,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance by 2
     emitter.instruction("str x11, [sp, #24]");                                  // save write pos
     emitter.instruction("add x13, x13, #1");                                    // next source char
-    emitter.instruction("b __rt_json_str_loop");                                // continue
+    emitter.instruction("b __rt_json_str_fast");                                // continue
 
     emitter.label("__rt_json_str_esc_n");
     emitter.instruction("mov w15, #92");                                        // backslash
@@ -272,7 +291,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance by 2
     emitter.instruction("str x11, [sp, #24]");                                  // save write pos
     emitter.instruction("add x13, x13, #1");                                    // next source char
-    emitter.instruction("b __rt_json_str_loop");                                // continue
+    emitter.instruction("b __rt_json_str_fast");                                // continue
 
     emitter.label("__rt_json_str_esc_r");
     emitter.instruction("mov w15, #92");                                        // backslash
@@ -282,7 +301,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance by 2
     emitter.instruction("str x11, [sp, #24]");                                  // save write pos
     emitter.instruction("add x13, x13, #1");                                    // next source char
-    emitter.instruction("b __rt_json_str_loop");                                // continue
+    emitter.instruction("b __rt_json_str_fast");                                // continue
 
     emitter.label("__rt_json_str_esc_t");
     emitter.instruction("mov w15, #92");                                        // backslash
@@ -292,7 +311,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance by 2
     emitter.instruction("str x11, [sp, #24]");                                  // save write pos
     emitter.instruction("add x13, x13, #1");                                    // next source char
-    emitter.instruction("b __rt_json_str_loop");                                // continue
+    emitter.instruction("b __rt_json_str_fast");                                // continue
 
     emitter.label("__rt_json_str_esc_b");
     emitter.instruction("mov w15, #92");                                        // backslash
@@ -302,7 +321,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance the write pointer past the two-byte escape
     emitter.instruction("str x11, [sp, #24]");                                  // persist the updated write pointer
     emitter.instruction("add x13, x13, #1");                                    // advance to the next source byte
-    emitter.instruction("b __rt_json_str_loop");                                // resume scanning the remaining source bytes
+    emitter.instruction("b __rt_json_str_fast");                                // resume scanning the remaining source bytes
 
     emitter.label("__rt_json_str_esc_f");
     emitter.instruction("mov w15, #92");                                        // backslash
@@ -312,7 +331,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #2");                                    // advance the write pointer past the two-byte escape
     emitter.instruction("str x11, [sp, #24]");                                  // persist the updated write pointer
     emitter.instruction("add x13, x13, #1");                                    // advance to the next source byte
-    emitter.instruction("b __rt_json_str_loop");                                // resume scanning the remaining source bytes
+    emitter.instruction("b __rt_json_str_fast");                                // resume scanning the remaining source bytes
 
     // -- emit a generic control byte (< 0x20) as \u00XX --
     // Reuses the existing __rt_json_str_emit_u16 helper, which expects the
@@ -326,7 +345,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_str_emit_u16");                           // emit \u00XX for the control byte
     emitter.instruction("ldr x13, [sp, #40]");                                  // restore the source index
     emitter.instruction("add x13, x13, #1");                                    // advance past the control byte
-    emitter.instruction("b __rt_json_str_loop");                                // resume scanning the remaining source bytes
+    emitter.instruction("b __rt_json_str_fast");                                // resume scanning the remaining source bytes
 
     // -- UTF-8 dispatcher: classify the lead byte and decode the codepoint --
     // Inputs: w14 = lead byte, x13 = source index, x1/x2 (saved at sp+0/sp+8)
@@ -460,7 +479,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_str_emit_u16");                           // emit \uLLLL for the low surrogate
     emitter.instruction("ldr x13, [sp, #40]");                                  // restore the source index from scratch slot 40
     emitter.instruction("add x13, x13, #4");                                    // advance the source index past the 4-byte UTF-8 sequence
-    emitter.instruction("b __rt_json_str_loop");                                // continue scanning the remaining source bytes
+    emitter.instruction("b __rt_json_str_fast");                                // continue scanning the remaining source bytes
 
     // -- emit a BMP codepoint as a single \uXXXX --
     emitter.label("__rt_json_str_utf8_emit_bmp");
@@ -471,7 +490,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [sp, #32]");                                  // restore the bytes-consumed count
     emitter.instruction("ldr x13, [sp, #40]");                                  // restore the source index
     emitter.instruction("add x13, x13, x12");                                   // advance past the consumed source bytes
-    emitter.instruction("b __rt_json_str_loop");                                // continue scanning the remaining source bytes
+    emitter.instruction("b __rt_json_str_fast");                                // continue scanning the remaining source bytes
 
     // -- malformed UTF-8 handler --
     // Reached from any UTF-8 dispatch site that detected an invalid lead
@@ -513,7 +532,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_str_utf8_skip_byte");
     emitter.instruction("ldr x13, [sp, #40]");                                  // restore the source index parked above
     emitter.instruction("add x13, x13, #1");                                    // advance past exactly one malformed byte (PHP-faithful recovery)
-    emitter.instruction("b __rt_json_str_loop");                                // resume scanning the remaining source bytes
+    emitter.instruction("b __rt_json_str_fast");                                // resume scanning the remaining source bytes
 
     // -- helper: classify a string as a JSON number per RFC 8259 --
     // Inputs: x1 = source ptr, x2 = source length
@@ -637,7 +656,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w17, #0xF");                                  // mask to four bits
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n3_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n3_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #2]");                                 // emit the digit
@@ -646,7 +665,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w17, #0xF");                                  // mask to four bits
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n2_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n2_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #3]");                                 // emit the digit
@@ -655,7 +674,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w17, #0xF");                                  // mask to four bits
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n1_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n1_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #4]");                                 // emit the digit
@@ -663,7 +682,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("and w17, w16, #0xF");                                  // extract low nibble
     emitter.instruction("cmp w17, #10");                                        // is the nibble in 0..9?
     emitter.instruction("b.lt __rt_json_str_emit_u16_n0_dec");                  // decimal-digit branch
-    emitter.instruction("add w17, w17, #7");                                    // shift A..F up to ASCII range
+    emitter.instruction("add w17, w17, #39");                                   // shift 10..15 to lowercase ASCII a..f (PHP escapes code points in lowercase hex)
     emitter.label("__rt_json_str_emit_u16_n0_dec");
     emitter.instruction("add w17, w17, #48");                                   // convert nibble to ASCII digit
     emitter.instruction("strb w17, [x11, #5]");                                 // emit the digit

@@ -568,7 +568,7 @@ fn lower_mixed_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             abi::emit_call_label(ctx.emitter, "__rt_array_reverse_refcounted");
             abi::emit_pop_reg(ctx.emitter, "rcx");                              // rcx = rebuilt intermediate array to release
             abi::emit_push_reg(ctx.emitter, "rax");                             // save the reversed clone across the release
-            ctx.emitter.instruction("mov rdi, rcx");                            // pass the intermediate array to the kind-aware release
+            ctx.emitter.instruction("mov rax, rcx");                            // pass the intermediate array to the kind-aware release (decref_any takes rax)
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");
             abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the reversed clone as the result
         }
@@ -624,7 +624,7 @@ fn lower_mixed_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_call_label(ctx.emitter, "__rt_array_unique_mixed");
             abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the rebuilt intermediate array
             abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the unique result across intermediate release
-            ctx.emitter.instruction("mov rdi, rcx");                            // pass the rebuilt intermediate to kind-aware release
+            ctx.emitter.instruction("mov rax, rcx");                            // pass the rebuilt intermediate to kind-aware release (decref_any takes rax)
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");
             abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the independently owned unique result
         }
@@ -2129,11 +2129,11 @@ fn lower_two_hash_arg_builtin(
             ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
             if conv1 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary (decref_hash takes rax)
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary (decref_hash takes rax)
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer

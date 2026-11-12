@@ -21,11 +21,13 @@ use crate::codegen_support::platform::Arch;
 /// # ABI
 /// * Input: array pointer in `x0`
 /// * Output: sorted array in-place (no return value register)
-/// * Temporaries: `x1`–`x7`
+/// * Temporaries: `x1`–`x9` (caller-saved)
 ///
 /// # Algorithm
-/// Insertion sort: for each element, shift larger/smaller elements right until the correct
-/// insertion position is found. Preserves PHP comparison semantics for integer values.
+/// In-place heapsort, O(n log n): build a max-heap (a min-heap for descending order) by
+/// sifting down every internal node, then repeatedly swap the root with the last heap slot
+/// and sift the new root down. Signed integer comparisons match PHP's integer ordering, and
+/// equal integers are indistinguishable, so stability does not matter.
 pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
     if emitter.target.arch == Arch::X86_64 {
         emit_sort_int_linux_x86_64(emitter, reverse);
@@ -33,107 +35,147 @@ pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
     }
 
     let label = if reverse { "__rt_rsort_int" } else { "__rt_sort_int" };
-    let cmp_branch = if reverse { "b.ge" } else { "b.le" };
-
     emitter.blank();
-    emitter.comment(&format!("--- runtime: {} ---", label));
+    emitter.comment(&format!("--- runtime: {} (heapsort) ---", label));
     emitter.label_global(label);
 
-    // -- load array metadata and set up outer loop --
     emitter.instruction("ldr x1, [x0]");                                        // x1 = array length from header
     emitter.instruction("add x2, x0, #24");                                     // x2 = base of data region (skip header)
-    emitter.instruction("mov x3, #1");                                          // x3 = i = 1 (outer loop index, start at second element)
+    emitter.instruction("cmp x1, #2");                                          // fewer than two elements?
+    emitter.instruction(&format!("b.lo {}_done", label));                       // already sorted
 
-    let outer = format!("{}_outer", label);
-    let inner = format!("{}_inner", label);
-    let insert = format!("{}_insert", label);
-    let done = format!("{}_done", label);
+    // -- phase 1: heapify, sifting down every internal node from n/2 - 1 to 0 --
+    emitter.instruction("lsr x3, x1, #1");                                      // x3 = n / 2 (one past the last internal node)
+    emitter.instruction("mov x4, x1");                                          // x4 = heap limit = n
+    emitter.label(&format!("{}_build", label));
+    emitter.instruction(&format!("cbz x3, {}_extract_start", label));           // every internal node sifted
+    emitter.instruction("sub x3, x3, #1");                                      // next internal node
+    emitter.instruction("mov x5, x3");                                          // root = node
+    emit_sift_down_aarch64(emitter, &format!("{}_bsift", label), reverse);
+    emitter.instruction(&format!("b {}_build", label));                         // continue heapifying
 
-    // -- outer loop: iterate i from 1 to length-1 --
-    emitter.label(&outer);
-    emitter.instruction("cmp x3, x1");                                          // compare i with array length
-    emitter.instruction(&format!("b.ge {}", done));                             // if i >= length, sorting is complete
-    emitter.instruction("ldr x4, [x2, x3, lsl #3]");                            // x4 = key = data[i] (element to insert)
-    emitter.instruction("sub x5, x3, #1");                                      // x5 = j = i - 1 (scan backwards from here)
+    // -- phase 2: move the root behind the shrinking heap, then restore the heap --
+    emitter.label(&format!("{}_extract_start", label));
+    emitter.instruction("sub x3, x1, #1");                                      // x3 = last heap slot
+    emitter.label(&format!("{}_extract", label));
+    emitter.instruction(&format!("cbz x3, {}_done", label));                    // one element left: sorted
+    emitter.instruction("ldr x8, [x2]");                                        // x8 = heap root (extreme element)
+    emitter.instruction("ldr x9, [x2, x3, lsl #3]");                            // x9 = last heap element
+    emitter.instruction("str x9, [x2]");                                        // move the last element to the root
+    emitter.instruction("str x8, [x2, x3, lsl #3]");                            // park the extreme element in its final slot
+    emitter.instruction("mov x4, x3");                                          // heap limit = slots still in the heap
+    emitter.instruction("mov x5, #0");                                          // root = 0
+    emit_sift_down_aarch64(emitter, &format!("{}_esift", label), reverse);
+    emitter.instruction("sub x3, x3, #1");                                      // shrink the heap
+    emitter.instruction(&format!("b {}_extract", label));                       // extract the next extreme element
 
-    // -- inner loop: shift elements right until correct position found --
-    emitter.label(&inner);
-    emitter.instruction("cmp x5, #0");                                          // check if j < 0
-    emitter.instruction(&format!("b.lt {}", insert));                           // if j < 0, insert position found
-    emitter.instruction("ldr x6, [x2, x5, lsl #3]");                            // x6 = data[j] (element to compare with key)
-    emitter.instruction("cmp x6, x4");                                          // compare data[j] with key
-    emitter.instruction(&format!("{} {}", cmp_branch, insert));                 // if in order (<= or >= for reverse), insert here
-    emitter.instruction("add x7, x5, #1");                                      // x7 = j + 1 (destination for shift)
-    emitter.instruction("str x6, [x2, x7, lsl #3]");                            // data[j+1] = data[j] (shift element right)
-    emitter.instruction("sub x5, x5, #1");                                      // j -= 1 (move left)
-    emitter.instruction(&format!("b {}", inner));                               // continue inner loop
-
-    // -- insert the key at the correct position --
-    emitter.label(&insert);
-    emitter.instruction("add x7, x5, #1");                                      // x7 = j + 1 (insertion index)
-    emitter.instruction("str x4, [x2, x7, lsl #3]");                            // data[j+1] = key (place element)
-    emitter.instruction("add x3, x3, #1");                                      // i += 1 (advance outer loop)
-    emitter.instruction(&format!("b {}", outer));                               // continue outer loop
-
-    // -- sorting complete --
-    emitter.label(&done);
+    emitter.label(&format!("{}_done", label));
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// x86_64 Linux implementation of the sort-int runtime helpers.
-/// Uses System V AMD64 ABI: array pointer in `rdi`, indexed-array length in `[rdi]`.
-/// Delegates to the shared insertion logic in `emit_sort_int` for the actual sort algorithm.
-/// Mirrors the ARM64 behavior but emits x86_64 instructions with the break-jump optimization.
+/// Emits an inline AArch64 sift-down of `x5` (root) within the heap `x2[0..x4)`.
+/// Clobbers `x5`–`x9`.
+fn emit_sift_down_aarch64(emitter: &mut Emitter, prefix: &str, reverse: bool) {
+    // Ascending sorts keep a max-heap, descending sorts a min-heap.
+    let (pick_right_if, stop_if) = if reverse { ("lt", "ge") } else { ("gt", "le") };
+    emitter.instruction("ldr x7, [x2, x5, lsl #3]");                            // v = value being sifted down
+    emitter.label(&format!("{}_loop", prefix));
+    emitter.instruction("lsl x6, x5, #1");                                      // 2 * root
+    emitter.instruction("add x6, x6, #1");                                      // child = 2 * root + 1
+    emitter.instruction("cmp x6, x4");                                          // is the child inside the heap?
+    emitter.instruction(&format!("b.hs {}_end", prefix));                       // no — root is a leaf
+    emitter.instruction("ldr x8, [x2, x6, lsl #3]");                            // x8 = left child value
+    emitter.instruction("add x9, x6, #1");                                      // right child index
+    emitter.instruction("cmp x9, x4");                                          // is there a right child?
+    emitter.instruction(&format!("b.hs {}_one", prefix));                       // no — compare against the left child only
+    emitter.instruction("ldr x9, [x2, x9, lsl #3]");                            // x9 = right child value
+    emitter.instruction("cmp x9, x8");                                          // does the right child dominate the left one?
+    emitter.instruction(&format!("b.{} {}_take_right", pick_right_if, prefix)); // yes — follow the right child
+    emitter.instruction(&format!("b {}_one", prefix));                          // no — keep the left child
+    emitter.label(&format!("{}_take_right", prefix));
+    emitter.instruction("add x6, x6, #1");                                      // child = right child
+    emitter.instruction("mov x8, x9");                                          // child value = right child value
+    emitter.label(&format!("{}_one", prefix));
+    emitter.instruction("cmp x8, x7");                                          // does the child dominate the sifted value?
+    emitter.instruction(&format!("b.{} {}_end", stop_if, prefix));              // no — the sifted value belongs at root
+    emitter.instruction("str x8, [x2, x5, lsl #3]");                            // move the child up into the hole
+    emitter.instruction("mov x5, x6");                                          // continue from the child's slot
+    emitter.instruction(&format!("b {}_loop", prefix));                         // keep sifting down
+    emitter.label(&format!("{}_end", prefix));
+    emitter.instruction("str x7, [x2, x5, lsl #3]");                            // drop the sifted value into the hole
+}
+
+/// x86_64 Linux implementation of the sort-int runtime helpers (in-place heapsort).
+/// Uses System V AMD64 ABI: array pointer in `rdi`, indexed-array length in `[rdi]`;
+/// clobbers only caller-saved registers.
 fn emit_sort_int_linux_x86_64(emitter: &mut Emitter, reverse: bool) {
     let label = if reverse { "__rt_rsort_int" } else { "__rt_sort_int" };
-    let break_jump = if reverse {
-        "__rt_sort_int_break_desc"
-    } else {
-        "__rt_sort_int_break_asc"
-    };
-
     emitter.blank();
-    emitter.comment(&format!("--- runtime: {} ---", label));
+    emitter.comment(&format!("--- runtime: {} (heapsort) ---", label));
     emitter.label_global(label);
 
-    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // load the indexed-array logical length before starting the insertion-sort outer loop
-    emitter.instruction("lea r9, [rdi + 24]");                                  // compute the indexed-array payload base pointer once so the loop body can index slots directly
-    emitter.instruction("mov r10, 1");                                          // initialize the insertion-sort outer-loop cursor to the second element
+    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // r8 = indexed-array length
+    emitter.instruction("lea r9, [rdi + 24]");                                  // r9 = payload base
+    emitter.instruction("cmp r8, 2");                                           // fewer than two elements?
+    emitter.instruction(&format!("jb {}_done", label));                         // already sorted
 
-    let outer = format!("{}_outer", label);
-    let inner = format!("{}_inner", label);
-    let insert = format!("{}_insert", label);
-    let done = format!("{}_done", label);
+    // -- phase 1: heapify, sifting down every internal node from n/2 - 1 to 0 --
+    emitter.instruction("mov r10, r8");                                         // copy the length
+    emitter.instruction("shr r10, 1");                                          // r10 = n / 2 (one past the last internal node)
+    emitter.instruction("mov rsi, r8");                                         // rsi = heap limit = n
+    emitter.label(&format!("{}_build", label));
+    emitter.instruction("test r10, r10");                                       // every internal node sifted?
+    emitter.instruction(&format!("jz {}_extract_start", label));                // yes — start extracting
+    emitter.instruction("sub r10, 1");                                          // next internal node
+    emitter.instruction("mov rcx, r10");                                        // root = node
+    emit_sift_down_x86_64(emitter, &format!("{}_bsift", label), reverse);
+    emitter.instruction(&format!("jmp {}_build", label));                       // continue heapifying
 
-    emitter.label(&outer);
-    emitter.instruction("cmp r10, r8");                                         // compare the insertion-sort outer-loop cursor against the indexed-array logical length
-    emitter.instruction(&format!("jae {}", done));                              // stop once every indexed-array element has been inserted into the sorted prefix
-    emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");                   // load the current indexed-array element as the insertion-sort key
-    emitter.instruction("mov rcx, r10");                                        // copy the outer-loop cursor before stepping left through the sorted prefix
-    emitter.instruction("sub rcx, 1");                                          // initialize the insertion-sort inner-loop cursor to the element immediately left of the key
+    // -- phase 2: move the root behind the shrinking heap, then restore the heap --
+    emitter.label(&format!("{}_extract_start", label));
+    emitter.instruction("lea r10, [r8 - 1]");                                   // r10 = last heap slot
+    emitter.label(&format!("{}_extract", label));
+    emitter.instruction("test r10, r10");                                       // one element left?
+    emitter.instruction(&format!("jz {}_done", label));                         // yes — sorted
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // rax = heap root (extreme element)
+    emitter.instruction("mov rdx, QWORD PTR [r9 + r10 * 8]");                   // rdx = last heap element
+    emitter.instruction("mov QWORD PTR [r9], rdx");                             // move the last element to the root
+    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // park the extreme element in its final slot
+    emitter.instruction("mov rsi, r10");                                        // heap limit = slots still in the heap
+    emitter.instruction("xor ecx, ecx");                                        // root = 0
+    emit_sift_down_x86_64(emitter, &format!("{}_esift", label), reverse);
+    emitter.instruction("sub r10, 1");                                          // shrink the heap
+    emitter.instruction(&format!("jmp {}_extract", label));                     // extract the next extreme element
 
-    emitter.label(&inner);
-    emitter.instruction("cmp rcx, -1");                                         // has the insertion-sort inner-loop cursor stepped past the start of the indexed array?
-    emitter.instruction(&format!("je {}", insert));                             // insert the key at slot zero once the inner loop runs off the left edge
-    emitter.instruction("mov rdx, QWORD PTR [r9 + rcx * 8]");                   // load the current sorted-prefix element that is being compared against the key
-    emitter.instruction("cmp rdx, r11");                                        // compare the current sorted-prefix element against the insertion-sort key
-    if reverse {
-        emitter.instruction(&format!("jge {}", break_jump));                    // stop shifting once the descending-order invariant is satisfied for the current slot
-    } else {
-        emitter.instruction(&format!("jle {}", break_jump));                    // stop shifting once the ascending-order invariant is satisfied for the current slot
-    }
-    emitter.instruction("mov QWORD PTR [r9 + rcx * 8 + 8], rdx");               // shift the current sorted-prefix element one slot to the right to make room for the key
-    emitter.instruction("sub rcx, 1");                                          // move the insertion-sort inner-loop cursor one slot further left through the sorted prefix
-    emitter.instruction(&format!("jmp {}", inner));                             // continue scanning left until the correct insertion point is found
+    emitter.label(&format!("{}_done", label));
+    emitter.instruction("ret");                                                 // return after sorting the payload in place
+}
 
-    emitter.label(break_jump);
-    emitter.instruction(&format!("jmp {}", insert));                            // jump into the shared insertion path once the sorted-prefix comparison says the key belongs here
-
-    emitter.label(&insert);
-    emitter.instruction("mov QWORD PTR [r9 + rcx * 8 + 8], r11");               // store the insertion-sort key into the slot immediately to the right of the final inner-loop cursor
-    emitter.instruction("add r10, 1");                                          // advance the insertion-sort outer-loop cursor to the next indexed-array element
-    emitter.instruction(&format!("jmp {}", outer));                             // continue insertion-sorting the remaining indexed-array suffix
-
-    emitter.label(&done);
-    emitter.instruction("ret");                                                 // return after sorting the indexed-array payload in place
+/// Emits an inline x86_64 sift-down of `rcx` (root) within the heap `r9[0..rsi)`.
+/// Clobbers `rcx`, `rdx`, `rax`, `rdi`, `r11`.
+fn emit_sift_down_x86_64(emitter: &mut Emitter, prefix: &str, reverse: bool) {
+    // Ascending sorts keep a max-heap, descending sorts a min-heap.
+    let (keep_left_if, stop_if) = if reverse { ("jge", "jge") } else { ("jle", "jle") };
+    emitter.instruction("mov r11, QWORD PTR [r9 + rcx * 8]");                   // v = value being sifted down
+    emitter.label(&format!("{}_loop", prefix));
+    emitter.instruction("lea rdx, [rcx + rcx + 1]");                            // child = 2 * root + 1
+    emitter.instruction("cmp rdx, rsi");                                        // is the child inside the heap?
+    emitter.instruction(&format!("jae {}_end", prefix));                        // no — root is a leaf
+    emitter.instruction("mov rax, QWORD PTR [r9 + rdx * 8]");                   // rax = left child value
+    emitter.instruction("lea rdi, [rdx + 1]");                                  // right child index
+    emitter.instruction("cmp rdi, rsi");                                        // is there a right child?
+    emitter.instruction(&format!("jae {}_one", prefix));                        // no — compare against the left child only
+    emitter.instruction("mov rdi, QWORD PTR [r9 + rdx * 8 + 8]");               // rdi = right child value
+    emitter.instruction("cmp rdi, rax");                                        // does the right child dominate the left one?
+    emitter.instruction(&format!("{} {}_one", keep_left_if, prefix));           // no — keep the left child
+    emitter.instruction("add rdx, 1");                                          // child = right child
+    emitter.instruction("mov rax, rdi");                                        // child value = right child value
+    emitter.label(&format!("{}_one", prefix));
+    emitter.instruction("cmp rax, r11");                                        // does the child dominate the sifted value?
+    emitter.instruction(&format!("{} {}_end", stop_if, prefix));                // no — the sifted value belongs at root
+    emitter.instruction("mov QWORD PTR [r9 + rcx * 8], rax");                   // move the child up into the hole
+    emitter.instruction("mov rcx, rdx");                                        // continue from the child's slot
+    emitter.instruction(&format!("jmp {}_loop", prefix));                       // keep sifting down
+    emitter.label(&format!("{}_end", prefix));
+    emitter.instruction("mov QWORD PTR [r9 + rcx * 8], r11");                   // drop the sifted value into the hole
 }

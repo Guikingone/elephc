@@ -42,3 +42,5 @@ mod gradual_int_and_iterable_count;
 #[path = "regressions/manticore_bench_gaps.rs"]
 mod manticore_bench_gaps;
 mod review_bugs;
+mod ssa_registers;
+mod runtime_fast_paths;
