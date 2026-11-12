@@ -368,3 +368,24 @@ fn test_concat_reset_kept_next_to_scratch_writing_builtins() {
     assert!(body.contains("concat_reset"), "loop concat_reset was removed:\n{body}");
     assert_eq!(compile_and_run("<?php function f() { $n = 0; $s = 'hello world'; for ($i = 0; $i < 3; $i++) { $n += strlen(strtoupper($s)); } return $n; } echo f();"), "33");
 }
+
+/// `fsockopen()` accepts a port held in a `mixed`-stored local (a loop counter copied out of a
+/// `for` loop whose `++` may overflow) by coercing it to `int`, like PHP.
+#[test]
+fn test_fsockopen_port_from_mixed_local() {
+    let out = compile_and_run(r#"<?php
+$port = 0;
+$server = false;
+for ($p = 49880; $p < 49960; $p++) {
+    $s = @stream_socket_server('tcp://127.0.0.1:' . $p);
+    if ($s !== false) { $server = $s; $port = $p; break; }
+}
+if ($server === false) { echo "no port\n"; exit(1); }
+$client = fsockopen('127.0.0.1', $port);
+$conn = stream_socket_accept($server, 5);
+fwrite($client, "hello\n");
+echo trim(fgets($conn)), "\n";
+fclose($client); fclose($conn); fclose($server);
+"#);
+    assert_eq!(out, "hello\n");
+}

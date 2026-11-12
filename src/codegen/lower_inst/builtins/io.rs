@@ -3653,7 +3653,7 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => {
             load_string_to_result(ctx, host, "fsockopen host")?;
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            require_int(ctx.load_value_to_result(port)?.codegen_repr(), "fsockopen port")?;
+            load_int_param_to_result(ctx, port, "fsockopen port")?;
             abi::emit_push_reg(ctx.emitter, "x0");
             if inst.operands.len() >= 5 {
                 let timeout = expect_operand(inst, 4)?;
@@ -3668,7 +3668,7 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::X86_64 => {
             load_string_to_result(ctx, host, "fsockopen host")?;
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            require_int(ctx.load_value_to_result(port)?.codegen_repr(), "fsockopen port")?;
+            load_int_param_to_result(ctx, port, "fsockopen port")?;
             abi::emit_push_reg(ctx.emitter, "rax");
             if inst.operands.len() >= 5 {
                 let timeout = expect_operand(inst, 4)?;
@@ -9198,6 +9198,21 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Verifies that a path builtin scalar argument has the supported integer representation.
+/// Loads an `int` parameter into the integer result register, converting a borrowed `mixed`
+/// value (e.g. a local widened because its `++` may overflow) with PHP's integer coercion.
+fn load_int_param_to_result(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Result<()> {
+    match ctx.load_value_to_result(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            abi::emit_reg_move(ctx.emitter, arg_reg, abi::int_result_reg(ctx.emitter));
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            Ok(())
+        }
+        other => require_int(other, name),
+    }
+}
+
 fn require_int(ty: PhpType, name: &str) -> Result<()> {
     if ty == PhpType::Int {
         return Ok(());
