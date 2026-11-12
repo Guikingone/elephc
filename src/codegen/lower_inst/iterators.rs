@@ -280,9 +280,11 @@ pub(super) fn lower_iter_current_value(
             retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
             box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
         }
-        IteratorSourceKind::Hash => match ctx.emitter.target.arch {
-            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
-            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+        IteratorSourceKind::Hash => match (ctx.emitter.target.arch, scalar_hash_value_tag(&result_ty)) {
+            (Arch::AArch64, Some(tag)) => load_current_hash_value_scalar_aarch64(ctx, offset, &result_ty, tag),
+            (Arch::X86_64, Some(tag)) => load_current_hash_value_scalar_x86_64(ctx, offset, &result_ty, tag),
+            (Arch::AArch64, None) => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+            (Arch::X86_64, None) => load_current_hash_value_as_mixed_x86_64(ctx, offset),
         },
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
             lower_dynamic_iter_current_value(ctx, inst, offset)?;
@@ -1579,6 +1581,113 @@ fn load_current_hash_value_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset
     abi::load_at_offset(ctx.emitter, "r8", offset - ITER_VALUE_HI_OFFSET_DELTA);
     deref_current_hash_value_if_reference_x86_64(ctx);
     box_hash_payload_as_mixed_x86_64(ctx);
+}
+
+/// Returns the runtime value tag of an unboxed scalar foreach value read from a hash.
+fn scalar_hash_value_tag(result_ty: &PhpType) -> Option<i64> {
+    match result_ty {
+        PhpType::Int => Some(0),
+        PhpType::Float => Some(2),
+        PhpType::Bool => Some(3),
+        _ => None,
+    }
+}
+
+/// Returns the runtime helper converting a boxed Mixed cell to an unboxed scalar.
+fn mixed_cast_helper(result_ty: &PhpType) -> &'static str {
+    match result_ty {
+        PhpType::Float => "__rt_mixed_cast_float",
+        PhpType::Bool => "__rt_mixed_cast_bool",
+        _ => "__rt_mixed_cast_int",
+    }
+}
+
+/// Loads the current hash value (x86_64) as an unboxed `int`/`float`/`bool` for a hash whose
+/// values are typed scalars: the entry payload is used directly when its runtime tag matches,
+/// and any other entry (e.g. a reference cell's different inner type) is boxed and converted.
+fn load_current_hash_value_scalar_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    result_ty: &PhpType,
+    tag: i64,
+) {
+    let slow = ctx.next_label("iter_hash_scalar_slow");
+    let done = ctx.next_label("iter_hash_scalar_done");
+    abi::load_at_offset(ctx.emitter, "r9", offset - ITER_VALUE_TAG_OFFSET_DELTA);
+    abi::load_at_offset(ctx.emitter, "rcx", offset - ITER_VALUE_LO_OFFSET_DELTA);
+    abi::load_at_offset(ctx.emitter, "r8", offset - ITER_VALUE_HI_OFFSET_DELTA);
+    deref_current_hash_value_if_reference_x86_64(ctx);
+    ctx.emitter.instruction(&format!("cmp r9, {}", tag));                       // does the entry hold the expected raw scalar?
+    ctx.emitter.instruction(&format!("jne {}", slow));                          // no — box and convert it
+    if *result_ty == PhpType::Float {
+        ctx.emitter.instruction("movq xmm0, rcx");                              // the raw float payload is the value
+    } else {
+        ctx.emitter.instruction("mov rax, rcx");                                // the raw int/bool payload is the value
+    }
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the conversion path
+    ctx.emitter.label(&slow);
+    box_hash_payload_as_mixed_x86_64(ctx);
+    ctx.emitter.instruction("sub rsp, 16");                                     // keep the owned box and the converted value
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the owned box for its release
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the box to the conversion helper
+    abi::emit_call_label(ctx.emitter, mixed_cast_helper(result_ty));
+    if *result_ty == PhpType::Float {
+        ctx.emitter.instruction("movsd QWORD PTR [rsp + 8], xmm0");             // save the converted float
+    } else {
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // save the converted scalar
+    }
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                        // reload the owned box
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    if *result_ty == PhpType::Float {
+        ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp + 8]");             // restore the converted float
+    } else {
+        ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                // restore the converted scalar
+    }
+    ctx.emitter.instruction("add rsp, 16");                                     // release the temporary slots
+    ctx.emitter.label(&done);
+}
+
+/// Loads the current hash value (AArch64) as an unboxed `int`/`float`/`bool`; see the x86_64
+/// variant.
+fn load_current_hash_value_scalar_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    result_ty: &PhpType,
+    tag: i64,
+) {
+    let slow = ctx.next_label("iter_hash_scalar_slow");
+    let done = ctx.next_label("iter_hash_scalar_done");
+    abi::load_at_offset(ctx.emitter, "x5", offset - ITER_VALUE_TAG_OFFSET_DELTA);
+    abi::load_at_offset(ctx.emitter, "x3", offset - ITER_VALUE_LO_OFFSET_DELTA);
+    abi::load_at_offset(ctx.emitter, "x4", offset - ITER_VALUE_HI_OFFSET_DELTA);
+    deref_current_hash_value_if_reference_aarch64(ctx);
+    ctx.emitter.instruction(&format!("cmp x5, #{}", tag));                      // does the entry hold the expected raw scalar?
+    ctx.emitter.instruction(&format!("b.ne {}", slow));                         // no — box and convert it
+    if *result_ty == PhpType::Float {
+        ctx.emitter.instruction("fmov d0, x3");                                 // the raw float payload is the value
+    } else {
+        ctx.emitter.instruction("mov x0, x3");                                  // the raw int/bool payload is the value
+    }
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the conversion path
+    ctx.emitter.label(&slow);
+    box_hash_payload_as_mixed_aarch64(ctx);
+    ctx.emitter.instruction("sub sp, sp, #16");                                 // keep the owned box and the converted value
+    ctx.emitter.instruction("str x0, [sp]");                                    // save the owned box for its release
+    abi::emit_call_label(ctx.emitter, mixed_cast_helper(result_ty));
+    if *result_ty == PhpType::Float {
+        ctx.emitter.instruction("str d0, [sp, #8]");                            // save the converted float
+    } else {
+        ctx.emitter.instruction("str x0, [sp, #8]");                            // save the converted scalar
+    }
+    ctx.emitter.instruction("ldr x0, [sp]");                                    // reload the owned box
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    if *result_ty == PhpType::Float {
+        ctx.emitter.instruction("ldr d0, [sp, #8]");                            // restore the converted float
+    } else {
+        ctx.emitter.instruction("ldr x0, [sp, #8]");                            // restore the converted scalar
+    }
+    ctx.emitter.instruction("add sp, sp, #16");                                 // release the temporary slots
+    ctx.emitter.label(&done);
 }
 
 /// Derefs a tag-11 foreach hash value (AArch64) through `__rt_deref_if_reference`.

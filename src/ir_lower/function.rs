@@ -152,6 +152,55 @@ fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<St
     names
 }
 
+/// Collects every local name `body` (including nested closures) may read by name.
+///
+/// Variable expressions, closure captures, closure calls through a local, and `global`
+/// declarations count as reads. Returns `None` when the body can observe its locals
+/// dynamically — `compact()`, `extract()`, `get_defined_vars()`, `eval`, `parse_str()`, or (at
+/// top level, where the walk covers the whole program) `$GLOBALS` — so callers must then assume
+/// every local is read.
+fn collect_body_variable_reads(
+    body: &[Stmt],
+    in_main: bool,
+) -> Option<std::collections::HashSet<String>> {
+    use crate::parser::ast::{ExprKind, StmtKind};
+    let mut reads = std::collections::HashSet::new();
+    let mut dynamic = false;
+    crate::int_range::walk_program(body, &mut |node| match node {
+        crate::int_range::Node::Expr(expr) => match &expr.kind {
+            ExprKind::Variable(name) => {
+                if in_main && name == "GLOBALS" {
+                    dynamic = true;
+                }
+                reads.insert(name.clone());
+            }
+            ExprKind::Closure { captures, capture_refs, .. } => {
+                reads.extend(captures.iter().cloned());
+                reads.extend(capture_refs.iter().cloned());
+            }
+            ExprKind::ClosureCall { var, .. } => {
+                reads.insert(var.clone());
+            }
+            ExprKind::FunctionCall { name, .. } => {
+                let key = crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'));
+                if matches!(
+                    key.as_str(),
+                    "compact" | "extract" | "get_defined_vars" | "eval" | "parse_str"
+                ) {
+                    dynamic = true;
+                }
+            }
+            _ => {}
+        },
+        crate::int_range::Node::Stmt(stmt) => {
+            if let StmtKind::Global { vars } = &stmt.kind {
+                reads.extend(vars.iter().cloned());
+            }
+        }
+    });
+    (!dynamic).then_some(reads)
+}
+
 /// Recursively scans statement bodies for `global` declarations.
 fn collect_global_var_names_in_body(
     statements: &[Stmt],
@@ -1474,6 +1523,16 @@ fn lower_body_into_function(
     );
     ctx.by_ref_return = function_by_ref_return;
     ctx.class_from_bind_scope = class_from_bind_scope;
+    ctx.body_variable_reads = if eval_scope_reads.is_some() {
+        None
+    } else {
+        collect_body_variable_reads(body, in_main).map(|mut reads| {
+            if in_main {
+                reads.extend(ctx.all_global_var_names.iter().cloned());
+            }
+            reads
+        })
+    };
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }

@@ -54,8 +54,10 @@ pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 0)?;
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+        PhpType::AssocArray { value, .. }
+            if matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Int | PhpType::Bool)
     ) {
+        // `__rt_hash_sum_mixed` also sums raw int/bool entries (boxing each temporarily).
         ctx.load_value_to_result(array)?;
         if ctx.emitter.target.arch == Arch::X86_64 {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the associative-array pointer as the runtime helper argument

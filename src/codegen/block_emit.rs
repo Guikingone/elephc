@@ -1172,6 +1172,76 @@ fn collect_rematerialized_consts(ctx: &mut FunctionContext<'_>) {
     let remat = crate::ir_passes::rematerialized_consts(ctx.function);
     ctx.const_ints = remat.immediates;
     ctx.skipped_consts = remat.skipped;
+    collect_fused_checked_casts(ctx);
+}
+
+/// Finds checked int add/sub/mul instructions whose boxed result is only cast back to `int`
+/// by the next instruction and then released, so the three lower as one native operation
+/// with an overflow fallback (the cast and the release are then skipped).
+fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
+    let function = ctx.function;
+    let mut use_counts: std::collections::HashMap<ValueId, usize> = std::collections::HashMap::new();
+    for inst in &function.instructions {
+        for operand in &inst.operands {
+            *use_counts.entry(*operand).or_insert(0) += 1;
+        }
+    }
+    for block in &function.blocks {
+        if let Some(term) = &block.terminator {
+            for value in crate::ir_passes::terminator_uses(term) {
+                *use_counts.entry(value).or_insert(0) += 2;
+            }
+        }
+    }
+    for block in &function.blocks {
+        let order: Vec<InstId> = block
+            .instructions
+            .iter()
+            .copied()
+            .filter(|id| {
+                !ctx.skipped_consts.contains(id)
+                    && function.instruction(*id).is_some_and(|inst| inst.op != Op::Nop)
+            })
+            .collect();
+        for (position, checked_id) in order.iter().enumerate() {
+            let Some(checked) = function.instruction(*checked_id) else {
+                continue;
+            };
+            if !matches!(checked.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul) {
+                continue;
+            }
+            let Some(result) = checked.result else {
+                continue;
+            };
+            if use_counts.get(&result).copied() != Some(2) {
+                continue;
+            }
+            let Some(cast_id) = order.get(position + 1).copied() else {
+                continue;
+            };
+            let Some(cast) = function.instruction(cast_id) else {
+                continue;
+            };
+            let casts_to_int = cast.op == Op::Cast
+                && cast.operands.as_slice() == [result]
+                && matches!(cast.immediate, Some(crate::ir::Immediate::CastTarget(crate::ir::IrType::I64)))
+                && cast.result_php_type.codegen_repr() == PhpType::Int;
+            if !casts_to_int {
+                continue;
+            }
+            let release = order[position + 2..].iter().copied().find(|id| {
+                function
+                    .instruction(*id)
+                    .is_some_and(|inst| inst.op == Op::Release && inst.operands.as_slice() == [result])
+            });
+            let Some(release_id) = release else {
+                continue;
+            };
+            ctx.fused_checked_casts.insert(*checked_id, cast_id);
+            ctx.skipped_consts.insert(cast_id);
+            ctx.skipped_consts.insert(release_id);
+        }
+    }
 }
 
 /// Counts operand and terminator uses of every value in `function`.
@@ -1234,7 +1304,11 @@ fn emit_block(
             }
             ctx.allocation.suspend(save.value);
         }
-        lower_inst::lower_instruction(ctx, *inst_id)?;
+        if let Some(cast_id) = ctx.fused_checked_casts.get(inst_id).copied() {
+            lower_inst::lower_fused_checked_cast(ctx, *inst_id, cast_id)?;
+        } else {
+            lower_inst::lower_instruction(ctx, *inst_id)?;
+        }
         for save in &saves {
             ctx.allocation.resume(save.value, save.reg);
             if save.reload_after {

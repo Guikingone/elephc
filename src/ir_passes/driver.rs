@@ -31,6 +31,7 @@ use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
 use super::identity_arith::IdentityArith;
+use super::borrow_reads::BorrowReads;
 use super::licm::Licm;
 use super::mem2reg::Mem2Reg;
 use super::peephole::Peephole;
@@ -91,6 +92,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(DeadStore),
         Box::new(BranchSimplify),
         Box::new(ConcatResetElim),
+        Box::new(BorrowReads),
     ]
 }
 

@@ -256,8 +256,8 @@ On x86_64 the 8-byte kind word also carries an ownership marker: the ASCII bytes
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Pop a segregated small bin** — requests up to 1024 bytes are rounded up to their size class (`8, 16, ..., 64` in 8-byte steps, then `128, 256, 512, 1024`; the class sizes live in the `_heap_bin_sizes` table) and pop the head of that class's `_heap_small_bins` chain. Every cached block in a bin is at least the class size, so the head always fits and reuse is O(1). An empty class carves the rounded block from the bump tail; only when the tail is full are larger classes, then the general free list, searched.
-2. **Walk the general free list** — larger requests (and small ones once the tail is full) check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it; a remainder of up to 1024 bytes goes to the bins (in the largest class it can serve), a larger one stays on the free list. The allocated block's refcount is reset to 1.
+1. **Pop a segregated small bin** — requests up to 4096 bytes are rounded up to their size class (`8, 16, ..., 64` in 8-byte steps, then `128, 256, 512, 1024, 1088, 1536, 2112, 3072, 4096` — 1088 and 2112 fit the 16- and 32-slot hash tables exactly; the class sizes live in `_heap_bin_sizes`, and above 64 bytes the class index is read from the 64-byte-granular `_heap_bin_ceil_index` / `_heap_bin_floor_index` tables) and pop the head of that class's `_heap_small_bins` chain. Every cached block in a bin is at least the class size, so the head always fits and reuse is O(1). An empty class carves the rounded block from the bump tail; only when the tail is full are larger classes, then the general free list, searched.
+2. **Walk the general free list** — larger requests (and small ones once the tail is full) check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it; a remainder of up to 4096 bytes goes to the bins (in the largest class it can serve), a larger one stays on the free list. The allocated block's refcount is reset to 1.
 3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
 4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
@@ -269,7 +269,7 @@ The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately (a small tail block skips the free-list tail trim, so freeing a just-allocated temporary is O(1))
-3. Otherwise, payloads up to 1024 bytes are pushed onto the bin of the largest size class they can serve, so later allocations of that class reuse them without scanning the larger free list
+3. Otherwise, payloads up to 4096 bytes are pushed onto the bin of the largest size class they can serve, so later allocations of that class reuse them without scanning the larger free list
 4. Larger non-tail blocks are inserted into the general free list in address order and merged with adjacent free neighbors; only when the merged block reaches the bump tail is the free list rescanned to trim the free tail chain back into `_heap_off` (no other free block can touch the tail, so the common case is O(insertion))
 5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 

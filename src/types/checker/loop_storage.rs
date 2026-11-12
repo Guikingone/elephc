@@ -27,6 +27,8 @@ enum AssignedValue<'a> {
     Known(PhpType),
     /// A binding without a statically available RHS, such as a `foreach` value.
     Opaque,
+    /// `++`/`--` on the local; `proven` when the integer-range analysis shows it cannot overflow.
+    Step { proven: bool },
 }
 
 /// One local array write, including an optional explicit key expression.
@@ -67,6 +69,12 @@ pub fn loop_carried_storage_types(
 
     let mut fixed = entry.clone();
     let mut whole_mixed_sources = HashSet::new();
+    // First reach a fixed point while deferring assignments whose RHS reads an array that is
+    // still empty (`array<never>`) in the evolving environment: its element reads would infer
+    // `mixed` and, joins being monotone, poison the target for good even though a later write
+    // in the same body gives the array a concrete element type. Then repeat with every piece of
+    // evidence so the result stays a sound over-approximation.
+    let mut defer_empty_array_reads = true;
     loop {
         let previous = fixed.clone();
         apply_assignment_evidence(
@@ -74,6 +82,7 @@ pub fn loop_carried_storage_types(
             &mut fixed,
             infer_value,
             &mut whole_mixed_sources,
+            defer_empty_array_reads,
         );
         apply_array_write_evidence(&writes, &mut fixed, infer_value);
         // `unset($a[$k])` turns an indexed array into a hash (keys are no longer dense), so a
@@ -88,6 +97,10 @@ pub fn loop_carried_storage_types(
             }
         }
         if fixed == previous {
+            if defer_empty_array_reads {
+                defer_empty_array_reads = false;
+                continue;
+            }
             break;
         }
     }
@@ -143,14 +156,29 @@ fn apply_assignment_evidence(
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     whole_mixed_sources: &mut HashSet<String>,
+    defer_empty_array_reads: bool,
 ) {
     for (name, source) in assignments {
+        if defer_empty_array_reads {
+            if let AssignedValue::Expr(expr) = source {
+                if reads_empty_array(expr, env) {
+                    continue;
+                }
+            }
+        }
         let incoming = match source {
             AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value)
                 .or_else(|| precise_scalar_expr_type(expr))
                 .unwrap_or(PhpType::Mixed),
             AssignedValue::Known(ty) => ty.clone(),
             AssignedValue::Opaque => PhpType::Mixed,
+            // A proven int step stays int and a float step stays float; anything else (an int
+            // that may overflow to float, a string increment, null) has no fixed representation.
+            AssignedValue::Step { proven } => match env.get(*name).map(PhpType::codegen_repr) {
+                Some(PhpType::Int) if *proven => PhpType::Int,
+                Some(PhpType::Float) => PhpType::Float,
+                _ => PhpType::Mixed,
+            },
         };
         if env.get(*name).is_some_and(|ty| is_array_like(ty) || is_numeric_scalar(ty))
             && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
@@ -165,6 +193,26 @@ fn apply_assignment_evidence(
             .unwrap_or(incoming);
         env.insert((*name).to_string(), merged);
     }
+}
+
+/// Returns whether `expr` reads a local that is an empty array (`array<never>` element or value
+/// type) in `env`.
+fn reads_empty_array(expr: &Expr, env: &TypeEnv) -> bool {
+    let mut found = false;
+    crate::int_range::walk_expr_shallow(expr, &mut |node| {
+        if let crate::int_range::Node::Expr(inner) = node {
+            if let ExprKind::Variable(name) = &inner.kind {
+                found |= match env.get(name) {
+                    Some(PhpType::Array(element)) => matches!(element.as_ref(), PhpType::Never),
+                    Some(PhpType::AssocArray { value, .. }) => {
+                        matches!(value.as_ref(), PhpType::Never)
+                    }
+                    _ => false,
+                };
+            }
+        }
+    });
+    found
 }
 
 /// Applies indexed-array growth and element-write evidence to one fixed-point iteration.
@@ -715,7 +763,10 @@ fn collect_value_assignments_from_expr<'a>(
         ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
-        | ExprKind::PostDecrement(name) => out.push((name, AssignedValue::Opaque)),
+        | ExprKind::PostDecrement(name) => out.push((
+            name,
+            AssignedValue::Step { proven: crate::int_range::is_proven_step(expr) },
+        )),
         _ => visit_child_expressions(expr, &mut |child| {
             collect_value_assignments_from_expr(child, out)
         }),

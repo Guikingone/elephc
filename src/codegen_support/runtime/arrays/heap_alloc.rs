@@ -11,70 +11,111 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Number of segregated free-list bins: eight 8-byte-step classes (8..=64 bytes) followed by
-/// power-of-two classes 128, 256, 512 and 1024.
-pub(crate) const HEAP_BIN_COUNT: usize = 12;
+/// Number of segregated free-list bins: eight 8-byte-step classes (8..=64 bytes), then
+/// 128, 256, 512 and 1024, then 1088 / 2112 (the 16- and 32-slot hash tables), 1536, 3072
+/// and 4096.
+pub(crate) const HEAP_BIN_COUNT: usize = 17;
 /// Largest payload cached in a segregated bin (blocks above it use the ordered free list).
-pub(crate) const HEAP_BIN_MAX_PAYLOAD: usize = 1024;
+pub(crate) const HEAP_BIN_MAX_PAYLOAD: usize = 4096;
 /// Byte offset of the last bin head inside `_heap_small_bins`.
 pub(crate) const HEAP_BIN_LAST_OFFSET: usize = (HEAP_BIN_COUNT - 1) * 8;
 
 /// Payload size of every bin class, plus one exclusive upper bound past the last class.
 ///
-/// A small request is rounded up to its class size, and a freed block is cached in the
+/// A binned request is rounded up to its class size, and a freed block is cached in the
 /// largest class it can serve, so the head of a bin always satisfies any request mapped to
-/// that bin. Emitted as the `_heap_bin_sizes` table.
+/// that bin. Every class above 64 bytes is a multiple of 64, which lets the class of a larger
+/// size be read from a 64-byte-granular lookup table. Emitted as the `_heap_bin_sizes` table.
 pub(crate) const HEAP_BIN_CLASS_SIZES: [usize; HEAP_BIN_COUNT + 1] =
-    [8, 16, 24, 32, 40, 48, 56, 64, 128, 256, 512, 1024, 1025];
+    [8, 16, 24, 32, 40, 48, 56, 64, 128, 256, 512, 1024, 1088, 1536, 2112, 3072, 4096, 4097];
+
+/// Entries of the 64-byte-granular class lookup tables (`size >> 6` reaches 64 at 4096).
+pub(crate) const HEAP_BIN_LOOKUP_LEN: usize = HEAP_BIN_MAX_PAYLOAD / 64 + 2;
+
+/// `_heap_bin_ceil_index[j]`: the smallest class holding `64 * (j + 1)` bytes, indexed by
+/// `(size - 1) >> 6` for a request above 64 bytes.
+pub(crate) fn heap_bin_ceil_index_table() -> Vec<u8> {
+    (0..HEAP_BIN_LOOKUP_LEN)
+        .map(|j| {
+            let need = (64 * (j + 1)).min(HEAP_BIN_MAX_PAYLOAD);
+            HEAP_BIN_CLASS_SIZES[..HEAP_BIN_COUNT]
+                .iter()
+                .position(|&size| size >= need)
+                .unwrap_or(HEAP_BIN_COUNT - 1) as u8
+        })
+        .collect()
+}
+
+/// `_heap_bin_floor_index[k]`: the largest class not above `64 * k` bytes, indexed by
+/// `size >> 6` for a freed block of at least 64 bytes.
+pub(crate) fn heap_bin_floor_index_table() -> Vec<u8> {
+    (0..HEAP_BIN_LOOKUP_LEN)
+        .map(|k| {
+            HEAP_BIN_CLASS_SIZES[..HEAP_BIN_COUNT]
+                .iter()
+                .rposition(|&size| size <= (64 * k).max(64))
+                .unwrap_or(0) as u8
+        })
+        .collect()
+}
+
+/// Returns the 32-bit register name aliasing an AArch64 `xN` register.
+fn aarch64_w(reg: &str) -> String {
+    reg.replacen('x', "w", 1)
+}
 
 /// Emits AArch64 code computing the bin-head byte offset of the smallest class that holds a
-/// request of `size` (8..=1024) bytes: `(size - 1) >> 3` up to 64, else `floor(log2(size - 1)) + 2`.
-pub(crate) fn emit_bin_offset_aarch64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str) {
+/// request of `size` (8..=4096) bytes: `(size - 1) >> 3` up to 64, else the ceiling table.
+pub(crate) fn emit_bin_offset_aarch64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str, scratch2: &str) {
     emitter.instruction(&format!("sub {}, {}, #1", out, size));                     // size - 1 so exact class sizes stay in their own class
-    emitter.instruction(&format!("clz {}, {}", scratch, out));                       // leading zeros of size - 1
+    emitter.instruction(&format!("lsr {}, {}, #6", scratch2, out));                  // 64-byte granule index of the request
+    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_ceil_index");
+    emitter.instruction(&format!("ldrb {}, [{}, {}]", aarch64_w(scratch), scratch, scratch2)); // class index for requests above 64 bytes
     emitter.instruction(&format!("lsr {}, {}, #3", out, out));                       // 8-byte-step class index for requests up to 64 bytes
-    emitter.instruction(&format!("sub {}, {}, #65", scratch, scratch));              // clz - 65
-    emitter.instruction(&format!("neg {}, {}", scratch, scratch));                   // floor(log2(size - 1)) + 2 = power-of-two class index
     emitter.instruction(&format!("cmp {}, #64", size));                              // is the request above the 8-byte-step classes?
-    emitter.instruction(&format!("csel {}, {}, {}, hi", out, scratch, out));         // pick the power-of-two class index for larger requests
+    emitter.instruction(&format!("csel {}, {}, {}, hi", out, scratch, out));         // pick the table class for larger requests
     emitter.instruction(&format!("lsl {}, {}, #3", out, out));                       // bin-head byte offset = index * 8
 }
 
 /// Emits x86_64 code computing the bin-head byte offset of the smallest class that holds a
-/// request of `size` (8..=1024) bytes: `(size - 1) >> 3` up to 64, else `floor(log2(size - 1)) + 2`.
-pub(crate) fn emit_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str) {
+/// request of `size` (8..=4096) bytes: `(size - 1) >> 3` up to 64, else the ceiling table.
+pub(crate) fn emit_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str, scratch2: &str) {
     emitter.instruction(&format!("lea {}, [{} - 1]", out, size));                  // size - 1 so exact class sizes stay in their own class
-    emitter.instruction(&format!("bsr {}, {}", scratch, out));                     // floor(log2(size - 1)); size - 1 >= 7 so the input is non-zero
-    emitter.instruction(&format!("add {}, 2", scratch));                           // power-of-two class index for requests above 64 bytes
+    emitter.instruction(&format!("mov {}, {}", scratch2, out));                    // copy size - 1
+    emitter.instruction(&format!("shr {}, 6", scratch2));                          // 64-byte granule index of the request
+    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_ceil_index");
+    emitter.instruction(&format!("movzx {}, BYTE PTR [{} + {}]", scratch, scratch, scratch2)); // class index for requests above 64 bytes
     emitter.instruction(&format!("shr {}, 3", out));                               // 8-byte-step class index for requests up to 64 bytes
     emitter.instruction(&format!("cmp {}, 64", size));                             // is the request above the 8-byte-step classes?
-    emitter.instruction(&format!("cmova {}, {}", out, scratch));                   // pick the power-of-two class index for larger requests
+    emitter.instruction(&format!("cmova {}, {}", out, scratch));                   // pick the table class for larger requests
     emitter.instruction(&format!("shl {}, 3", out));                               // bin-head byte offset = index * 8
 }
 
 /// Emits AArch64 code computing the bin-head byte offset of the largest class a freed block of
-/// `size` (8..=1024) bytes can serve: `(size >> 3) - 1` below 64, else `floor(log2(size)) + 1`.
-pub(crate) fn emit_free_bin_offset_aarch64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str) {
+/// `size` (8..=4096) bytes can serve: `(size >> 3) - 1` below 64, else the floor table.
+pub(crate) fn emit_free_bin_offset_aarch64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str, scratch2: &str) {
     emitter.instruction(&format!("lsr {}, {}, #3", out, size));                      // size / 8
     emitter.instruction(&format!("sub {}, {}, #1", out, out));                       // 8-byte-step class index the block fully covers
-    emitter.instruction(&format!("clz {}, {}", scratch, size));                      // leading zeros of the block size
-    emitter.instruction(&format!("sub {}, {}, #64", scratch, scratch));              // clz - 64
-    emitter.instruction(&format!("neg {}, {}", scratch, scratch));                   // floor(log2(size)) + 1 = power-of-two class index
-    emitter.instruction(&format!("cmp {}, #64", size));                              // does the block reach the power-of-two classes?
-    emitter.instruction(&format!("csel {}, {}, {}, hs", out, scratch, out));         // pick the power-of-two class index for blocks of 64+ bytes
+    emitter.instruction(&format!("lsr {}, {}, #6", scratch2, size));                 // 64-byte granule count of the block
+    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_floor_index");
+    emitter.instruction(&format!("ldrb {}, [{}, {}]", aarch64_w(scratch), scratch, scratch2)); // class index for blocks of 64+ bytes
+    emitter.instruction(&format!("cmp {}, #64", size));                              // does the block reach the table classes?
+    emitter.instruction(&format!("csel {}, {}, {}, hs", out, scratch, out));         // pick the table class for larger blocks
     emitter.instruction(&format!("lsl {}, {}, #3", out, out));                       // bin-head byte offset = index * 8
 }
 
 /// Emits x86_64 code computing the bin-head byte offset of the largest class a freed block of
-/// `size` (8..=1024) bytes can serve: `(size >> 3) - 1` below 64, else `floor(log2(size)) + 1`.
-pub(crate) fn emit_free_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str) {
+/// `size` (8..=4096) bytes can serve: `(size >> 3) - 1` below 64, else the floor table.
+pub(crate) fn emit_free_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str, scratch2: &str) {
     emitter.instruction(&format!("mov {}, {}", out, size));                        // copy the freed block size
     emitter.instruction(&format!("shr {}, 3", out));                               // size / 8
     emitter.instruction(&format!("sub {}, 1", out));                               // 8-byte-step class index the block fully covers
-    emitter.instruction(&format!("bsr {}, {}", scratch, size));                    // floor(log2(size))
-    emitter.instruction(&format!("add {}, 1", scratch));                           // power-of-two class index for blocks of 64+ bytes
-    emitter.instruction(&format!("cmp {}, 64", size));                             // does the block reach the power-of-two classes?
-    emitter.instruction(&format!("cmovae {}, {}", out, scratch));                  // pick the power-of-two class index for larger blocks
+    emitter.instruction(&format!("mov {}, {}", scratch2, size));                   // copy the freed block size
+    emitter.instruction(&format!("shr {}, 6", scratch2));                          // 64-byte granule count of the block
+    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_floor_index");
+    emitter.instruction(&format!("movzx {}, BYTE PTR [{} + {}]", scratch, scratch, scratch2)); // class index for blocks of 64+ bytes
+    emitter.instruction(&format!("cmp {}, 64", size));                             // does the block reach the table classes?
+    emitter.instruction(&format!("cmovae {}, {}", out, scratch));                  // pick the table class for larger blocks
     emitter.instruction(&format!("shl {}, 3", out));                               // bin-head byte offset = index * 8
 }
 
@@ -122,7 +163,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- try small segregated bins before walking the general free list --
     emitter.instruction(&format!("cmp x0, #{}", HEAP_BIN_MAX_PAYLOAD));         // do we fit in the segregated bin classes?
     emitter.instruction("b.hi __rt_heap_alloc_fl_start");                       // larger requests still use the general free list
-    emit_bin_offset_aarch64(emitter, "x0", "x13", "x14");                       // x13 = byte offset of the request's size-class bin
+    emit_bin_offset_aarch64(emitter, "x0", "x13", "x14", "x15");                // x13 = byte offset of the request's size-class bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_bin_sizes");
     emitter.instruction("ldr x0, [x14, x13]");                                  // round the request up to its class size so every cached block in the bin fits
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
@@ -134,7 +175,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
     // -- bump tail full: search larger classes, then the general free list --
     emitter.label("__rt_heap_alloc_small_rescan");
-    emit_bin_offset_aarch64(emitter, "x0", "x13", "x14");                       // x13 = byte offset of the request's size-class bin
+    emit_bin_offset_aarch64(emitter, "x0", "x13", "x14", "x15");                // x13 = byte offset of the request's size-class bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
     emitter.instruction("add x9, x9, x13");                                     // x9 = address of the first candidate bin head
     emitter.label("__rt_heap_alloc_small_bin_loop");
@@ -227,7 +268,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x12, #{}", HEAP_BIN_MAX_PAYLOAD));         // is the remainder small enough for the size-class bins?
     emitter.instruction("b.hi __rt_heap_alloc_fl_split_keep");                  // no — it stays in the ordered free list
     emitter.instruction("str x14, [x9]");                                       // unlink the matched block from the ordered free list
-    emit_free_bin_offset_aarch64(emitter, "x12", "x11", "x16");                 // x11 = byte offset of the largest class the remainder can serve
+    emit_free_bin_offset_aarch64(emitter, "x12", "x11", "x16", "x15");          // x11 = byte offset of the largest class the remainder can serve
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_small_bins");
     emitter.instruction("add x16, x16, x11");                                   // x16 = address of that bin head
     emitter.instruction("ldr x14, [x16]");                                      // x14 = previous bin head
@@ -362,7 +403,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     // -- try small segregated bins before walking the general free list --
     emitter.instruction(&format!("cmp rax, {}", HEAP_BIN_MAX_PAYLOAD));         // does this request fit within the segregated bin classes?
     emitter.instruction("ja __rt_heap_alloc_fl_start");                         // larger payloads still use the general ordered free list
-    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11");                        // r8 = byte offset of the request's size-class bin
+    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11", "r10");                 // r8 = byte offset of the request's size-class bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_bin_sizes");
     emitter.instruction("mov rax, QWORD PTR [r9 + r8]");                        // round the request up to its class size so every cached block in the bin fits
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
@@ -375,7 +416,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- bump tail full: search larger classes, then the general free list --
     emitter.label("__rt_heap_alloc_small_rescan");
-    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11");                        // r8 = byte offset of the request's size-class bin
+    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11", "r10");                 // r8 = byte offset of the request's size-class bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
     emitter.instruction("add r9, r8");                                          // r9 = address of the first candidate small-bin head slot
     emitter.label("__rt_heap_alloc_small_bin_loop");
@@ -466,7 +507,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp rcx, {}", HEAP_BIN_MAX_PAYLOAD));         // is the remainder small enough for the size-class bins?
     emitter.instruction("ja __rt_heap_alloc_fl_split_keep");                    // no — it stays in the ordered free list
     emitter.instruction("mov QWORD PTR [r9], rdx");                             // unlink the matched block from the ordered free list
-    emit_free_bin_offset_x86_64(emitter, "rcx", "rdx", "r11");                  // rdx = byte offset of the largest class the remainder can serve
+    emit_free_bin_offset_x86_64(emitter, "rcx", "rdx", "r11", "r9");            // rdx = byte offset of the largest class the remainder can serve
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_small_bins");
     emitter.instruction("add r11, rdx");                                        // r11 = address of that bin head
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // rdx = previous bin head

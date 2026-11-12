@@ -117,7 +117,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x11, #{}", HEAP_BIN_MAX_PAYLOAD));        // does this payload fit in the segregated bin cache?
     emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emit_free_bin_offset_aarch64(emitter, "x11", "x12", "x16");                 // x12 = byte offset of the largest class the freed block can serve
+    emit_free_bin_offset_aarch64(emitter, "x11", "x12", "x16", "x17");          // x12 = byte offset of the largest class the freed block can serve
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
@@ -399,7 +399,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r11, {}", HEAP_BIN_MAX_PAYLOAD));         // does the freed payload fit in the segregated bin cache?
     emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
-    emit_free_bin_offset_x86_64(emitter, "r11", "rcx", "rdx");                  // rcx = byte offset of the largest class the freed block can serve
+    emit_free_bin_offset_x86_64(emitter, "r11", "rcx", "rdx", "r8");            // rcx = byte offset of the largest class the freed block can serve
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");

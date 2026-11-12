@@ -1158,6 +1158,17 @@ to `nop`; removing one never shortens the life of a live scratch string. Functio
 with exception handlers or generator suspension points are skipped, because their
 implicit control edges are absent from the terminator graph.
 
+### Borrowed Chained Reads
+
+The last registered transform (`src/ir_passes/borrow_reads.rs`) removes the
+incref/decref pair of an intermediate container read in a chained subscript such
+as `$g[$u][$w]`. An owned `array_get` whose result is a heap container (array,
+hash or object) qualifies when every use is the receiver of another container read
+or length in the same block, followed by exactly one `release`, and the
+instructions in between are pure reads or arithmetic (so the parent cannot be
+written, released or freed while the element pointer is held). The read is marked
+`Borrowed`, which makes codegen skip its incref, and the release becomes `nop`.
+
 ### Small-Function Inlining
 
 `src/ir_passes/inline.rs` is a **cross-function**, module-level pass (not a member

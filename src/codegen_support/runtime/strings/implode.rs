@@ -93,6 +93,13 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #56]");                                   // save destination cursor across the mixed string cast
     emitter.instruction("str x10, [sp, #64]");                                  // save array length across the mixed string cast
     emitter.instruction("str x11, [sp, #72]");                                  // save loop index across the mixed string cast
+    // The cast formats numbers in the concat buffer at `_concat_off`, which this loop does not
+    // advance: point it at the output cursor so the scratch never overwrites joined bytes (the
+    // cast result is copied to the heap before it is copied back here).
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_concat_buf");
+    emitter.instruction("sub x13, x9, x13");                                    // output cursor as a concat-buffer offset
+    emitter.instruction("ldr x14, [sp, #32]");                                  // _concat_off address
+    emitter.instruction("str x13, [x14]");                                      // conversions write at or past the output cursor
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed Mixed element to a string payload
     emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the mixed string cast
     emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the mixed string cast
@@ -129,8 +136,8 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // load result start pointer
     emitter.instruction("sub x2, x9, x1");                                      // result length = dest_end - dest_start
     emitter.instruction("ldr x6, [sp, #32]");                                   // load offset variable address
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat_off
-    emitter.instruction("add x8, x8, x2");                                      // advance offset by result length
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    emitter.instruction("sub x8, x9, x7");                                      // concat_off = end of the joined string
     emitter.instruction("str x8, [x6]");                                        // store updated concat_off
 
     // -- restore frame and return --
@@ -215,6 +222,14 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the indexed-array pointer before addressing the current Mixed slot
     emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current indexed-array Mixed slot
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the boxed Mixed element pointer for string casting
+    // The cast formats numbers in the concat buffer at `_concat_off`, which this loop does not
+    // advance: point it at the output cursor so the scratch never overwrites joined bytes (the
+    // cast result is copied to the heap before it is copied back here).
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // output cursor
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    emitter.instruction("sub r10, r9");                                         // as a concat-buffer offset
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_off");
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // conversions write at or past the output cursor
     emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed Mixed element to a string payload
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // record the persisted mixed-cast string to release once its bytes are copied
     emitter.instruction("mov r8, rax");                                         // move the cast string pointer into the copy-loop source register
@@ -247,9 +262,9 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r10");                                        // copy the final concat-buffer destination cursor before subtracting the result start pointer
     emitter.instruction("sub rdx, rax");                                        // compute the joined string length as dest_end - dest_start
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload the current concat-buffer write offset after any nested helpers have advanced it
-    emitter.instruction("add r9, rdx");                                         // advance the concat-buffer write offset by the joined string length that this implode call produced
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // persist the updated concat-buffer write offset after writing the implode output bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    emitter.instruction("sub r10, r9");                                         // concat_off = end of the joined string
+    emitter.instruction("mov QWORD PTR [r8], r10");                              // persist the updated concat-buffer write offset after writing the implode output bytes
     emitter.instruction("add rsp, 80");                                         // release the implode spill slots before returning the joined string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the joined string
     emitter.instruction("ret");                                                 // return the joined string in the standard x86_64 string result registers

@@ -355,6 +355,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     for k in 0..=crate::codegen_support::runtime::system::JSON_FTOA_FAST_MAX_FRACTION_DIGITS {
         out.push_str(&format!("    .double {}.0\n", 10u64.pow(k as u32)));
     }
+    for (label, table) in [
+        ("_heap_bin_ceil_index", crate::codegen_support::runtime::arrays::heap_bin_ceil_index_table()),
+        ("_heap_bin_floor_index", crate::codegen_support::runtime::arrays::heap_bin_floor_index_table()),
+    ] {
+        out.push_str(&format!(".globl {}\n{}:\n", label, label));
+        for index in table {
+            out.push_str(&format!("    .byte {}\n", index));
+        }
+    }
     out.push_str(".p2align 3\n.globl _heap_bin_sizes\n_heap_bin_sizes:\n");
     for size in crate::codegen_support::runtime::arrays::HEAP_BIN_CLASS_SIZES {
         out.push_str(&format!("    .quad {}\n", size));

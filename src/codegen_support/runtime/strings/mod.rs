@@ -188,7 +188,7 @@ pub use explode::emit_explode;
 /// Emit explode (split by delimiter) helper.
 pub use implode::emit_implode;
 /// Emit implode (join array to string) helper.
-pub use implode_int::emit_implode_int;
+pub use implode_int::{emit_implode_float, emit_implode_int};
 /// Emit integer-optimized implode helper.
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.

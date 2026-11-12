@@ -75,6 +75,11 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) const_ints: HashMap<ValueId, i64>,
     /// Constant instructions whose every use reads the immediate: never emitted.
     pub(super) skipped_consts: HashSet<InstId>,
+    /// Set while lowering a `Borrowed` container read: the element is not retained.
+    pub(super) borrowed_read: bool,
+    /// Checked int add/sub/mul instructions lowered together with the cast to `int` that
+    /// consumes their boxed result (checked instruction -> cast instruction).
+    pub(super) fused_checked_casts: HashMap<InstId, InstId>,
     label_counter: usize,
 }
 
@@ -123,6 +128,8 @@ impl<'a> FunctionContext<'a> {
             fused_branch_condition: None,
             const_ints: HashMap::new(),
             skipped_consts: HashSet::new(),
+            borrowed_read: false,
+            fused_checked_casts: HashMap::new(),
             epilogue_label,
             label_counter: 0,
         }

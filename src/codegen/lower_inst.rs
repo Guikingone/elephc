@@ -7845,6 +7845,30 @@ pub(super) fn direct_call_stack_pad_bytes(
     abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
 
+/// Lowers a checked int add/sub/mul fused with the `int` cast of its boxed result.
+pub(super) fn lower_fused_checked_cast(
+    ctx: &mut FunctionContext<'_>,
+    checked_id: InstId,
+    cast_id: InstId,
+) -> Result<()> {
+    let checked = ctx
+        .function
+        .instruction(checked_id)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", checked_id.as_raw()))?
+        .clone();
+    let cast = ctx
+        .function
+        .instruction(cast_id)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", cast_id.as_raw()))?
+        .clone();
+    let helper = match checked.op {
+        Op::ICheckedAdd => "__rt_int_add_checked",
+        Op::ICheckedSub => "__rt_int_sub_checked",
+        _ => "__rt_int_mul_checked",
+    };
+    arithmetic::lower_fused_checked_to_int(ctx, &checked, &cast, helper)
+}
+
 /// Lowers a signed integer comparison into a boolean result value.
 ///
 /// Operands are compared in place (allocated register, x86_64 memory operand, or immediate);
@@ -8021,6 +8045,45 @@ fn load_ref_cell_local_to_result_as(
 }
 
 /// Converts a loaded local slot value to the SSA result representation requested by EIR.
+/// Reads a `mixed` local loaded in the result register as a borrowed string.
+///
+/// A boxed string yields the box's own payload (borrowed like any string local); other tags go
+/// through `__rt_mixed_cast_string`, which formats numbers into the concat buffer. Casting a
+/// boxed string that way returned a persisted copy the borrowed load never released.
+fn emit_borrow_mixed_local_as_string(ctx: &mut FunctionContext<'_>) {
+    let cast = ctx.next_label("mixed_local_str_cast");
+    let done = ctx.next_label("mixed_local_str_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the box for the conversion path
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #1");                              // does the box hold a string?
+            ctx.emitter.instruction(&format!("b.ne {}", cast));                 // no — convert the scalar
+            ctx.emitter.instruction("add sp, sp, #16");                         // drop the saved box; x1/x2 already hold the string
+            ctx.emitter.instruction(&format!("b {}", done));                    // borrowed string payload ready
+            ctx.emitter.label(&cast);
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the box
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the box for the conversion path
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the box
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 1");                              // does the box hold a string?
+            ctx.emitter.instruction(&format!("jne {}", cast));                  // no — convert the scalar
+            ctx.emitter.instruction("add rsp, 16");                             // drop the saved box
+            ctx.emitter.instruction("mov rax, rdi");                            // borrowed string pointer (rdx holds its length)
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // borrowed string payload ready
+            ctx.emitter.label(&cast);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the box
+            ctx.emitter.instruction("add rsp, 16");                             // release the saved slot
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the box to the conversion helper
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
 pub(super) fn coerce_loaded_local_to_result_type(
     ctx: &mut FunctionContext<'_>,
     source_ty: &PhpType,
@@ -8048,8 +8111,7 @@ pub(super) fn coerce_loaded_local_to_result_type(
             Ok(())
         }
         (PhpType::Mixed, PhpType::Str) => {
-            move_int_result_to_first_arg(ctx);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            emit_borrow_mixed_local_as_string(ctx);
             Ok(())
         }
         (PhpType::Mixed, PhpType::Array(elem))

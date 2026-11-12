@@ -193,6 +193,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// still promoting for keys that may be strings (generic `Array(Mixed)`,
     /// `AssocArray`, `Mixed`, `Union` sources).
     foreach_int_key_locals: HashSet<String>,
+    /// Names the current body may read by name (`None` when the body can reach its locals
+    /// dynamically, e.g. through `compact()` or `eval`): a `foreach` key nobody reads is never
+    /// materialized.
+    pub(crate) body_variable_reads: Option<HashSet<String>>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -318,6 +322,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             hoisted_ref_ensure_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
+            body_variable_reads: None,
             return_type,
             return_php_type,
             by_ref_return: false,

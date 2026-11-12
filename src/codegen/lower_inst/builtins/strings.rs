@@ -561,6 +561,12 @@ fn lower_implode_dynamic_aarch64(
     ctx.emitter.instruction(&format!("b.eq {}", generic_label));
     ctx.emitter.instruction("cmp x10, #7");                                     // are the array's elements boxed Mixed cells?
     ctx.emitter.instruction(&format!("b.eq {}", generic_label));
+    let int_label = ctx.next_label("implode_dyn_int_elem");
+    ctx.emitter.instruction("cmp x10, #2");                                     // are the array's elements raw floats?
+    ctx.emitter.instruction(&format!("b.ne {}", int_label));
+    abi::emit_call_label(ctx.emitter, "__rt_implode_float");                   // raw float elements: PHP float-to-string per element
+    ctx.emitter.instruction(&format!("b {}", done_label));
+    ctx.emitter.label(&int_label);
     abi::emit_call_label(ctx.emitter, "__rt_implode_int");                     // raw scalar elements (and any other tag): convert each via itoa
     ctx.emitter.instruction(&format!("b {}", done_label));
     ctx.emitter.label(&generic_label);
@@ -599,6 +605,12 @@ fn lower_implode_dynamic_x86_64(
     ctx.emitter.instruction(&format!("je {}", generic_label));
     ctx.emitter.instruction("cmp r10, 7");                                      // are the array's elements boxed Mixed cells?
     ctx.emitter.instruction(&format!("je {}", generic_label));
+    let int_label = ctx.next_label("implode_dyn_int_elem");
+    ctx.emitter.instruction("cmp r10, 2");                                      // are the array's elements raw floats?
+    ctx.emitter.instruction(&format!("jne {}", int_label));
+    abi::emit_call_label(ctx.emitter, "__rt_implode_float");                   // raw float elements: PHP float-to-string per element
+    ctx.emitter.instruction(&format!("jmp {}", done_label));
+    ctx.emitter.label(&int_label);
     abi::emit_call_label(ctx.emitter, "__rt_implode_int");                     // raw scalar elements (and any other tag): convert each via itoa
     ctx.emitter.instruction(&format!("jmp {}", done_label));
     ctx.emitter.label(&generic_label);
@@ -2929,7 +2941,8 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     let array = expect_operand(inst, 1)?;
     match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
-            PhpType::Int | PhpType::Bool => Ok("__rt_implode_int"),
+            PhpType::Int | PhpType::Bool | PhpType::Void => Ok("__rt_implode_int"),
+            PhpType::Float => Ok("__rt_implode_float"),
             PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
             other => Err(CodegenIrError::unsupported(format!(
                 "implode array element PHP type {:?}",

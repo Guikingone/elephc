@@ -266,14 +266,17 @@ pub(super) fn lower_array_get(
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_get_result(&elem_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
-    match ctx.emitter.target.arch {
+    ctx.borrowed_read = inst.result_ownership == crate::ir::Ownership::Borrowed;
+    let lowered = match ctx.emitter.target.arch {
         Arch::AArch64 => {
             lower_array_get_aarch64(ctx, inst, array, index, &elem_ty, &result_ty, warn_on_missing)
         }
         Arch::X86_64 => {
             lower_array_get_x86_64(ctx, inst, array, index, &elem_ty, &result_ty, warn_on_missing)
         }
-    }
+    };
+    ctx.borrowed_read = false;
+    lowered
 }
 
 /// Lowers `LoadArrayElemRefCell`: computes the address of an indexed-array element's inline
@@ -903,7 +906,9 @@ fn emit_array_get_in_bounds_aarch64(
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
-            abi::emit_incref_if_refcounted(ctx.emitter, other);
+            if !ctx.borrowed_read {
+                abi::emit_incref_if_refcounted(ctx.emitter, other);
+            }
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -965,7 +970,9 @@ fn emit_array_get_in_bounds_x86_64(
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
-            abi::emit_incref_if_refcounted(ctx.emitter, other);
+            if !ctx.borrowed_read {
+                abi::emit_incref_if_refcounted(ctx.emitter, other);
+            }
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

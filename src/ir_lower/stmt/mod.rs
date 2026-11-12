@@ -3567,6 +3567,13 @@ fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    // A key no code reads (and nothing can observe dynamically) is never materialized: boxing
+    // a `mixed` key per iteration is pure overhead.
+    let key_var = key_var.filter(|name| {
+        ctx.body_variable_reads
+            .as_ref()
+            .is_none_or(|reads| reads.contains(*name))
+    });
     // Pre-widen locals reassigned inside the loop body (other than the foreach key/value locals,
     // whose per-iteration binding already keeps their type consistent) so later-iteration reads
     // placed before an in-loop reassignment use the widened Mixed slot. See `lower_while`.
@@ -3720,6 +3727,11 @@ fn foreach_value_type(source_ty: &PhpType) -> PhpType {
             PhpType::Callable => PhpType::Callable,
             PhpType::Object(class_name) => PhpType::Object(class_name),
             elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
+            _ => PhpType::Mixed,
+        },
+        // Scalar hash values are stored raw in the entries, so they are read without boxing.
+        PhpType::AssocArray { value, .. } => match value.codegen_repr() {
+            scalar @ (PhpType::Int | PhpType::Float | PhpType::Bool) => scalar,
             _ => PhpType::Mixed,
         },
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {

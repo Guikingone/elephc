@@ -13,6 +13,7 @@
 //!   builds.
 
 mod allocation;
+mod borrow_reads;
 mod branch_simplify;
 mod cfg;
 mod concat_reset;

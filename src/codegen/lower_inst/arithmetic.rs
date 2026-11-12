@@ -188,6 +188,85 @@ pub(super) fn lower_int_checked_binop(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a checked integer add/sub/mul whose boxed `int|float` result only feeds a cast back
+/// to `int` (`($a + $b) & 0xFFFF`), writing the cast's result directly.
+///
+/// The native operation runs first; only when it overflows does the slow path box the result
+/// through the checked helper, convert it with `__rt_mixed_cast_int` and release the box —
+/// exactly what the unfused instructions do — so the common case allocates nothing.
+pub(super) fn lower_fused_checked_to_int(
+    ctx: &mut FunctionContext<'_>,
+    checked: &Instruction,
+    cast: &Instruction,
+    helper: &str,
+) -> Result<()> {
+    let lhs = expect_operand(checked, 0)?;
+    let rhs = expect_operand(checked, 1)?;
+    let slow = ctx.next_label("checked_cast_slow");
+    let done = ctx.next_label("checked_cast_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, lhs, result_reg, checked)?;
+    load_integer_operand(ctx, rhs, rhs_reg, checked)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            match checked.op {
+                crate::ir::Op::ICheckedAdd => {
+                    ctx.emitter.instruction("adds x9, x0, x10");                // add and set the overflow flag
+                    ctx.emitter.instruction(&format!("b.vs {}", slow));         // signed overflow: take the boxed path
+                }
+                crate::ir::Op::ICheckedSub => {
+                    ctx.emitter.instruction("subs x9, x0, x10");                // subtract and set the overflow flag
+                    ctx.emitter.instruction(&format!("b.vs {}", slow));         // signed overflow: take the boxed path
+                }
+                _ => {
+                    ctx.emitter.instruction("mul x9, x0, x10");                 // low 64 bits of the product
+                    ctx.emitter.instruction("smulh x11, x0, x10");              // high 64 bits of the product
+                    ctx.emitter.instruction("cmp x11, x9, asr #63");            // does the high half only extend the sign?
+                    ctx.emitter.instruction(&format!("b.ne {}", slow));         // no — the product overflowed
+                }
+            }
+            ctx.emitter.instruction("mov x0, x9");                              // the native result is the int value
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the boxed path
+            ctx.emitter.label(&slow);
+            ctx.emitter.instruction("mov x1, x10");                             // second checked-helper argument
+            abi::emit_call_label(ctx.emitter, helper);
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the boxed result for its release
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // keep the converted int
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the box
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // restore the converted int
+            ctx.emitter.instruction("add sp, sp, #16");                         // release the temporary slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // keep the left operand for the slow path
+            match checked.op {
+                crate::ir::Op::ICheckedAdd => ctx.emitter.instruction(&format!("add rax, {}", rhs_reg)), // native add
+                crate::ir::Op::ICheckedSub => ctx.emitter.instruction(&format!("sub rax, {}", rhs_reg)), // native subtract
+                _ => ctx.emitter.instruction(&format!("imul rax, {}", rhs_reg)), // native multiply
+            }
+            ctx.emitter.instruction(&format!("jo {}", slow));                   // signed overflow: take the boxed path
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // the native result is the int value
+            ctx.emitter.label(&slow);
+            ctx.emitter.instruction("mov rdi, rcx");                            // first checked-helper argument
+            ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // second checked-helper argument
+            abi::emit_call_label(ctx.emitter, helper);
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the box and the converted int
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the boxed result for its release
+            ctx.emitter.instruction("mov rdi, rax");                            // convert the box to int
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // keep the converted int
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the box
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // restore the converted int
+            ctx.emitter.instruction("add rsp, 16");                             // release the temporary slots
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, cast)
+}
+
 /// Lowers a signed integer modulo operation with the established zero-divisor guard.
 pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
