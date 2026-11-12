@@ -197,3 +197,19 @@ echo $sum, "\n";
     assert_eq!(out.stdout, "12000\n");
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
+
+/// A bare `array` parameter called with different element types and shapes (list of ints,
+/// string-keyed hash, list of floats) reads every call's values correctly instead of through
+/// the first call's layout.
+#[test]
+fn test_generic_array_param_called_with_different_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+function first(array $a) { foreach ($a as $k => $v) { return $v; } return null; }
+var_dump(first([1, 2]));
+var_dump(first(["x" => "hello"]));
+var_dump(first([1.5]));
+"#,
+    );
+    assert_eq!(out, "int(1)\nstring(5) \"hello\"\nfloat(1.5)\n");
+}

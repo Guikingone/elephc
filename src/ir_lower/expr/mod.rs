@@ -6698,6 +6698,10 @@ fn coerce_operands_to_params(
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
+        if let Some(converted) = convert_container_arg_to_param(ctx, value, &operand_ty, &param_ty) {
+            operands[index] = converted;
+            continue;
+        }
         if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
                 value,
@@ -6727,6 +6731,75 @@ fn coerce_operands_to_params(
     operands
 }
 
+/// Converts an array argument to a parameter's (widened) container storage: element values
+/// boxed to `mixed`, and lists converted to hashes when the parameter is associative. The
+/// conversions copy (copy-on-write safe) and yield owned temporaries released after the call.
+fn convert_container_arg_to_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+    operand_ty: &PhpType,
+    param_ty: &PhpType,
+) -> Option<crate::ir::ValueId> {
+    let is_mixed = |ty: &PhpType| matches!(ty.codegen_repr(), PhpType::Mixed);
+    let mut current = value;
+    let mut current_ty = operand_ty.clone();
+    let mut steps = Vec::new();
+    match (operand_ty, param_ty) {
+        (PhpType::Array(element), PhpType::Array(target))
+            if is_mixed(target) && !is_mixed(element) =>
+        {
+            steps.push((Op::ArrayToMixed, PhpType::Array(Box::new(PhpType::Mixed))));
+        }
+        (PhpType::Array(element), PhpType::AssocArray { key, value: target }) => {
+            steps.push((
+                Op::ArrayToHash,
+                PhpType::AssocArray { key: key.clone(), value: element.clone() },
+            ));
+            if is_mixed(target) && !is_mixed(element) {
+                steps.push((
+                    Op::HashToMixed,
+                    PhpType::AssocArray { key: key.clone(), value: Box::new(PhpType::Mixed) },
+                ));
+            }
+        }
+        (PhpType::AssocArray { value: element, key }, PhpType::AssocArray { value: target, .. })
+            if is_mixed(target) && !is_mixed(element) =>
+        {
+            steps.push((
+                Op::HashToMixed,
+                PhpType::AssocArray { key: key.clone(), value: Box::new(PhpType::Mixed) },
+            ));
+        }
+        _ => return None,
+    }
+    for (op, ty) in steps {
+        let source = LoweredValue { value: current, ir_type: ctx.builder.value_type(current) };
+        let owned = ctx.value_is_owning_temporary(source);
+        let converted = if matches!(op, Op::ArrayToMixed | Op::HashToMixed) {
+            // In-place conversions take over their input (after a copy-on-write split), so a
+            // borrowed argument (e.g. a local) is retained first and never stolen.
+            let input = if owned {
+                source
+            } else {
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, None)
+            };
+            ctx.emit_value(op, vec![input.value], None, ty.clone(), op.default_effects(), None)
+        } else {
+            // `ArrayToHash` copies: an owned input is released once converted.
+            let converted =
+                ctx.emit_value(op, vec![current], None, ty.clone(), op.default_effects(), None);
+            if owned {
+                crate::ir_lower::ownership::release_if_owned(ctx, source, None);
+            }
+            converted
+        };
+        current = converted.value;
+        current_ty = ty;
+    }
+    let _ = current_ty;
+    Some(current)
+}
+
 /// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
 fn lower_by_ref_array_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
@@ -6741,6 +6814,9 @@ fn lower_by_ref_array_arg_with_signature(
     let ExprKind::Variable(name) = &arg.kind else {
         return None;
     };
+    if let Some(value) = widen_by_ref_array_local_to_hash_param(ctx, name, param_ty, arg.span) {
+        return Some(value);
+    }
     if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
         return None;
     }
@@ -6887,6 +6963,62 @@ fn lower_by_ref_mixed_scalar_arg_with_signature(
 }
 
 /// Returns true when a local array must be converted before a by-reference call.
+/// Promotes a local passed by reference to a hash-typed parameter (a bare `array` widened
+/// across call sites) to that storage in place: lists become hashes and element values are
+/// boxed when the parameter holds `mixed` values. The local keeps the converted table, so the
+/// callee's writes are visible to the caller.
+fn widen_by_ref_array_local_to_hash_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    param_ty: &PhpType,
+    span: Span,
+) -> Option<crate::ir::ValueId> {
+    let PhpType::AssocArray { key, value: param_value } = param_ty.codegen_repr() else {
+        return None;
+    };
+    if ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    let local_ty = ctx.local_type(name).codegen_repr();
+    let wants_mixed = param_value.codegen_repr() == PhpType::Mixed;
+    let mut current = ctx.load_local(name, Some(span));
+    let mut changed = false;
+    if let PhpType::Array(element) = &local_ty {
+        let hash_ty = PhpType::AssocArray { key: key.clone(), value: element.clone() };
+        current = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![current.value],
+            None,
+            hash_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        ctx.store_mutated_local(name, current, hash_ty, Some(span));
+        current = ctx.load_local(name, Some(span));
+        changed = true;
+    }
+    let current_value_ty = match ctx.builder.value_php_type(current.value).codegen_repr() {
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => return changed.then_some(current.value),
+    };
+    if wants_mixed && current_value_ty != PhpType::Mixed {
+        let mixed_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
+        let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, current, Some(span));
+        let converted = ctx.emit_value(
+            Op::HashToMixed,
+            vec![retained.value],
+            None,
+            mixed_ty.clone(),
+            Op::HashToMixed.default_effects(),
+            Some(span),
+        );
+        ctx.store_mutated_local(name, converted, mixed_ty, Some(span));
+        current = ctx.load_local(name, Some(span));
+        changed = true;
+    }
+    changed.then_some(current.value)
+}
+
 fn by_ref_array_arg_needs_mixed_storage(
     ctx: &LoweringContext<'_, '_>,
     name: &str,

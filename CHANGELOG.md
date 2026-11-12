@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed a bare `array` parameter keeping the element type and storage of its first call site: a later call with other element types or a hash read its values through the first layout (`first(["x" => "hello"])` returned `int(7)`). Such parameters now widen across call sites (`mixed` elements, hash storage when lists and hashes mix), and each call site converts its argument to the shared representation (by-reference locals are promoted in place).
 - The x86_64 cycle collector counts incoming heap edges in one linear scan (a saturating counter in transient kind-word bits) instead of rescanning the whole heap for every candidate node, which was quadratic in the number of live blocks. A reference-heavy `unset()` loop drops from a timeout to ~25 ms.
 - `array_sum()` over a `mixed`-valued hash counts raw scalar slots (ints stored without boxing) instead of skipping them.
 - The codegen test harness installs the integer-range proofs like the real pipeline, and the thread-local proof oracle is cleared after lowering so later compilations on the same thread never see stale facts.

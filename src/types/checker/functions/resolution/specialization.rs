@@ -231,6 +231,25 @@ impl Checker {
                     }
                 }
             }
+            // A bare `array` hint was specialized from the first call site; a later call with
+            // another element type or storage shape (list vs. hash) widens it so every call
+            // site converts its argument to one shared representation instead of the body
+            // reading the new shape through the first one's layout.
+            if seen_idx < regular_param_count
+                && stored_sig.declared_params.get(seen_idx).copied().unwrap_or(false)
+                && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                && self.declared_param_is_generic_array(name, seen_idx)
+            {
+                let actual = Self::specialize_generic_array_param_hint(
+                    &PhpType::Array(Box::new(PhpType::Mixed)),
+                    &actual_ty,
+                );
+                let widened = join_generic_array_param(&param_types[seen_idx].1, &actual);
+                if param_types[seen_idx].1 != widened {
+                    param_types[seen_idx].1 = widened;
+                    changed = true;
+                }
+            }
             if seen_idx < regular_param_count
                 && !stored_sig
                     .declared_params
@@ -269,6 +288,55 @@ impl Checker {
         }
 
         Ok(changed.then_some(param_types))
+    }
+}
+
+impl Checker {
+    /// Returns whether parameter `index` of user function `name` is declared with a bare
+    /// `array` hint (no element type), i.e. a hint specialized from call sites.
+    fn declared_param_is_generic_array(&mut self, name: &str, index: usize) -> bool {
+        let Some(decl) = self.fn_decls.get(name).cloned() else {
+            return false;
+        };
+        let Some(Some(type_ann)) = decl.param_types.get(index) else {
+            return false;
+        };
+        self.resolve_declared_param_type_hint(type_ann, decl.span, "array parameter")
+            .is_ok_and(|ty| Self::is_generic_array_hint(&ty))
+    }
+}
+
+/// Joins two call-site specializations of a bare `array` parameter into one storage contract:
+/// equal shapes stay, differing element types become `mixed`, and a list joined with a hash
+/// becomes a hash (lists convert to hashes at the call boundary).
+fn join_generic_array_param(current: &PhpType, actual: &PhpType) -> PhpType {
+    fn join_element(left: &PhpType, right: &PhpType) -> PhpType {
+        match (left, right) {
+            _ if left == right => left.clone(),
+            (PhpType::Never | PhpType::Void, other) | (other, PhpType::Never | PhpType::Void) => {
+                other.clone()
+            }
+            _ => PhpType::Mixed,
+        }
+    }
+    match (current, actual) {
+        _ if current == actual => current.clone(),
+        (PhpType::Array(left), PhpType::Array(right)) => {
+            PhpType::Array(Box::new(join_element(left, right)))
+        }
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => PhpType::AssocArray {
+            key: Box::new(join_element(left_key, right_key)),
+            value: Box::new(join_element(left_value, right_value)),
+        },
+        (PhpType::Array(element), PhpType::AssocArray { key, value })
+        | (PhpType::AssocArray { key, value }, PhpType::Array(element)) => PhpType::AssocArray {
+            key: Box::new(join_element(&PhpType::Int, key)),
+            value: Box::new(join_element(element, value)),
+        },
+        _ => PhpType::Array(Box::new(PhpType::Mixed)),
     }
 }
 
