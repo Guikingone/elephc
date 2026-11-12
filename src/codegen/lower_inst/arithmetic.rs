@@ -19,6 +19,10 @@ use super::{expect_operand, require_integer_like, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
 /// Lowers a two-operand integer arithmetic or bitwise instruction.
+///
+/// Operands are read in place from allocated registers, frame slots (x86_64 memory
+/// operands), or as immediates for rematerialized constants; the result is computed
+/// directly into the destination register when it has one.
 pub(super) fn lower_int_binop(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -27,19 +31,126 @@ pub(super) fn lower_int_binop(
 ) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
-    load_integer_operand(ctx, lhs, result_reg, inst)?;
-    load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    let lhs_op = int_operand(ctx, lhs, inst)?;
+    let rhs_op = int_operand(ctx, rhs, inst)?;
+    let dst_reg = inst.result.and_then(|result| ctx.allocation.register_of(result));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); // compute the integer arithmetic result from both SSA operands
+            let lhs_reg = aarch64_int_reg(ctx, lhs_op, "x0");
+            let rhs_text = match rhs_op {
+                IntOperand::Imm(value)
+                    if matches!(aarch64_mnemonic, "add" | "sub") && (0..=4095).contains(&value) =>
+                {
+                    format!("#{}", value)
+                }
+                other => aarch64_int_reg(ctx, other, "x10").to_string(),
+            };
+            let out = dst_reg.unwrap_or("x0");
+            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, out, lhs_reg, rhs_text)); // compute the integer arithmetic result from both SSA operands
+            if dst_reg.is_some() {
+                return Ok(());
+            }
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)); // update the integer result register with the arithmetic operand
+            let acc = match dst_reg {
+                Some(reg) if rhs_op != IntOperand::Reg(reg) || lhs == rhs => reg,
+                _ => "rax",
+            };
+            let rhs_text = x86_int_operand_text(rhs_op);
+            let rhs_is_imm32 = matches!(rhs_op, IntOperand::Imm(value) if i32::try_from(value).is_ok());
+            let rhs_text = match rhs_op {
+                IntOperand::Imm(value) if !rhs_is_imm32 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "r10", value);
+                    "r10".to_string()
+                }
+                _ => rhs_text,
+            };
+            match lhs_op {
+                IntOperand::Reg(reg) if reg == acc => {}
+                IntOperand::Imm(value) => abi::emit_load_int_immediate(ctx.emitter, acc, value),
+                other => {
+                    ctx.emitter.instruction(&format!("mov {}, {}", acc, x86_int_operand_text(other))); // load the left integer operand into the accumulator
+                }
+            }
+            if x86_64_mnemonic == "imul" && rhs_is_imm32 {
+                ctx.emitter.instruction(&format!("imul {}, {}, {}", acc, acc, rhs_text)); // multiply the accumulator by the immediate
+            } else {
+                ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, acc, rhs_text)); // apply the integer arithmetic with the right operand
+            }
+            match dst_reg {
+                Some(reg) if reg == acc => return Ok(()),
+                Some(reg) => {
+                    ctx.emitter.instruction(&format!("mov {}, {}", reg, acc)); // move the integer result into its allocated register
+                    return Ok(());
+                }
+                None => {
+                    if acc != "rax" {
+                        ctx.emitter.instruction(&format!("mov rax, {}", acc)); // move the integer result to the result register
+                    }
+                }
+            }
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Where an integer operand can be read from without first copying it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum IntOperand {
+    /// An allocated general-purpose register.
+    Reg(&'static str),
+    /// A frame slot at this offset below the frame pointer.
+    Slot(usize),
+    /// A constant.
+    Imm(i64),
+}
+
+/// Classifies an integer-like operand (`Void`/`Never` read as zero).
+pub(super) fn int_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    inst: &Instruction,
+) -> Result<IntOperand> {
+    let ty = ctx.value_php_type(value)?;
+    if matches!(ty, PhpType::Void | PhpType::Never) {
+        return Ok(IntOperand::Imm(0));
+    }
+    require_integer_like(ty, inst)?;
+    if let Some(imm) = ctx.const_int(value) {
+        return Ok(IntOperand::Imm(imm));
+    }
+    if let Some(reg) = ctx.allocation.register_of(value) {
+        return Ok(IntOperand::Reg(reg));
+    }
+    Ok(IntOperand::Slot(ctx.value_frame_offset(value)?))
+}
+
+/// Renders an x86_64 operand (register, memory, or immediate text).
+pub(super) fn x86_int_operand_text(op: IntOperand) -> String {
+    match op {
+        IntOperand::Reg(reg) => reg.to_string(),
+        IntOperand::Slot(offset) => format!("QWORD PTR [rbp - {}]", offset),
+        IntOperand::Imm(value) => value.to_string(),
+    }
+}
+
+/// Returns an AArch64 register holding the operand, loading it into `scratch` when needed.
+pub(super) fn aarch64_int_reg(
+    ctx: &mut FunctionContext<'_>,
+    op: IntOperand,
+    scratch: &'static str,
+) -> &'static str {
+    match op {
+        IntOperand::Reg(reg) => reg,
+        IntOperand::Slot(offset) => {
+            abi::load_at_offset(ctx.emitter, scratch, offset);
+            scratch
+        }
+        IntOperand::Imm(value) => {
+            abi::emit_load_int_immediate(ctx.emitter, scratch, value);
+            scratch
+        }
+    }
 }
 
 /// Lowers a checked integer binary operation that may overflow to float.

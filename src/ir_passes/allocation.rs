@@ -14,7 +14,23 @@
 
 use std::collections::HashMap;
 
-use crate::ir::ValueId;
+use crate::ir::{InstId, ValueId};
+
+/// A caller-saved register value preserved around one clobbering instruction.
+///
+/// While the instruction lowers, the value is treated as spilled (operands read its frame
+/// slot, a result defined there is stored to its slot); afterwards the register is reloaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallSave {
+    /// The register-allocated value.
+    pub value: ValueId,
+    /// Its caller-saved register.
+    pub reg: &'static str,
+    /// The value is already defined before the instruction, so its register is stored first.
+    pub store_before: bool,
+    /// The value is still live after the instruction, so its register is reloaded.
+    pub reload_after: bool,
+}
 
 /// Where a value lives for the span the allocator assigned it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +46,7 @@ pub enum Location {
 pub struct Allocation {
     registers: HashMap<ValueId, &'static str>,
     callee_saved: Vec<&'static str>,
+    call_saves: HashMap<InstId, Vec<CallSave>>,
 }
 
 impl Allocation {
@@ -51,7 +68,28 @@ impl Allocation {
         Self {
             registers,
             callee_saved,
+            call_saves: HashMap::new(),
         }
+    }
+
+    /// Records the caller-saved registers preserved around each clobbering instruction.
+    pub(super) fn set_call_saves(&mut self, call_saves: HashMap<InstId, Vec<CallSave>>) {
+        self.call_saves = call_saves;
+    }
+
+    /// Returns the caller-saved values preserved around `inst`.
+    pub fn call_saves(&self, inst: InstId) -> &[CallSave] {
+        self.call_saves.get(&inst).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Treats `value` as spilled until `resume` (used while a clobbering instruction lowers).
+    pub fn suspend(&mut self, value: ValueId) {
+        self.registers.remove(&value);
+    }
+
+    /// Restores `value`'s register after `suspend`.
+    pub fn resume(&mut self, value: ValueId, reg: &'static str) {
+        self.registers.insert(value, reg);
     }
 
     /// Returns where `value` lives: its register, or spilled if unassigned.

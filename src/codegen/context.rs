@@ -69,6 +69,12 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) fused_compare_value: Option<ValueId>,
     /// Predicate left in the CPU flags by the fused `icmp`, consumed by the `cond_br`.
     pub(super) fused_compare_predicate: Option<CmpPredicate>,
+    /// Raw branch condition left in the flags by a fused float compare (`a`/`ae`, `gt`/`ls`…).
+    pub(super) fused_branch_condition: Option<&'static str>,
+    /// Integer/bool constants, rematerialized as immediates wherever they are read.
+    pub(super) const_ints: HashMap<ValueId, i64>,
+    /// Constant instructions whose every use reads the immediate: never emitted.
+    pub(super) skipped_consts: HashSet<InstId>,
     label_counter: usize,
 }
 
@@ -114,6 +120,9 @@ impl<'a> FunctionContext<'a> {
             heap_debug,
             fused_compare_value: None,
             fused_compare_predicate: None,
+            fused_branch_condition: None,
+            const_ints: HashMap::new(),
+            skipped_consts: HashSet::new(),
             epilogue_label,
             label_counter: 0,
         }
@@ -449,6 +458,10 @@ impl<'a> FunctionContext<'a> {
     /// into the result register instead of loaded from a stack slot.
     pub(super) fn load_value_to_result(&mut self, value: ValueId) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
+        if let Some(imm) = self.const_int(value) {
+            abi::emit_load_int_immediate(self.emitter, abi::int_result_reg(self.emitter), imm);
+            return Ok(ty);
+        }
         if let Some(reg) = self.allocation.register_of(value) {
             let dst = if ty.codegen_repr() == PhpType::Float {
                 abi::float_result_reg(self.emitter)
@@ -469,6 +482,12 @@ impl<'a> FunctionContext<'a> {
     /// register (a no-op when the source already is the requested register).
     pub(super) fn load_value_to_reg(&mut self, value: ValueId, reg: &str) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
+        if let Some(imm) = self.const_int(value) {
+            if !abi::is_float_register(reg) {
+                abi::emit_load_int_immediate(self.emitter, reg, imm);
+                return Ok(ty);
+            }
+        }
         if let Some(home) = self.allocation.register_of(value) {
             abi::emit_reg_move(self.emitter, reg, home);
         } else {
@@ -1056,6 +1075,11 @@ impl<'a> FunctionContext<'a> {
         self.placement
             .slot(value)
             .ok_or_else(|| CodegenIrError::missing_entry("value slot", value.as_raw()))
+    }
+
+    /// Returns the immediate of an integer/bool constant value, if `value` is one.
+    pub(super) fn const_int(&self, value: ValueId) -> Option<i64> {
+        self.const_ints.get(&value).copied()
     }
 
     /// Returns the frame offset assigned to a value for custom multi-word lowerings.

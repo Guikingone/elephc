@@ -25,8 +25,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::{Arch, Target};
 use crate::ir::{Function, IrType, Op, Ownership, Terminator, ValueId};
-use crate::ir_passes::allocation::Allocation;
-use crate::ir_passes::intervals::{build_intervals, LiveInterval};
+use crate::ir_passes::allocation::{Allocation, CallSave};
+use crate::ir_passes::intervals::{build_intervals, clobber_instructions, LiveInterval};
 use crate::ir_passes::liveness::compute_liveness;
 
 /// Computes a register allocation for `func` on `target`.
@@ -49,7 +49,49 @@ pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
         .filter(|iv| is_eligible(func, iv, &ineligible))
         .collect();
 
-    scan(&eligible, target)
+    let mut allocation = scan(&eligible, target);
+    allocation.set_call_saves(plan_call_saves(func, &eligible, &allocation, target));
+    allocation
+}
+
+/// Lists, for every clobbering instruction, the caller-saved register values live across it.
+fn plan_call_saves(
+    func: &Function,
+    intervals: &[LiveInterval],
+    allocation: &Allocation,
+    target: Target,
+) -> HashMap<crate::ir::InstId, Vec<CallSave>> {
+    let mut saves: HashMap<crate::ir::InstId, Vec<CallSave>> = HashMap::new();
+    let caller_saved: HashSet<&'static str> = caller_int_pool(target)
+        .iter()
+        .chain(caller_float_pool(target))
+        .copied()
+        .collect();
+    let clobbers = clobber_instructions(func);
+    if clobbers.is_empty() {
+        return saves;
+    }
+    for iv in intervals {
+        if iv.call_free {
+            continue;
+        }
+        let Some(reg) = allocation.register_of(iv.value) else {
+            continue;
+        };
+        if !caller_saved.contains(reg) {
+            continue;
+        }
+        let lo = clobbers.partition_point(|(pos, _)| *pos < iv.start);
+        for (pos, inst) in clobbers[lo..].iter().take_while(|(pos, _)| *pos <= iv.end) {
+            saves.entry(*inst).or_default().push(CallSave {
+                value: iv.value,
+                reg,
+                store_before: iv.start < *pos,
+                reload_after: iv.end > *pos,
+            });
+        }
+    }
+    saves
 }
 
 /// Returns true when the function contains any exception handler. Such
@@ -61,11 +103,28 @@ fn has_exception_handlers(func: &Function) -> bool {
         .any(|inst| inst.op == Op::TryPushHandler)
 }
 
-/// Collects values that must stay in stack slots regardless of their type:
-/// block parameters and values passed as branch arguments. These feed the
-/// slot-based block-parameter moves, which read them from their slots.
+/// Collects values that must stay in stack slots regardless of their type.
+///
+/// Constants the backend never emits (rematerialized immediates) need no register. In
+/// generators, block parameters and branch arguments also stay in slots: their resume edges
+/// are implicit, so the parallel edge moves cannot cover them.
 fn ineligible_values(func: &Function) -> HashSet<ValueId> {
-    let mut ineligible = HashSet::new();
+    // Constants the backend never emits (read as immediates) need no register.
+    let skipped = super::remat::rematerialized_consts(func).skipped;
+    let mut ineligible: HashSet<ValueId> = skipped
+        .iter()
+        .filter_map(|inst| func.instruction(*inst).and_then(|inst| inst.result))
+        .collect();
+    let has_suspend = func
+        .blocks
+        .iter()
+        .any(|block| matches!(block.terminator, Some(Terminator::GeneratorSuspend { .. })));
+    if !func.flags.is_generator && !has_suspend {
+        // Edge copies read every argument before writing any parameter, and any value
+        // live across an edge is live at the target's entry (the parameters' definition
+        // point), so parameters and arguments can share the ordinary register pools.
+        return ineligible;
+    }
     for block in &func.blocks {
         for param in &block.params {
             ineligible.insert(*param);
@@ -107,7 +166,7 @@ fn terminator_branch_args(term: &Terminator) -> Vec<ValueId> {
 }
 
 /// Returns true when an interval's value can live in a register: a single-word
-/// non-heap scalar that is not a block parameter or branch argument.
+/// non-heap scalar that `ineligible_values` does not exclude.
 fn is_eligible(func: &Function, iv: &LiveInterval, ineligible: &HashSet<ValueId>) -> bool {
     if ineligible.contains(&iv.value) {
         return false;
@@ -197,11 +256,16 @@ impl FreePools {
 /// calls and any caller-saved register the lowering touches.
 fn candidate_pools(iv: &LiveInterval) -> &'static [PoolKind] {
     let is_float = iv.ir_type == IrType::F64;
-    match (is_float, iv.call_free) {
-        (false, true) => &[PoolKind::CallerInt, PoolKind::CalleeInt],
-        (false, false) => &[PoolKind::CalleeInt],
-        (true, true) => &[PoolKind::CallerFloat, PoolKind::CalleeFloat],
-        (true, false) => &[PoolKind::CalleeFloat],
+    // A caller-saved register held across clobber points costs a store and a reload at each
+    // one; take that only when the value is used at least as often as it is preserved.
+    let preserve_ok = iv.clobber_count <= iv.weight;
+    match (is_float, iv.call_free, preserve_ok) {
+        (false, true, _) => &[PoolKind::CallerInt, PoolKind::CalleeInt],
+        (false, false, true) => &[PoolKind::CalleeInt, PoolKind::CallerInt],
+        (false, false, false) => &[PoolKind::CalleeInt],
+        (true, true, _) => &[PoolKind::CallerFloat, PoolKind::CalleeFloat],
+        (true, false, true) => &[PoolKind::CalleeFloat, PoolKind::CallerFloat],
+        (true, false, false) => &[PoolKind::CalleeFloat],
     }
 }
 
@@ -365,9 +429,15 @@ fn caller_int_pool(target: Target) -> &'static [&'static str] {
 /// intervals. The volatile-safe float lowerings use only d0/d1 and xmm0/xmm1.
 fn caller_float_pool(target: Target) -> &'static [&'static str] {
     match target.arch {
-        // d16–d23 are caller-saved vector registers never used by the backend
+        // d16–d30 are caller-saved vector registers never used by the backend
         // as arguments, results, or scratch.
-        Arch::AArch64 => &["d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23"],
-        Arch::X86_64 => &["xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"],
+        Arch::AArch64 => &[
+            "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "d24", "d25", "d26", "d27",
+            "d28", "d29", "d30",
+        ],
+        Arch::X86_64 => &[
+            "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11",
+            "xmm12", "xmm13", "xmm14",
+        ],
     }
 }

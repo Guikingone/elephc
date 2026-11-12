@@ -32,6 +32,7 @@ use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
 use super::identity_arith::IdentityArith;
 use super::licm::Licm;
+use super::mem2reg::Mem2Reg;
 use super::peephole::Peephole;
 
 /// Maximum fixed-point sweeps before the driver gives up on a function. Real
@@ -80,6 +81,7 @@ pub trait IrPass {
 /// loop.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
     vec![
+        Box::new(Mem2Reg),
         Box::new(IdentityArith),
         Box::new(Peephole),
         Box::new(ConstFold),
@@ -110,6 +112,19 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 /// passes only simplify), with `MAX_MODULE_ITERATIONS` as a backstop.
 pub fn optimize_module(module: &mut Module) {
     let passes = default_passes();
+    super::mem2reg::set_callee_ref_params(
+        module
+            .functions
+            .iter()
+            .chain(module.closures.iter())
+            .map(|function| {
+                (
+                    crate::names::php_symbol_key(function.name.trim_start_matches('\\')),
+                    function.params.iter().map(|param| param.by_ref).collect(),
+                )
+            })
+            .collect(),
+    );
 
     for _ in 0..MAX_MODULE_ITERATIONS {
         let mut changed = false;

@@ -46,6 +46,11 @@ pub(super) fn lower_float_compare(
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let predicate = expect_cmp_predicate(inst)?;
+    if inst.result.is_some() && ctx.fused_compare_value == inst.result {
+        if let Some(()) = try_fused_float_compare(ctx, lhs, rhs, predicate)? {
+            return Ok(());
+        }
+    }
     let lhs_reg = secondary_float_reg(ctx.emitter.target.arch);
     let rhs_reg = abi::float_result_reg(ctx.emitter);
     require_float(ctx.load_value_to_reg(lhs, lhs_reg)?, inst)?;
@@ -61,6 +66,46 @@ pub(super) fn lower_float_compare(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits only the flag-setting compare for an ordering predicate whose result feeds the next
+/// `cond_br`, recording a branch condition that is false for unordered (NaN) operands.
+///
+/// Equality predicates need two flag tests on x86_64 and are left to the materializing path.
+fn try_fused_float_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: crate::ir::ValueId,
+    rhs: crate::ir::ValueId,
+    predicate: CmpPredicate,
+) -> Result<Option<()>> {
+    let (first, second, x86_cond) = match predicate {
+        CmpPredicate::Sgt | CmpPredicate::Ogt => (lhs, rhs, "a"),
+        CmpPredicate::Sge | CmpPredicate::Oge => (lhs, rhs, "ae"),
+        CmpPredicate::Slt | CmpPredicate::Olt => (rhs, lhs, "a"),
+        CmpPredicate::Sle | CmpPredicate::Ole => (rhs, lhs, "ae"),
+        CmpPredicate::Eq | CmpPredicate::Ne => return Ok(None),
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let lhs_reg = float_operand_reg(ctx, lhs, "d1")?;
+            let rhs_reg = float_operand_reg(ctx, rhs, "d0")?;
+            ctx.emitter.instruction(&format!("fcmp {}, {}", lhs_reg, rhs_reg)); // compare float operands; the following cond_br branches on the flags
+            ctx.fused_branch_condition = Some(aarch64_float_condition(predicate)?);
+        }
+        Arch::X86_64 => {
+            let first_reg = match ctx.allocation.register_of(first) {
+                Some(reg) => reg,
+                None => {
+                    ctx.load_value_to_reg(first, "xmm1")?;
+                    "xmm1"
+                }
+            };
+            let second_operand = x86_float_operand(ctx, second)?;
+            ctx.emitter.instruction(&format!("ucomisd {}, {}", first_reg, second_operand)); // compare float operands; the following cond_br branches on the flags
+            ctx.fused_branch_condition = Some(x86_cond);
+        }
+    }
+    Ok(Some(()))
 }
 
 /// Returns the AArch64 condition for PHP float comparisons, excluding unordered NaN cases.
@@ -97,6 +142,10 @@ fn emit_x86_64_float_predicate_result(
 }
 
 /// Lowers a two-operand floating-point arithmetic instruction.
+///
+/// Operands are read in place from their allocated registers (or, on x86_64, straight from
+/// their frame slots), and the result is computed directly into the destination's register
+/// when it has one.
 pub(super) fn lower_float_binop(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -105,20 +154,71 @@ pub(super) fn lower_float_binop(
 ) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
-    let lhs_reg = secondary_float_reg(ctx.emitter.target.arch);
-    let rhs_reg = abi::float_result_reg(ctx.emitter);
-    require_float(ctx.load_value_to_reg(lhs, lhs_reg)?, inst)?;
-    require_float(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
+    require_float(ctx.value_php_type(lhs)?, inst)?;
+    require_float(ctx.value_php_type(rhs)?, inst)?;
+    let dst_reg = inst.result.and_then(|result| ctx.allocation.register_of(result));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, rhs_reg, lhs_reg, rhs_reg)); // compute the floating-point arithmetic result
+            let lhs_reg = float_operand_reg(ctx, lhs, "d1")?;
+            let rhs_reg = float_operand_reg(ctx, rhs, "d0")?;
+            let out = dst_reg.unwrap_or("d0");
+            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, out, lhs_reg, rhs_reg)); // compute the floating-point arithmetic result
+            if dst_reg.is_some() {
+                return Ok(());
+            }
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, lhs_reg, rhs_reg)); // update the left float scratch with the arithmetic result
-            ctx.emitter.instruction(&format!("movsd {}, {}", rhs_reg, lhs_reg)); // move the float arithmetic result back to the result register
+            let rhs_home = ctx.allocation.register_of(rhs);
+            // Accumulate in the destination register unless it is also the right operand.
+            let acc = match dst_reg {
+                Some(reg) if rhs_home != Some(reg) || lhs == rhs => reg,
+                _ => "xmm1",
+            };
+            let rhs_operand = x86_float_operand(ctx, rhs)?;
+            if ctx.allocation.register_of(lhs) != Some(acc) {
+                let lhs_operand = x86_float_operand(ctx, lhs)?;
+                if lhs_operand.starts_with("xmm") {
+                    ctx.emitter.instruction(&format!("movapd {}, {}", acc, lhs_operand)); // copy the left float operand into the accumulator
+                } else {
+                    ctx.emitter.instruction(&format!("movsd {}, {}", acc, lhs_operand)); // load the left float operand into the accumulator
+                }
+            }
+            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, acc, rhs_operand)); // apply the float arithmetic with the right operand
+            match dst_reg {
+                Some(reg) if reg == acc => return Ok(()),
+                Some(reg) => {
+                    ctx.emitter.instruction(&format!("movapd {}, {}", reg, acc)); // move the float result into its allocated register
+                    return Ok(());
+                }
+                None => {
+                    ctx.emitter.instruction(&format!("movapd xmm0, {}", acc)); // move the float result to the result register
+                }
+            }
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns a register holding a float operand on AArch64, loading it into `scratch` when spilled.
+fn float_operand_reg(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    scratch: &'static str,
+) -> Result<&'static str> {
+    if let Some(reg) = ctx.allocation.register_of(value) {
+        return Ok(reg);
+    }
+    ctx.load_value_to_reg(value, scratch)?;
+    Ok(scratch)
+}
+
+/// Returns an x86_64 operand naming a float value: its register or its frame slot.
+fn x86_float_operand(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<String> {
+    if let Some(reg) = ctx.allocation.register_of(value) {
+        return Ok(reg.to_string());
+    }
+    let offset = ctx.value_frame_offset(value)?;
+    Ok(format!("QWORD PTR [rbp - {}]", offset))
 }
 
 /// Lowers floating-point exponentiation through libc `pow`.
@@ -151,7 +251,7 @@ pub(super) fn lower_float_neg(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::X86_64 => {
             ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for subtraction
             ctx.emitter.instruction("subsd xmm1, xmm0");                        // compute 0.0 - operand as floating-point negation
-            ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the negated float back to the result register
+            ctx.emitter.instruction("movapd xmm0, xmm1");                       // move the negated float back to the result register
         }
     }
     store_if_result(ctx, inst)

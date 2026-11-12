@@ -1501,12 +1501,23 @@ disjoint from every register those volatile-safe lowerings touch:
 
 | Class | aarch64 int | aarch64 float | x86_64 int | x86_64 float |
 |---|---|---|---|---|
-| Caller-saved | `x12`–`x15` | `d16`–`d23` | `rsi`,`rdi`,`r8`,`r9` | `xmm2`–`xmm7` |
+| Caller-saved | `x12`–`x15` | `d16`–`d30` | `rsi`,`rdi`,`r8`,`r9` | `xmm2`–`xmm14` |
 | Callee-saved | `x21`–`x28` | `d8`–`d14` | `rbx` | (none) |
 
 This is especially valuable on x86_64, where the callee-saved integer pool is
 just `rbx` and there are no callee-saved XMM registers at all: call-free integer
 and float values can now use the caller-saved pools instead of always spilling.
+
+A value that does cross clobber points may still take a caller-saved register
+when it crosses no more of them than it has uses (`clobber_count <= weight`),
+after the callee-saved pool. The allocation then records, per clobbering
+instruction, a `CallSave` for every such value live there: codegen stores the
+register to the value's frame slot before the instruction (unless the
+instruction defines the value), treats the value as spilled while the
+instruction lowers (operands read the slot, a result defined there is stored to
+it), and reloads the register afterwards (unless the value dies there). A loop
+counter or accumulator in an inner loop free of calls thus stays in a register
+even though an outer loop calls a runtime helper.
 On x86_64 `r14` and `r15` are still never allocated — they are used as scratch by
 hand-written runtime routines and shared heap-marker codegen without
 ABI-compliant save/restore. A float that lives across a call on x86_64 still
@@ -1520,10 +1531,52 @@ registers.
 The prologue saves and the epilogue restores exactly the callee-saved registers
 the allocator used; caller-saved registers need neither.
 
-The first cut register-allocates only single-word `NonHeap` scalars (`I64`,
-`F64`) that are neither block parameters nor branch arguments, keeping the
-slot-based block-parameter moves and the ownership/GC cleanup paths unchanged.
-Generators and functions containing exception handlers fall back to all-spilled.
+The allocator register-allocates single-word `NonHeap` scalars (`I64`, `F64`),
+block parameters and branch arguments included. Each control-flow edge copies
+its arguments into the target's parameters as one **parallel move**
+(`emit_parallel_moves` in `codegen/lower_term.rs`): copies whose destination no
+pending copy still reads go first (register to register when both sides have
+one), and a cycle such as a loop-carried swap parks one source on the machine
+stack. This is safe because any value live across an edge is live at the
+target's entry, which is where the parameters are defined, so it never shares a
+register with a parameter of that edge. Generators (whose resume edges are
+implicit) and functions containing exception handlers fall back to all-spilled.
+
+Integer and bool constants are **rematerialized** (`ir_passes/remat.rs`): every
+read of one into a general-purpose register emits the immediate, and a constant
+whose uses are all integer arithmetic, integer compares, `store_local`, or edge
+copies is never emitted and never given a register. Integer arithmetic and
+compares take such constants as instruction immediates (32-bit on x86_64, 12-bit
+`add`/`sub`/`cmp` on AArch64), read register-allocated operands in place (and
+x86_64 frame slots as memory operands), and compute straight into the
+destination's register. Float arithmetic does the same; x86_64 register-to-
+register float copies use `movapd`, because `movsd xmm, xmm` only writes the low
+lane and chains a false dependency on the destination's old value. An `icmp`
+or an ordering `fcmp` (`<`, `<=`, `>`, `>=`) that only feeds the following
+`cond_br` leaves its result in the flags; float branches use conditions that are
+false for unordered (NaN) operands (`ja`/`jae` with swapped operands for `<`/`<=`
+on x86_64). Calls whose arguments are all `int`/`bool`/`float` values of the
+parameter's representation load them straight into the ABI argument registers
+(a value read as a call argument is never in a caller-saved register, so the
+loads cannot clobber a later argument).
+
+### Scalar local promotion (mem2reg)
+
+`ir_passes/mem2reg.rs` runs first in every per-function round and turns `int`
+and `float` PHP locals into SSA values, so loop counters, accumulators and
+parameters live in registers instead of being stored and reloaded around every
+statement. A slot qualifies when it is a plain `PhpLocal` without lifetime
+tracking that only `load_local`/`store_local` name, every load and stored value
+has the slot's representation, and no load result can reach the slot's address:
+by-reference call arguments are resolved by codegen back to the defining
+`load_local`, so a load consumed by anything other than a value-only operation,
+an array/hash/property data operation, or a by-value argument of a direct call
+(the module's parameter by-reference flags are recorded before the pass rounds)
+keeps the slot in memory. The pass inserts one entry-block load per slot for its
+initial contents, places block parameters on the iterated dominance frontier of
+the slot's stores where the slot is live (pruned SSA), and renames along the
+dominator tree. Functions with exception handlers or generator suspension points
+are skipped.
 
 ## Phase 02 Implementation Contract
 

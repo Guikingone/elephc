@@ -75,7 +75,17 @@ impl IrPass for DeadStore {
 /// `unset_local`, static-local or global access, list unpack, …) makes the slot
 /// ineligible because it could read or alias the slot in a way this pass does not
 /// model.
-fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> {
+pub(super) fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> {
+    eligible_slots_with(function, data, &|inst, _| op_is_value_only_consumer(inst.op))
+}
+
+/// Same as `eligible_slots`, with a caller-supplied test deciding whether an instruction
+/// reads a given operand (by position) purely as a value, so it cannot alias the slot.
+pub(super) fn eligible_slots_with(
+    function: &Function,
+    data: &DataPool,
+    reads_by_value: &dyn Fn(&crate::ir::Instruction, usize) -> bool,
+) -> HashSet<LocalSlotId> {
     let mut eligible: HashSet<LocalSlotId> = function
         .locals
         .iter()
@@ -99,7 +109,7 @@ fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> 
         return eligible;
     }
 
-    exclude_address_escaping_slots(function, &mut eligible);
+    exclude_address_escaping_slots(function, &mut eligible, reads_by_value);
     exclude_eval_literal_read_slots(function, data, &mut eligible);
     eligible
 }
@@ -155,7 +165,11 @@ fn exclude_eval_literal_read_slots(
 /// pass, any `load_local` result consumed by an instruction that is not a proven
 /// value-only consumer is treated as a potential address escape and the slot is
 /// excluded. Terminator uses never alias, so they are ignored.
-fn exclude_address_escaping_slots(function: &Function, eligible: &mut HashSet<LocalSlotId>) {
+fn exclude_address_escaping_slots(
+    function: &Function,
+    eligible: &mut HashSet<LocalSlotId>,
+    reads_by_value: &dyn Fn(&crate::ir::Instruction, usize) -> bool,
+) {
     let mut load_result_slot: HashMap<crate::ir::ValueId, LocalSlotId> = HashMap::new();
     for inst in &function.instructions {
         if inst.op != Op::LoadLocal {
@@ -176,12 +190,11 @@ fn exclude_address_escaping_slots(function: &Function, eligible: &mut HashSet<Lo
     }
 
     for inst in &function.instructions {
-        if op_is_value_only_consumer(inst.op) {
-            continue;
-        }
-        for operand in &inst.operands {
+        for (index, operand) in inst.operands.iter().enumerate() {
             if let Some(slot) = load_result_slot.get(operand) {
-                eligible.remove(slot);
+                if !reads_by_value(inst, index) {
+                    eligible.remove(slot);
+                }
             }
         }
     }
@@ -195,7 +208,7 @@ fn exclude_address_escaping_slots(function: &Function, eligible: &mut HashSet<Lo
 /// construction, closure capture, ref-arg materialization, property/array/iterator
 /// access, and any future opcode — is treated as a possible by-reference escape so
 /// the owning slot is left out of dead store elimination.
-fn op_is_value_only_consumer(op: Op) -> bool {
+pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
     use Op::*;
     matches!(
         op,

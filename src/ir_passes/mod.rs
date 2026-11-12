@@ -27,16 +27,18 @@ mod identity_arith;
 mod inline;
 mod intervals;
 mod licm;
+mod mem2reg;
 mod liveness;
 mod loops;
 mod peephole;
 mod regalloc;
+mod remat;
 mod rewrite;
 
 #[cfg(test)]
 mod tests;
 
-pub use allocation::{Allocation, Location};
+pub use allocation::{Allocation, CallSave, Location};
 pub use dominance::{compute_dominance, DominanceInfo};
 pub use driver::optimize_module;
 pub use intervals::{build_intervals, LiveInterval};
@@ -44,3 +46,4 @@ pub use liveness::{compute_liveness, LivenessInfo};
 pub(crate) use liveness::terminator_uses;
 pub use loops::{compute_loops, LoopInfo, NaturalLoop};
 pub use regalloc::allocate_registers;
+pub use remat::{rematerialized_consts, RematerializedConsts};

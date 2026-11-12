@@ -223,7 +223,7 @@ pub fn emit_reg_move(emitter: &mut Emitter, dst: &str, src: &str) {
         }
         Arch::X86_64 => {
             if dst_float && src_float {
-                emitter.instruction(&format!("movsd {}, {}", dst, src));        // move scalar double between XMM registers
+                emitter.instruction(&format!("movapd {}, {}", dst, src));       // copy the whole XMM register (avoids movsd's false dependency on dst)
             } else if dst_float || src_float {
                 emitter.instruction(&format!("movq {}, {}", dst, src));         // move 64-bit payload between GP and XMM
             } else {

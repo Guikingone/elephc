@@ -1159,10 +1159,19 @@ fn emit_static_property_default_value(
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let blocks = ctx.function.blocks.clone();
     let use_counts = value_use_counts(ctx.function);
+    collect_rematerialized_consts(ctx);
     for block in blocks {
         emit_block(ctx, &block, &use_counts)?;
     }
     Ok(())
+}
+
+/// Records integer/bool constants as rematerializable immediates and the constant
+/// instructions that need no emission (see `crate::ir_passes::rematerialized_consts`).
+fn collect_rematerialized_consts(ctx: &mut FunctionContext<'_>) {
+    let remat = crate::ir_passes::rematerialized_consts(ctx.function);
+    ctx.const_ints = remat.immediates;
+    ctx.skipped_consts = remat.skipped;
 }
 
 /// Counts operand and terminator uses of every value in `function`.
@@ -1183,7 +1192,7 @@ fn value_use_counts(function: &Function) -> std::collections::HashMap<ValueId, u
     counts
 }
 
-/// Returns the `icmp` result that `block`'s `cond_br` can branch on through the CPU flags:
+/// Returns the `icmp`/`fcmp` result that `block`'s `cond_br` can branch on through the CPU flags:
 /// the comparison must be the block's last instruction and its only use the branch condition.
 fn fusible_compare(
     function: &Function,
@@ -1194,7 +1203,7 @@ fn fusible_compare(
         return None;
     };
     let last = function.instruction(*block.instructions.last()?)?;
-    if last.op != Op::ICmp || last.result != Some(*cond) {
+    if !matches!(last.op, Op::ICmp | Op::FCmp) || last.result != Some(*cond) {
         return None;
     }
     (use_counts.get(cond).copied() == Some(1)).then_some(*cond)
@@ -1211,9 +1220,28 @@ fn emit_block(
         .label(&ctx.block_label(&block.name, block.id.as_raw()));
     ctx.fused_compare_value = fusible_compare(ctx.function, block, use_counts);
     ctx.fused_compare_predicate = None;
+    ctx.fused_branch_condition = None;
     for inst_id in &block.instructions {
+        if ctx.skipped_consts.contains(inst_id) {
+            continue;
+        }
         emit_instruction_source_marker(ctx, *inst_id)?;
+        let saves = ctx.allocation.call_saves(*inst_id).to_vec();
+        for save in &saves {
+            if save.store_before {
+                let offset = ctx.value_frame_offset(save.value)?;
+                abi::store_at_offset(ctx.emitter, save.reg, offset); // preserve a caller-saved register value across the clobbering instruction
+            }
+            ctx.allocation.suspend(save.value);
+        }
         lower_inst::lower_instruction(ctx, *inst_id)?;
+        for save in &saves {
+            ctx.allocation.resume(save.value, save.reg);
+            if save.reload_after {
+                let offset = ctx.value_frame_offset(save.value)?;
+                abi::load_at_offset(ctx.emitter, save.reg, offset); // reload the preserved caller-saved register value
+            }
+        }
     }
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))

@@ -19,6 +19,21 @@ fn aarch64() -> Target {
     Target::new(Platform::Linux, Arch::AArch64)
 }
 
+/// Emits an integer value the backend cannot rematerialize as an immediate (a `const_i64`
+/// typed `mixed`), so it competes for a register like any computed value.
+fn emit_opaque_i64(builder: &mut Builder<'_>, value: i64) -> ValueId {
+    builder
+        .emit(
+            Op::ConstI64,
+            vec![],
+            Some(Immediate::I64(value)),
+            IrType::I64,
+            PhpType::Mixed,
+            Ownership::NonHeap,
+        )
+        .expect("const_i64 produces a value")
+}
+
 /// Emits a float constant in the current block and returns its value.
 fn emit_const_f64(builder: &mut Builder<'_>, value: f64) -> ValueId {
     builder
@@ -44,8 +59,8 @@ fn straight_line_integers_use_caller_saved_registers() {
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let v0 = builder.emit_const_i64(1);
-        let v1 = builder.emit_const_i64(2);
+        let v0 = emit_opaque_i64(&mut builder, 1);
+        let v1 = emit_opaque_i64(&mut builder, 2);
         let v2 = builder.emit_iadd(v0, v1);
         builder.terminate(Terminator::Return { value: Some(v2) });
     }
@@ -82,7 +97,7 @@ fn register_pressure_forces_spills() {
         builder.set_entry(entry);
         builder.position_at_end(entry);
 
-        let consts: Vec<ValueId> = (0..COUNT).map(|i| builder.emit_const_i64(i as i64)).collect();
+        let consts: Vec<ValueId> = (0..COUNT).map(|i| emit_opaque_i64(&mut builder, i as i64)).collect();
         // Fold left so every constant stays live until its add: the first add
         // sees all later constants still pending, creating peak pressure.
         let mut acc = consts[0];
@@ -113,7 +128,7 @@ fn integers_and_floats_use_separate_pools() {
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let i = builder.emit_const_i64(1);
+        let i = emit_opaque_i64(&mut builder, 1);
         let f = emit_const_f64(&mut builder, 2.5);
         builder.terminate(Terminator::Return { value: Some(i) });
         (i, f)
@@ -131,10 +146,10 @@ fn integers_and_floats_use_separate_pools() {
     );
 }
 
-/// Block parameters and branch arguments stay in stack slots so the existing
-/// slot-based block-parameter moves remain correct.
+/// Block parameters and branch arguments compete for registers like any other value: the
+/// edge copy is a parallel move, so both may live in registers.
 #[test]
-fn block_parameters_and_branch_arguments_stay_spilled() {
+fn block_parameters_and_branch_arguments_use_registers() {
     let mut function = Function::new("params".to_string(), IrType::I64, PhpType::Int);
     let (arg, param) = {
         let mut builder = Builder::new(&mut function);
@@ -143,7 +158,7 @@ fn block_parameters_and_branch_arguments_stay_spilled() {
         builder.set_entry(entry);
 
         builder.position_at_end(entry);
-        let arg = builder.emit_const_i64(7);
+        let arg = emit_opaque_i64(&mut builder, 7);
         builder.terminate(Terminator::Br {
             target: body,
             args: vec![arg],
@@ -157,16 +172,30 @@ fn block_parameters_and_branch_arguments_stay_spilled() {
 
     let allocation = allocate_registers(&function, aarch64());
 
-    assert_eq!(
-        allocation.register_of(arg),
-        None,
-        "a branch argument must stay in its slot"
-    );
-    assert_eq!(
-        allocation.register_of(param),
-        None,
-        "a block parameter must stay in its slot"
-    );
+    assert!(allocation.register_of(arg).is_some(), "a branch argument gets a register");
+    assert!(allocation.register_of(param).is_some(), "a block parameter gets a register");
+}
+
+/// Integer constants whose every use reads an immediate are never given a register.
+#[test]
+fn rematerialized_constants_get_no_register() {
+    let mut function = Function::new("consts".to_string(), IrType::I64, PhpType::Int);
+    let (constant, sum) = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let opaque = emit_opaque_i64(&mut builder, 3);
+        let constant = builder.emit_const_i64(1);
+        let sum = builder.emit_iadd(opaque, constant);
+        builder.terminate(Terminator::Return { value: Some(sum) });
+        (constant, sum)
+    };
+
+    let allocation = allocate_registers(&function, aarch64());
+
+    assert_eq!(allocation.register_of(constant), None, "the constant is an immediate");
+    assert!(allocation.register_of(sum).is_some(), "computed values still get registers");
 }
 
 /// The x86_64 target used by these tests, exercising the caller-saved float
@@ -198,7 +227,7 @@ fn value_live_across_call_uses_callee_saved() {
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let v0 = builder.emit_const_i64(1);
+        let v0 = emit_opaque_i64(&mut builder, 1);
         emit_clobber_call(&mut builder); // clobber point between def and use
         let v1 = builder.emit_iadd(v0, v0); // v0 is live across the call
         builder.terminate(Terminator::Return { value: Some(v1) });
@@ -300,12 +329,12 @@ fn call_free_float_uses_caller_saved_xmm_on_x86_64() {
     );
 }
 
-/// A float value that lives across a call on x86_64 cannot be register-allocated
-/// (no callee-saved XMM and the caller-saved pool is clobbered by the call), so
-/// it stays spilled.
+/// A float live across a call on x86_64 (which has no callee-saved XMM registers) may use a
+/// caller-saved XMM register when it is used at least as often as it crosses calls; the call
+/// then saves it to its slot before and reloads it after.
 #[test]
-fn float_live_across_call_spills_on_x86_64() {
-    let mut function = Function::new("fspill".to_string(), IrType::F64, PhpType::Float);
+fn float_live_across_call_is_preserved_around_it_on_x86_64() {
+    let mut function = Function::new("fsave".to_string(), IrType::F64, PhpType::Float);
     let live = {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", vec![]);
@@ -329,10 +358,38 @@ fn float_live_across_call_spills_on_x86_64() {
 
     let allocation = allocate_registers(&function, x86_64());
 
+    let reg = allocation.register_of(live).expect("the float keeps a register");
+    assert!(reg.starts_with("xmm"), "a caller-saved XMM register, got {reg}");
+    let call = function.blocks[0].instructions[1];
+    let saves = allocation.call_saves(call);
+    assert_eq!(saves.len(), 1, "the call preserves exactly the live float");
+    assert_eq!(saves[0].value, live);
+    assert!(saves[0].store_before && saves[0].reload_after);
+}
+
+/// A value crossing more calls than it has uses stays spilled instead of paying a save and a
+/// reload around every call.
+#[test]
+fn rarely_used_value_across_many_calls_stays_spilled_on_x86_64() {
+    let mut function = Function::new("fspill".to_string(), IrType::F64, PhpType::Float);
+    let live = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let a = emit_const_f64(&mut builder, 1.5);
+        emit_clobber_call(&mut builder);
+        emit_clobber_call(&mut builder);
+        builder.terminate(Terminator::Return { value: Some(a) });
+        a
+    };
+
+    let allocation = allocate_registers(&function, x86_64());
+
     assert_eq!(
         allocation.register_of(live),
         None,
-        "a float live across a call on x86_64 must stay spilled"
+        "a float used once across two calls stays in its slot"
     );
 }
 
@@ -353,8 +410,8 @@ fn spill_heuristic_keeps_frequently_used_value() {
         builder.position_at_end(entry);
 
         // One value used many times: defined first, kept live to the end.
-        let hot = builder.emit_const_i64(1);
-        let fillers: Vec<ValueId> = (0..FILLERS).map(|i| builder.emit_const_i64(i as i64 + 2)).collect();
+        let hot = emit_opaque_i64(&mut builder, 1);
+        let fillers: Vec<ValueId> = (0..FILLERS).map(|i| emit_opaque_i64(&mut builder, i as i64 + 2)).collect();
         // Reference `hot` repeatedly so its use weight dominates.
         let mut acc = hot;
         for _ in 0..6 {
@@ -394,7 +451,7 @@ fn generator_functions_are_all_spilled() {
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let v0 = builder.emit_const_i64(1);
+        let v0 = emit_opaque_i64(&mut builder, 1);
         builder.terminate(Terminator::Return { value: Some(v0) });
     }
     function.flags.is_generator = true;

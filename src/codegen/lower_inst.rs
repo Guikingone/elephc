@@ -5703,6 +5703,9 @@ struct RefArgWriteback {
     source_slot: LocalSlotId,
     source_ty: PhpType,
     cell_offset: usize,
+    /// `Some(param_repr)` when a `mixed` caller local feeds a scalar by-reference parameter:
+    /// the temporary cell holds the unboxed scalar, re-boxed into the local after the call.
+    unboxed_param: Option<PhpType>,
 }
 
 /// Runtime dispatch path for EIR `RuntimeCall` instructions that mean ArrayAccess indexing.
@@ -6535,6 +6538,11 @@ fn materialize_direct_call_args_with_refs_and_borrowed_options(
             param_types.len()
         )));
     }
+    if borrowed_stack_mixed_args.is_empty() && !ref_params.iter().any(|by_ref| *by_ref) {
+        if let Some(materialization) = try_direct_scalar_call_args(ctx, args, param_types)? {
+            return Ok(materialization);
+        }
+    }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
     emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
@@ -6606,6 +6614,47 @@ fn materialize_direct_call_args_with_refs_and_borrowed_options(
         cleanup_bytes,
         borrowed_stack_arg_bytes,
     })
+}
+
+/// Loads all-scalar by-value call arguments straight into their ABI argument registers.
+///
+/// Applies when every argument is an `int`/`bool`/`float` whose representation already
+/// matches its parameter and every argument travels in a register. A value read as a call
+/// argument is never allocated to a caller-saved register (the call clobbers them at the
+/// value's last use), so loading the argument registers in order cannot overwrite a later
+/// argument's source. Returns `None` when the general stack-staged path is required.
+fn try_direct_scalar_call_args(
+    ctx: &mut FunctionContext<'_>,
+    args: &[ValueId],
+    param_types: &[PhpType],
+) -> Result<Option<CallArgMaterialization>> {
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, param_types, 0);
+    for ((value, param_ty), assignment) in args.iter().zip(param_types).zip(&assignments) {
+        let param_repr = param_ty.codegen_repr();
+        if !matches!(param_repr, PhpType::Int | PhpType::Bool | PhpType::Float)
+            || !assignment.in_register()
+            || ctx.raw_value_php_type(*value)?.codegen_repr() != param_repr
+            || ctx.value_php_type(*value)?.codegen_repr() != param_repr
+        {
+            return Ok(None);
+        }
+    }
+    for (value, assignment) in args.iter().zip(&assignments) {
+        let reg = if assignment.is_float {
+            abi::float_arg_reg_name(ctx.emitter.target, assignment.start_reg)
+        } else {
+            abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg)
+        };
+        ctx.load_value_to_reg(*value, reg)?;
+    }
+    Ok(Some(CallArgMaterialization {
+        overflow_bytes: 0,
+        ref_writebacks: Vec::new(),
+        cleanup_slots: Vec::new(),
+        cleanup_bytes: 0,
+        borrowed_stack_arg_bytes: 0,
+    }))
 }
 
 /// Loads hidden and visible static-method arguments, preserving by-reference locals.
@@ -7308,7 +7357,37 @@ fn plan_ref_arg_writebacks(
 ) -> Result<Vec<RefArgWriteback>> {
     let mut writebacks = Vec::new();
     for (param_index, value) in args.iter().enumerate() {
-        if !ref_params[param_index] || param_types[param_index].codegen_repr() != PhpType::Mixed {
+        if !ref_params[param_index] {
+            continue;
+        }
+        let param_repr = param_types[param_index].codegen_repr();
+        if matches!(param_repr, PhpType::Int | PhpType::Float | PhpType::Bool) {
+            // A `mixed` caller local (e.g. widened because `$i++` may overflow) passed to a
+            // scalar by-reference parameter: the callee reads and writes a raw scalar cell.
+            // The argument value may itself be a narrowed (`int`-typed) load of the slot, so
+            // the slot's storage type decides.
+            let Ok(source) = local_ref_arg_source(ctx, *value) else {
+                continue;
+            };
+            let source_ty = PhpType::Mixed;
+            if !matches!(
+                ctx.local_slot_representation(source.slot),
+                super::context::LocalSlotRepresentation::Raw
+            ) || ctx.local_php_type(source.slot)?.codegen_repr() != PhpType::Mixed
+            {
+                continue;
+            }
+            writebacks.push(RefArgWriteback {
+                param_index,
+                source_value: *value,
+                source_slot: source.slot,
+                source_ty,
+                cell_offset: 0,
+                unboxed_param: Some(param_repr),
+            });
+            continue;
+        }
+        if param_repr != PhpType::Mixed {
             continue;
         }
         let source_ty = ctx.raw_value_php_type(*value)?.codegen_repr();
@@ -7329,6 +7408,7 @@ fn plan_ref_arg_writebacks(
             source_slot: source.slot,
             source_ty,
             cell_offset: 0,
+            unboxed_param: None,
         });
     }
     Ok(writebacks)
@@ -7360,6 +7440,19 @@ fn emit_ref_arg_temp_cells(
 ) -> Result<()> {
     let total = writebacks.len();
     for (index, writeback) in writebacks.iter_mut().enumerate() {
+        if let Some(param_repr) = writeback.unboxed_param.clone() {
+            // Convert the borrowed Mixed local into the scalar cell the callee expects.
+            ctx.load_raw_local_to_result(writeback.source_slot)?;
+            move_int_result_to_first_arg(ctx);
+            abi::emit_call_label(ctx.emitter, mixed_cast_helper_for_scalar(&param_repr));
+            if param_repr == PhpType::Float {
+                abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
+            } else {
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            }
+            writeback.cell_offset = (total - index - 1) * 16;
+            continue;
+        }
         ctx.load_value_to_result(writeback.source_value)?;
         emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
         abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
@@ -7463,6 +7556,10 @@ fn emit_ref_arg_writebacks(
     writebacks: &[RefArgWriteback],
 ) -> Result<()> {
     for writeback in writebacks {
+        if let Some(param_repr) = writeback.unboxed_param.as_ref() {
+            emit_unboxed_ref_arg_writeback(ctx, writeback, param_repr)?;
+            continue;
+        }
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -7477,6 +7574,37 @@ fn emit_ref_arg_writebacks(
     }
     abi::emit_release_temporary_stack(ctx.emitter, writebacks.len() * 16);
     Ok(())
+}
+
+/// Re-boxes a scalar by-reference cell into its `mixed` caller local after the call,
+/// releasing the local's previous box.
+fn emit_unboxed_ref_arg_writeback(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+    param_repr: &PhpType,
+) -> Result<()> {
+    if *param_repr == PhpType::Float {
+        let float_reg = abi::float_result_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, float_reg, writeback.cell_offset);
+    } else {
+        let int_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, writeback.cell_offset);
+    }
+    emit_box_current_value_as_mixed(ctx.emitter, param_repr);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_raw_local_to_result(writeback.source_slot)?;
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.store_current_result_to_local(writeback.source_slot)
+}
+
+/// Returns the runtime helper converting a Mixed cell (first argument) to a scalar.
+fn mixed_cast_helper_for_scalar(repr: &PhpType) -> &'static str {
+    match repr {
+        PhpType::Float => "__rt_mixed_cast_float",
+        PhpType::Bool => "__rt_mixed_cast_bool",
+        _ => "__rt_mixed_cast_int",
+    }
 }
 
 /// Returns the low payload register produced by `__rt_mixed_unbox` on the active target.
@@ -7718,26 +7846,57 @@ pub(super) fn direct_call_stack_pad_bytes(
 }
 
 /// Lowers a signed integer comparison into a boolean result value.
+///
+/// Operands are compared in place (allocated register, x86_64 memory operand, or immediate);
+/// when the result only feeds the next `cond_br`, only the flags are produced.
 fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    use arithmetic::{aarch64_int_reg, int_operand, x86_int_operand_text, IntOperand};
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let predicate = expect_cmp_predicate(inst)?;
+    let lhs_op = int_operand(ctx, lhs, inst)?;
+    let rhs_op = int_operand(ctx, rhs, inst)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
-    require_integer_like(ctx.load_value_to_reg(lhs, result_reg)?, inst)?;
-    require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let lhs_reg = aarch64_int_reg(ctx, lhs_op, "x0");
+            let rhs_text = match rhs_op {
+                IntOperand::Imm(value) if (0..=4095).contains(&value) => format!("#{}", value),
+                other => aarch64_int_reg(ctx, other, "x10").to_string(),
+            };
+            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_text)); // compare signed integer operands for the EIR predicate
+        }
+        Arch::X86_64 => {
+            let lhs_text = match lhs_op {
+                IntOperand::Reg(reg) => reg.to_string(),
+                other => {
+                    let text = x86_int_operand_text(other);
+                    if matches!(other, IntOperand::Imm(_)) {
+                        abi::emit_load_int_immediate(ctx.emitter, "rax", match other { IntOperand::Imm(v) => v, _ => 0 });
+                    } else {
+                        ctx.emitter.instruction(&format!("mov rax, {}", text)); // load the left integer operand for the comparison
+                    }
+                    "rax".to_string()
+                }
+            };
+            let rhs_text = match rhs_op {
+                IntOperand::Imm(value) if i32::try_from(value).is_err() => {
+                    abi::emit_load_int_immediate(ctx.emitter, "r10", value);
+                    "r10".to_string()
+                }
+                other => x86_int_operand_text(other),
+            };
+            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_text, rhs_text)); // compare signed integer operands for the EIR predicate
+        }
+    }
     if inst.result.is_some() && ctx.fused_compare_value == inst.result {
         // Validate now so the fused branch can only see supported predicates.
         aarch64_condition(predicate)?;
-        ctx.emitter
-            .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands; the following cond_br branches on the flags
         ctx.fused_compare_predicate = Some(predicate);
         return Ok(());
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
             ctx.emitter.instruction(&format!(
                 "cset {}, {}",
                 result_reg,
@@ -7745,8 +7904,6 @@ fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             )); // materialize the predicate result as 0 or 1
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
             ctx.emitter
                 .instruction(&format!("set{} al", x86_64_condition(predicate)?)); // materialize the predicate result in the low byte
             ctx.emitter

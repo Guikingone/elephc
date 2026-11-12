@@ -82,8 +82,12 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             else_target,
             else_args,
         } => {
-            let fused = match (ctx.fused_compare_value.take(), ctx.fused_compare_predicate.take()) {
-                (Some(value), Some(predicate)) if value == *cond => Some(predicate),
+            let fused_value = ctx.fused_compare_value.take();
+            let fused_predicate = ctx.fused_compare_predicate.take();
+            let fused_raw = ctx.fused_branch_condition.take();
+            let fused = match (fused_value, fused_predicate, fused_raw) {
+                (Some(value), Some(predicate), _) if value == *cond => Some(Ok(predicate)),
+                (Some(value), None, Some(raw)) if value == *cond => Some(Err(raw)),
                 _ => None,
             };
             if fused.is_none() {
@@ -96,7 +100,11 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
             match fused {
-                Some(predicate) => emit_branch_on_flags(ctx, predicate, &then_edge)?,
+                Some(Ok(predicate)) => emit_branch_on_flags(ctx, predicate, &then_edge)?,
+                Some(Err(raw)) => match ctx.emitter.target.arch {
+                    Arch::AArch64 => ctx.emitter.instruction(&format!("b.{} {}", raw, then_edge)), // branch on the fused float comparison flags
+                    Arch::X86_64 => ctx.emitter.instruction(&format!("j{} {}", raw, then_edge)), // branch on the fused float comparison flags
+                },
                 None => abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge),
             }
             abi::emit_jump(ctx.emitter, &else_edge);
@@ -287,6 +295,12 @@ fn materialize_block_args(
     if args.is_empty() {
         return Ok(());
     }
+    if params
+        .iter()
+        .all(|param| matches!(value_ir_type(ctx, *param), Ok(IrType::I64 | IrType::F64 | IrType::Heap(_))))
+    {
+        return emit_parallel_moves(ctx, &params, args);
+    }
     let mut arg_types = Vec::with_capacity(args.len());
     for arg in args {
         let ty = ctx.load_value_to_result(*arg)?;
@@ -298,6 +312,105 @@ fn materialize_block_args(
         ctx.store_result_value(*param)?;
     }
     Ok(())
+}
+
+/// Home of a single-word SSA value: an allocated register or a frame slot offset.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordHome {
+    Reg(&'static str),
+    Slot(usize),
+    Const(i64),
+}
+
+/// Returns where a single-word value lives.
+fn word_home(ctx: &FunctionContext<'_>, value: ValueId) -> Result<WordHome> {
+    if let Some(imm) = ctx.const_int(value) {
+        return Ok(WordHome::Const(imm));
+    }
+    match ctx.allocation.register_of(value) {
+        Some(reg) => Ok(WordHome::Reg(reg)),
+        None => Ok(WordHome::Slot(ctx.value_frame_offset(value)?)),
+    }
+}
+
+/// Copies single-word block arguments into their parameters as one parallel move.
+///
+/// Moves whose destination no pending move still reads are emitted directly (register to
+/// register when possible, otherwise through the class's result register); a cycle is broken
+/// by parking one source on the machine stack and writing its destination last.
+fn emit_parallel_moves(ctx: &mut FunctionContext<'_>, params: &[ValueId], args: &[ValueId]) -> Result<()> {
+    let mut pending: Vec<(WordHome, WordHome, bool)> = Vec::with_capacity(args.len());
+    for (param, arg) in params.iter().zip(args.iter()) {
+        let dst = word_home(ctx, *param)?;
+        let src = word_home(ctx, *arg)?;
+        if dst != src {
+            let is_float = value_ir_type(ctx, *param)? == IrType::F64;
+            pending.push((dst, src, is_float));
+        }
+    }
+    let mut parked: Vec<(WordHome, bool)> = Vec::new();
+    while !pending.is_empty() {
+        let ready = pending
+            .iter()
+            .position(|(dst, _, _)| !pending.iter().any(|(_, src, _)| src == dst));
+        match ready {
+            Some(index) => {
+                let (dst, src, is_float) = pending.remove(index);
+                emit_word_move(ctx, dst, src, is_float);
+            }
+            None => {
+                let (dst, src, is_float) = pending.remove(0);
+                let temp = word_temp(ctx, is_float);
+                emit_word_move(ctx, WordHome::Reg(temp), src, is_float);
+                if is_float {
+                    abi::emit_push_float_reg(ctx.emitter, temp);
+                } else {
+                    abi::emit_push_reg(ctx.emitter, temp);
+                }
+                parked.push((dst, is_float));
+            }
+        }
+    }
+    while let Some((dst, is_float)) = parked.pop() {
+        let temp = word_temp(ctx, is_float);
+        if is_float {
+            abi::emit_pop_float_reg(ctx.emitter, temp);
+        } else {
+            abi::emit_pop_reg(ctx.emitter, temp);
+        }
+        emit_word_move(ctx, dst, WordHome::Reg(temp), is_float);
+    }
+    Ok(())
+}
+
+/// Returns the scratch register used to route one word of the given class.
+fn word_temp(ctx: &FunctionContext<'_>, is_float: bool) -> &'static str {
+    if is_float {
+        abi::float_result_reg(ctx.emitter)
+    } else {
+        abi::int_result_reg(ctx.emitter)
+    }
+}
+
+/// Emits one word copy between two homes.
+fn emit_word_move(ctx: &mut FunctionContext<'_>, dst: WordHome, src: WordHome, is_float: bool) {
+    match (dst, src) {
+        (WordHome::Reg(dst), WordHome::Reg(src)) => abi::emit_reg_move(ctx.emitter, dst, src),
+        (WordHome::Reg(dst), WordHome::Slot(offset)) => abi::load_at_offset(ctx.emitter, dst, offset),
+        (WordHome::Slot(offset), WordHome::Reg(src)) => abi::store_at_offset(ctx.emitter, src, offset),
+        (WordHome::Reg(dst), WordHome::Const(imm)) => abi::emit_load_int_immediate(ctx.emitter, dst, imm),
+        (WordHome::Slot(offset), WordHome::Const(imm)) => {
+            let temp = word_temp(ctx, false);
+            abi::emit_load_int_immediate(ctx.emitter, temp, imm);
+            abi::store_at_offset(ctx.emitter, temp, offset);
+        }
+        (WordHome::Const(_), _) => {}
+        (WordHome::Slot(dst), WordHome::Slot(src)) => {
+            let temp = word_temp(ctx, is_float);
+            abi::load_at_offset(ctx.emitter, temp, src);
+            abi::store_at_offset(ctx.emitter, temp, dst);
+        }
+    }
 }
 
 /// Validates that an edge supplies one storage-compatible value for each target block parameter.
@@ -417,8 +530,8 @@ mod tests {
     fn br_arguments_are_copied_to_target_params() {
         let asm = generate_branch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
 
-        assert!(asm.contains("ldur x0, [x29, #-16]"), "{asm}");
-        assert!(asm.contains("stur x0, [x29, #-8]"), "{asm}");
+        // The constant argument is rematerialized straight into the parameter's home.
+        assert!(asm.contains(", #7"), "{asm}");
     }
 
     /// Verifies conditional branch arguments use per-edge copy stubs.

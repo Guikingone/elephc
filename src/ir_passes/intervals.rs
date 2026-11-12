@@ -40,6 +40,10 @@ pub struct LiveInterval {
     /// up to and including its last use). Such intervals may use caller-saved
     /// registers, which need no prologue save/restore.
     pub call_free: bool,
+    /// Number of clobber points (instructions or terminators whose lowering may clobber a
+    /// caller-saved register) inside `[start, end]`. A caller-saved register held across them
+    /// is saved and reloaded around each one.
+    pub clobber_count: u32,
 }
 
 /// Linear position numbering for a function: where each block's parameters,
@@ -166,11 +170,38 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
                 end,
                 weight: weights.get(&value).copied().unwrap_or(0),
                 call_free: is_call_free(&clobbers, start, end),
+                clobber_count: clobbers_within(&clobbers, start, end),
             }
         })
         .collect();
     intervals.sort_by_key(|iv| (iv.start, iv.value.as_raw()));
     intervals
+}
+
+/// Counts the clobber positions in the closed range `[start, end]`.
+fn clobbers_within(clobbers: &[u32], start: u32, end: u32) -> u32 {
+    let lo = clobbers.partition_point(|&pos| pos < start);
+    let hi = clobbers.partition_point(|&pos| pos <= end);
+    (hi - lo) as u32
+}
+
+/// Returns every clobbering instruction of `func` with its linear position, in position order.
+///
+/// Uses the same numbering as `build_intervals`, so a position can be compared against
+/// interval bounds.
+pub fn clobber_instructions(func: &Function) -> Vec<(u32, InstId)> {
+    let numbering = number_positions(func);
+    let mut out = Vec::new();
+    for &block_id in &numbering.order {
+        let block = func.block(block_id).expect("ordered block exists");
+        for inst_id in &block.instructions {
+            let inst = func.instruction(*inst_id).expect("valid instruction");
+            if !op_is_volatile_safe(inst.op) {
+                out.push((numbering.inst_pos[inst_id], *inst_id));
+            }
+        }
+    }
+    out
 }
 
 /// Returns true when no clobber position lies in the closed range
