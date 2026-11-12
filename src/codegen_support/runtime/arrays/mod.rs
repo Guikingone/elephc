@@ -147,6 +147,7 @@ mod heap_kind;
 mod heap_free;
 mod in_array_mixed_int;
 mod ksort;
+mod hash_sort;
 mod natsort;
 mod object_free_deep;
 mod range;
@@ -425,6 +426,7 @@ pub use hash_unset::emit_hash_unset;
 pub use heap_alloc::emit_heap_alloc;
 /// Number of segregated heap free-list bins (see `heap_alloc`).
 pub(crate) use heap_alloc::HEAP_BIN_COUNT;
+pub(crate) use hash_sort::{HASH_SORT_BY_VALUE, HASH_SORT_DESCENDING, HASH_SORT_STRING};
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;
 /// Emit heap debug live check helper.
@@ -445,6 +447,7 @@ pub use iterable_unsupported_kind::emit_iterable_unsupported_kind;
 pub use iterable_write_stdout::emit_iterable_write_stdout;
 /// Emit iterable write to stdout helper.
 pub use ksort::emit_ksort;
+pub use hash_sort::emit_hash_sort;
 /// Emit key sort helper.
 pub use natsort::emit_natsort;
 /// Emit natural sort helper.

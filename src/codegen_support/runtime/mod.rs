@@ -10,6 +10,7 @@
 //! - Keep this surface small: runtime codegen imports these re-exports instead of reaching into leaf emitters directly.
 
 mod arrays;
+pub(crate) use arrays::{HASH_SORT_BY_VALUE, HASH_SORT_DESCENDING, HASH_SORT_STRING};
 mod buffers;
 mod callables;
 mod data;

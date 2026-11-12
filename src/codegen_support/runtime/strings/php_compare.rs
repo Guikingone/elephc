@@ -9,6 +9,8 @@
 //! - Reuses `__rt_mixed_unbox`/`__rt_str_to_number` for PHP numeric-string detection,
 //!   `__rt_mixed_cast_float` for the numeric branch, and `__rt_mixed_cast_string` +
 //!   `__rt_strcmp` for the lexicographic fallback. Returns a normalized sign in x0/rax.
+//! - The stringified operands of the lexicographic branch are owned copies for string payloads
+//!   and are released after the comparison (`__rt_decref_any` skips scratch and static strings).
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -110,6 +112,7 @@ pub fn emit_php_compare(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #16]");                               // save the left string pointer and length
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the right boxed operand
     emitter.instruction("bl __rt_mixed_cast_string");                           // x1=ptr, x2=len for the right string
+    emitter.instruction("str x1, [sp, #8]");                                    // keep the right string pointer for its release
     emitter.instruction("mov x3, x1");                                          // right pointer into the third strcmp argument
     emitter.instruction("mov x4, x2");                                          // right length into the fourth strcmp argument
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload left pointer/length into the first two strcmp arguments
@@ -117,6 +120,13 @@ pub fn emit_php_compare(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // normalize the difference to a comparison sign
     emitter.instruction("cset x0, gt");                                         // 1 when left is greater than right
     emitter.instruction("csinv x0, x0, xzr, ge");                               // keep 1/0 for greater/equal, otherwise -1 for less
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the sign across the releases
+    // String payloads were stringified into owned persisted copies: release both.
+    emitter.instruction("ldr x0, [sp, #16]");                                   // left string
+    emitter.instruction("bl __rt_decref_any");                                  // release it (scratch/static strings are skipped)
+    emitter.instruction("ldr x0, [sp, #8]");                                    // right string
+    emitter.instruction("bl __rt_decref_any");                                  // release it (scratch/static strings are skipped)
+    emitter.instruction("ldr x0, [sp, #0]");                                    // comparison sign
 
     emitter.label("__rt_php_compare_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -224,21 +234,24 @@ fn emit_php_compare_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the left string length
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
     emitter.instruction("call __rt_mixed_cast_string");                         // rax=ptr, rdx=len for the right string
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // keep the right string pointer for its release
     emitter.instruction("mov rcx, rdx");                                        // right length into the fourth strcmp argument
     emitter.instruction("mov rdx, rax");                                        // right pointer into the third strcmp argument
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // left pointer into the first strcmp argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // left length into the second strcmp argument
     emitter.instruction("call __rt_strcmp");                                    // rax = byte/length difference
+    emitter.instruction("xor ecx, ecx");                                        // equal strings produce sign 0
     emitter.instruction("test rax, rax");                                       // normalize the difference to a comparison sign
-    emitter.instruction("jg __rt_php_compare_strgt_linux_x86_64");              // left greater than right
-    emitter.instruction("jl __rt_php_compare_strlt_linux_x86_64");              // left less than right
-    emitter.instruction("xor rax, rax");                                        // equal strings produce sign 0
-    emitter.instruction("jmp __rt_php_compare_done_linux_x86_64");              // return the equal sign
-    emitter.label("__rt_php_compare_strgt_linux_x86_64");
-    emitter.instruction("mov rax, 1");                                          // greater strings produce sign 1
-    emitter.instruction("jmp __rt_php_compare_done_linux_x86_64");              // return the greater sign
-    emitter.label("__rt_php_compare_strlt_linux_x86_64");
-    emitter.instruction("mov rax, -1");                                         // lesser strings produce sign -1
+    emitter.instruction("setg cl");                                             // greater strings produce sign 1
+    emitter.instruction("mov rdx, -1");                                         // lesser strings produce sign -1
+    emitter.instruction("cmovl rcx, rdx");                                      // select -1 for lesser strings
+    emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // keep the sign across the releases
+    // String payloads were stringified into owned persisted copies: release both.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // left string
+    emitter.instruction("call __rt_decref_any");                                // release it (scratch/static strings are skipped)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // right string
+    emitter.instruction("call __rt_decref_any");                                // release it (scratch/static strings are skipped)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // comparison sign
 
     emitter.label("__rt_php_compare_done_linux_x86_64");
     emitter.instruction("add rsp, 48");                                         // release the helper frame

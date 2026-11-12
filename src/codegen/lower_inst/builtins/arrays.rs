@@ -11,6 +11,7 @@
 //! - Associative key filters require hash operands because their runtime helpers copy hash entries.
 
 use crate::codegen::platform::Arch;
+use crate::codegen_support::runtime::{HASH_SORT_BY_VALUE, HASH_SORT_DESCENDING, HASH_SORT_STRING};
 use crate::codegen::{
     abi, callable_descriptor, callable_dispatch, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed,
@@ -1805,22 +1806,95 @@ pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 
 /// Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
 pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if receiver_is_hash(ctx, inst)? {
+        return lower_hash_sort(ctx, inst, "asort", HASH_SORT_BY_VALUE);
+    }
     lower_indexed_array_sort(ctx, inst, "asort", "__rt_asort", None)
 }
 
 /// Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
 pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if receiver_is_hash(ctx, inst)? {
+        return lower_hash_sort(ctx, inst, "arsort", HASH_SORT_BY_VALUE | HASH_SORT_DESCENDING);
+    }
     lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort", None)
 }
 
 /// Lowers `ksort()` through the key-sort helper surface.
 pub(crate) fn lower_ksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if receiver_is_hash(ctx, inst)? {
+        return lower_hash_sort(ctx, inst, "ksort", 0);
+    }
     lower_array_key_sort(ctx, inst, "ksort", "__rt_ksort")
 }
 
 /// Lowers `krsort()` through the reverse key-sort helper surface.
 pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if receiver_is_hash(ctx, inst)? {
+        return lower_hash_sort(ctx, inst, "krsort", HASH_SORT_DESCENDING);
+    }
     lower_array_key_sort(ctx, inst, "krsort", "__rt_krsort")
+}
+
+/// Returns whether `value` is defined by `const_i64 expected`.
+fn value_is_const_i64(ctx: &FunctionContext<'_>, value: ValueId, expected: i64) -> bool {
+    let Some(crate::ir::ValueDef::Instruction { inst, .. }) = ctx.function.value(value).map(|v| v.def) else {
+        return false;
+    };
+    ctx.function.instruction(inst).is_some_and(|inst| {
+        inst.op == Op::ConstI64 && inst.immediate == Some(crate::ir::Immediate::I64(expected))
+    })
+}
+
+/// Returns whether a sort builtin's receiver is an associative array.
+fn receiver_is_hash(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    let array = expect_operand(inst, 0)?;
+    Ok(matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::AssocArray { .. }))
+}
+
+/// Lowers `ksort`/`krsort`/`asort`/`arsort` on an associative array: splits a shared table,
+/// stores the unique table back to its source, and reorders its insertion chain with the
+/// stable `__rt_hash_sort` (keys are preserved; the default `SORT_REGULAR` flags apply).
+fn lower_hash_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    mode: i64,
+) -> Result<()> {
+    ensure_arg_count_between(inst, name, 1, 2)?;
+    let mut mode = mode;
+    if let Some(&flags) = inst.operands.get(1) {
+        if value_is_const_i64(ctx, flags, 2) {
+            mode |= HASH_SORT_STRING; // SORT_STRING
+        } else if !value_is_const_i64(ctx, flags, 0) {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} on an associative array with flags other than SORT_REGULAR or SORT_STRING",
+                name
+            )));
+        }
+    }
+    let array = expect_operand(inst, 0)?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    let (table_reg, mode_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    ctx.load_value_to_reg(array, table_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    ctx.writeback_global_array_source(array)?;
+    ctx.load_value_to_reg(array, table_reg)?;
+    abi::emit_load_int_immediate(ctx.emitter, mode_reg, mode);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_sort");
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.

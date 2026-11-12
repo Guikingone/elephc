@@ -295,3 +295,48 @@ echo fgets($f), fread($f, 3), "|", fgetc($f), "|", ftell($f), "\n";
     let out = compile_and_run(&source);
     assert_eq!(out, "2- 3- 1- 4- 10E a\nbb\n|\n|6\n");
 }
+
+/// `ksort`/`krsort`/`asort`/`arsort` reorder associative arrays with PHP 8 `SORT_REGULAR`
+/// rules (mixed int/string keys, numeric strings, stable ties) and leave copies untouched.
+#[test]
+fn test_hash_sorts_match_php_and_keep_copies() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = ["b" => 3, "a" => 1, "10" => 2, "9" => 2, "x1" => 1, "1.5" => 7, "z" => 3];
+$c = $m;
+ksort($m); echo json_encode($m), "\n";
+krsort($m); echo json_encode($m), "\n";
+asort($m); echo json_encode($m), "\n";
+arsort($m); echo json_encode($m), "\n";
+echo json_encode($c), "\n";
+$s = ["pear" => "b", "apple" => "a", "fig" => "B", "kiwi" => "10", "lime" => "9", "plum" => "a"];
+asort($s); echo json_encode($s), "\n";
+ksort($s, SORT_STRING); echo implode(",", array_keys($s)), "\n";
+"#,
+    );
+    assert_heap_clean(
+        out,
+        concat!(
+            "{\"1.5\":7,\"9\":2,\"10\":2,\"a\":1,\"b\":3,\"x1\":1,\"z\":3}\n",
+            "{\"z\":3,\"x1\":1,\"b\":3,\"a\":1,\"10\":2,\"9\":2,\"1.5\":7}\n",
+            "{\"x1\":1,\"a\":1,\"10\":2,\"9\":2,\"z\":3,\"b\":3,\"1.5\":7}\n",
+            "{\"1.5\":7,\"z\":3,\"b\":3,\"10\":2,\"9\":2,\"x1\":1,\"a\":1}\n",
+            "{\"b\":3,\"a\":1,\"10\":2,\"9\":2,\"x1\":1,\"1.5\":7,\"z\":3}\n",
+            "{\"lime\":\"9\",\"kiwi\":\"10\",\"fig\":\"B\",\"apple\":\"a\",\"plum\":\"a\",\"pear\":\"b\"}\n",
+            "apple,fig,kiwi,lime,pear,plum\n",
+        ),
+    );
+}
+
+/// PHP 8 `<=>` on non-numeric strings releases the stringified operands it compares.
+#[test]
+fn test_mixed_string_spaceship_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["x" . $argc, "b", 10, "10", 9.5, "abc"];
+for ($i = 0; $i < 6; $i++) { for ($j = 0; $j < 6; $j++) { echo $a[$i] <=> $a[$j]; } }
+echo "\n";
+"#,
+    );
+    assert_heap_clean(out, "011111-101111-1-1001-1-1-1001-1-1-1-1-10-1-1-11110\n");
+}
