@@ -1180,12 +1180,19 @@ fn collect_rematerialized_consts(ctx: &mut FunctionContext<'_>) {
 /// with an overflow fallback (the cast and the release are then skipped).
 fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
     let function = ctx.function;
+    // Values whose consumer takes ownership: explicit releases, direct stores, and values that
+    // leave the block through a terminator (returns and branch arguments).
     ctx.released_values = function
         .instructions
         .iter()
-        .filter(|inst| inst.op == Op::Release)
+        .filter(|inst| matches!(inst.op, Op::Release | Op::StoreLocal))
         .filter_map(|inst| inst.operands.first().copied())
         .collect();
+    for block in &function.blocks {
+        if let Some(term) = &block.terminator {
+            ctx.released_values.extend(crate::ir_passes::terminator_uses(term));
+        }
+    }
     let mut use_counts: std::collections::HashMap<ValueId, usize> = std::collections::HashMap::new();
     for inst in &function.instructions {
         for operand in &inst.operands {

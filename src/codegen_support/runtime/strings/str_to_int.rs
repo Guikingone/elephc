@@ -60,7 +60,26 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
     emitter.instruction("b __rt_str_to_int_done");                              // skip the float-truncation path
 
     emitter.label("__rt_str_to_int_float");
+    // libc also accepts hex (`0x1A`), `inf` and `nan`, which are not PHP numeric strings:
+    // when the integer parse stopped at such a letter the integer prefix is the answer.
+    emitter.instruction("ldr x10, [sp, #0]");                                   // where the integer parse stopped
+    emitter.instruction("ldrb w11, [x10]");                                     // the first byte it rejected
+    emitter.instruction("orr w11, w11, #0x20");                                 // fold ASCII letters to lowercase
+    for letter in [b'x', b'i', b'n'] {
+        emitter.instruction(&format!("cmp w11, #{}", letter));                  // a libc-only numeric spelling?
+        emitter.instruction("b.eq __rt_str_to_int_prefix");                     // yes: keep the integer prefix
+    }
+    emitter.instruction("fmov x11, d0");                                        // parsed double bits
+    emitter.instruction("ubfx x11, x11, #52, #11");                             // biased exponent
+    emitter.instruction("cmp x11, #2047");                                      // overflowed to infinity (e.g. "1e400")?
+    emitter.instruction("b.eq __rt_str_to_int_zero");                           // PHP converts a non-finite numeric string to 0
     abi::emit_float_result_to_int_result_raw(emitter);                              // truncate the parsed double in d0 toward zero for PHP float-string casts
+    emitter.instruction("b __rt_str_to_int_done");                              // result ready
+    emitter.label("__rt_str_to_int_prefix");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the exact integer-form value
+    emitter.instruction("b __rt_str_to_int_done");                              // result ready
+    emitter.label("__rt_str_to_int_zero");
+    emitter.instruction("mov x0, #0");                                          // non-finite numeric string
 
     emitter.label("__rt_str_to_int_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame pointer and return address
@@ -107,6 +126,20 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_str_to_int_done_linux_x86_64");               // skip the float-truncation path
 
     emitter.label("__rt_str_to_int_float_linux_x86_64");
+    // libc also accepts hex (`0x1A`), `inf` and `nan`, which are not PHP numeric strings:
+    // when the integer parse stopped at such a letter the integer prefix is the answer.
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // where the integer parse stopped
+    emitter.instruction("movzx r9d, BYTE PTR [r8]");                            // the first byte it rejected
+    emitter.instruction("or r9d, 0x20");                                        // fold ASCII letters to lowercase
+    for letter in [b'x', b'i', b'n'] {
+        emitter.instruction(&format!("cmp r9d, {}", letter));                   // a libc-only numeric spelling?
+        emitter.instruction("je __rt_str_to_int_prefix_linux_x86_64");          // yes: keep the integer prefix
+    }
+    emitter.instruction("movq r8, xmm0");                                       // parsed double bits
+    emitter.instruction("shr r8, 52");                                          // drop the significand
+    emitter.instruction("and r8d, 2047");                                       // biased exponent
+    emitter.instruction("cmp r8d, 2047");                                       // overflowed to infinity (e.g. "1e400")?
+    emitter.instruction("je __rt_str_to_int_zero_linux_x86_64");                // PHP converts a non-finite numeric string to 0
     abi::emit_float_result_to_int_result_raw(emitter);                              // truncate the parsed double in xmm0 toward zero for PHP float-string casts
     emitter.instruction("cmp rax, 1");                                          // overflows only for the out-of-range "integer indefinite" value
     emitter.instruction("jno __rt_str_to_int_done_linux_x86_64");               // in range: keep the truncation
@@ -114,6 +147,12 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r8, r8");                                         // negative overflow?
     emitter.instruction("js __rt_str_to_int_done_linux_x86_64");                // yes: numeric strings saturate to PHP_INT_MIN
     emitter.instruction("mov rax, 0x7fffffffffffffff");                         // positive overflow saturates to PHP_INT_MAX like AArch64's fcvtzs
+    emitter.instruction("jmp __rt_str_to_int_done_linux_x86_64");               // result ready
+    emitter.label("__rt_str_to_int_prefix_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the exact integer-form value
+    emitter.instruction("jmp __rt_str_to_int_done_linux_x86_64");               // result ready
+    emitter.label("__rt_str_to_int_zero_linux_x86_64");
+    emitter.instruction("xor eax, eax");                                        // non-finite numeric string
 
     emitter.label("__rt_str_to_int_done_linux_x86_64");
     emitter.instruction("add rsp, 48");                                         // release the helper frame

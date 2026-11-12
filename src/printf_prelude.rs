@@ -33,6 +33,9 @@ pub const PRINTF_PRELUDE_FUNCTIONS: &[&str] = &[
     "__elephc_vprintf",
     "__elephc_fprintf",
     "__elephc_vfprintf",
+    "__elephc_sprintf_all",
+    "__elephc_printf_all",
+    "__elephc_fprintf_all",
 ];
 
 /// The shared helpers of the elephc-PHP formatted-output prelude.
@@ -71,11 +74,6 @@ function __elephc_printf_base(int $n, int $bits, bool $upper): string {
 function __elephc_printf_c(string $format, float $value): string {
     return sprintf($format, $value);
 }
-function __elephc_printf_exp(string $c): string {
-    $e = strrpos($c, 'e');
-    $exp = (int) substr($c, $e + 2);
-    return substr($c, 0, $e) . '|' . $c[$e + 1] . (string) $exp;
-}
 function __elephc_printf_float(float $v, int $prec, string $conv, bool $plus): string {
     if (is_nan($v)) {
         return 'NaN';
@@ -84,6 +82,7 @@ function __elephc_printf_float(float $v, int $prec, string $conv, bool $plus): s
         return 'INF';
     }
     if ($conv === 'g' || $conv === 'G' || $conv === 'h' || $conv === 'H') {
+        $shortest = false;
         if ($prec === 0) {
             $prec = 1;
         }
@@ -93,12 +92,22 @@ function __elephc_printf_float(float $v, int $prec, string $conv, bool $plus): s
             $digits = '0';
             $decpt = 1;
         } else {
-            $parts = explode('|', __elephc_printf_exp(__elephc_printf_c('%.' . ($prec - 1) . 'e', $a)));
-            $digits = rtrim(str_replace('.', '', $parts[0]), '0');
-            $decpt = (int) $parts[1] + 1;
+            if ($prec === -1) {
+                // Shortest representation that round-trips (zend_gcvt mode 0).
+                $prec = 1;
+                while ($prec < 17 && (float) __elephc_printf_c('%.' . ($prec - 1) . 'e', $a) !== $a) {
+                    $prec++;
+                }
+                $shortest = true;
+            }
+            $c = __elephc_printf_c('%.' . ($prec - 1) . 'e', $a);
+            $e = strrpos($c, 'e');
+            $digits = rtrim(str_replace('.', '', substr($c, 0, $e)), '0');
+            $decpt = (int) substr($c, $e + 1) + 1;
         }
         $echar = ($conv === 'G' || $conv === 'H') ? 'E' : 'e';
-        if ($decpt < 0 ? $decpt < -3 : $decpt > $prec) {
+        // Mode 0 (precision -1) uses ndigit 17 for the exponential-form threshold.
+        if ($decpt < 0 ? $decpt < -3 : $decpt > ($shortest ? 17 : $prec)) {
             $e = $decpt - 1;
             $out = $digits[0] . '.' . (strlen($digits) > 1 ? substr($digits, 1) : '0') . $echar . ($e < 0 ? '-' : '+') . (string) abs($e);
         } elseif ($decpt <= 0) {
@@ -121,8 +130,10 @@ function __elephc_printf_float(float $v, int $prec, string $conv, bool $plus): s
     if ($conv === 'f' || $conv === 'F') {
         $out = __elephc_printf_c('%.' . $prec . 'f', $a);
     } else {
-        $parts = explode('|', __elephc_printf_exp(__elephc_printf_c('%.' . $prec . 'e', $a)));
-        $out = $parts[0] . ($conv === 'E' ? 'E' : 'e') . $parts[1];
+        $c = __elephc_printf_c('%.' . $prec . 'e', $a);
+        $e = strrpos($c, 'e');
+        $exp = (int) substr($c, $e + 1);
+        $out = substr($c, 0, $e) . ($conv === 'E' ? 'E' : 'e') . ($exp < 0 ? '-' : '+') . (string) abs($exp);
     }
     if ($neg) {
         return '-' . $out;
@@ -145,6 +156,10 @@ function __elephc_printf_format(string $format, array $args, bool $array_form): 
         $out .= substr($format, $i, $p - $i);
         $i = $p + 1;
         if ($i >= $len) {
+            if ($cur >= $argc) {
+                $missing = max($missing, $cur);
+                break;
+            }
             throw new ValueError('Missing format specifier at end of string');
         }
         if ($format[$i] === '%') {
@@ -230,8 +245,8 @@ function __elephc_printf_format(string $format, array $args, bool $array_form): 
             }
             if ($i < $len && $format[$i] === '.') {
                 $i++;
-                $has_prec = true;
                 if ($i < $len && $format[$i] === '*') {
+                    $has_prec = true;
                     $i++;
                     $j = $i;
                     while ($j < $len && ctype_digit($format[$j])) {
@@ -265,6 +280,7 @@ function __elephc_printf_format(string $format, array $args, bool $array_form): 
                         $prec = (int) substr($format, $i, $j - $i);
                         $i = $j;
                         $expprec = true;
+                        $has_prec = true;
                     }
                 }
             }
@@ -277,6 +293,10 @@ function __elephc_printf_format(string $format, array $args, bool $array_form): 
             $cur++;
         }
         if ($i >= $len) {
+            if ($argnum >= $argc) {
+                $missing = max($missing, $argnum);
+                break;
+            }
             throw new ValueError('Missing format specifier at end of string');
         }
         $conv = $format[$i];
@@ -311,12 +331,13 @@ function __elephc_printf_format(string $format, array $args, bool $array_form): 
             }
             $out .= __elephc_printf_pad(__elephc_printf_unsigned((int) $arg), $width, $pad, $left, false, false);
         } elseif ($conv === 'e' || $conv === 'E' || $conv === 'f' || $conv === 'F' || $conv === 'g' || $conv === 'G' || $conv === 'h' || $conv === 'H') {
+            $is_g = $conv === 'g' || $conv === 'G' || $conv === 'h' || $conv === 'H';
             if (!$has_prec) {
                 $prec = 6;
             } elseif ($prec > 53) {
                 $prec = 53;
-            } elseif ($prec < 0) {
-                $prec = 0;
+            } elseif ($prec === -1 && !$is_g) {
+                throw new ValueError('Precision -1 is only supported for %g, %G, %h and %H');
             }
             $fv = (float) $arg;
             $s = __elephc_printf_float($fv, $prec, $conv, $plus);
@@ -350,6 +371,35 @@ function __elephc_printf_format(string $format, array $args, bool $array_form): 
 /// Entry points, each injected only when a rewritten call targets it (an unused
 /// `fprintf` body would otherwise be checked without any call site to type its stream).
 const PRINTF_ENTRY_POINTS: &[(&str, &str)] = &[
+    (
+        "__elephc_sprintf_all",
+        r#"function __elephc_sprintf_all(array $all): string {
+    $all = array_values($all);
+    $format = (string) array_shift($all);
+    return __elephc_printf_format($format, $all, false);
+}"#,
+    ),
+    (
+        "__elephc_printf_all",
+        r#"function __elephc_printf_all(array $all): int {
+    $all = array_values($all);
+    $format = (string) array_shift($all);
+    $s = __elephc_printf_format($format, $all, false);
+    echo $s;
+    return strlen($s);
+}"#,
+    ),
+    (
+        "__elephc_fprintf_all",
+        r#"function __elephc_fprintf_all(array $all): int {
+    $all = array_values($all);
+    $stream = array_shift($all);
+    $format = (string) array_shift($all);
+    $s = __elephc_printf_format($format, $all, false);
+    fwrite($stream, $s);
+    return strlen($s);
+}"#,
+    ),
     (
         "__elephc_sprintf",
         r#"function __elephc_sprintf(string $format, mixed ...$values): string {

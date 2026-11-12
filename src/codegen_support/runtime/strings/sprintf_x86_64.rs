@@ -192,6 +192,12 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_sprintf_call_float_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // float bits
+    emitter.instruction("mov rcx, 0x8000000000000000");                         // bits of -0.0
+    emitter.instruction("cmp rax, rcx");                                        // PHP prints -0.0 without a sign
+    emitter.instruction("jne __rt_sprintf_not_negative_zero_linux_x86_64");     // any other value: unchanged
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // format it as +0.0
+    emitter.label("__rt_sprintf_not_negative_zero_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // float bits
     emitter.instruction("shl rax, 1");                                          // drop the sign
     emitter.instruction("shr rax, 53");                                         // biased exponent
     emitter.instruction("cmp eax, 2047");                                       // NaN or infinity?
@@ -235,6 +241,16 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // load the packed elephc string pointer before converting it into a null-terminated C string
     emitter.instruction("mov rdx, QWORD PTR [r9 + 8]");                         // load the packed string metadata word before extracting the elephc string length
     emitter.instruction("shr rdx, 8");                                          // extract the original elephc string length from the packed string metadata word
+    emitter.instruction("lea rcx, [rbp - 94]");                                 // end of a bare "%s" mini format
+    emitter.instruction("cmp r10, rcx");                                        // no flags, width or precision?
+    emitter.instruction("jne __rt_sprintf_string_formatted_linux_x86_64");      // no: format through snprintf
+    emitter.instruction("mov rsi, rax");                                        // plain `%s`: copy the bytes as they are
+    emitter.instruction("mov rdi, rbx");                                        // destination: the concat-buffer cursor
+    emitter.instruction("mov rcx, rdx");                                        // any length, embedded NULs included
+    emitter.instruction("rep movsb");                                           // append the string
+    emitter.instruction("mov rbx, rdi");                                        // advance the concat-buffer cursor
+    emitter.instruction("jmp __rt_sprintf_loop_linux_x86_64");                  // resume scanning the format string
+    emitter.label("__rt_sprintf_string_formatted_linux_x86_64");
     emitter.instruction("call __rt_cstr");                                      // convert the elephc string pointer+length pair into a null-terminated C string in the scratch buffer
     emitter.instruction("mov rdi, rbx");                                        // format straight into the concat-buffer cursor
     emitter.instruction("mov esi, 4096");                                       // bound one conversion to 4 KiB

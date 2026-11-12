@@ -209,6 +209,9 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x15, x22, x15");                                   // arg address in caller's stack
     emitter.instruction("ldr x3, [x15]");                                       // load float bits as integer
     emitter.instruction("add x21, x21, #1");                                    // increment arg index
+    emitter.instruction("mov x4, #0x8000000000000000");                         // bits of -0.0
+    emitter.instruction("cmp x3, x4");                                          // PHP prints -0.0 without a sign
+    emitter.instruction("csel x3, xzr, x3, eq");                                // format it as +0.0
 
     // -- PHP spells non-finite values INF / NaN (libc: inf / nan) --
     emitter.instruction("ubfx x4, x3, #52, #11");                               // biased exponent
@@ -327,6 +330,18 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [x15, #8]");                                   // load tag|length word
     emitter.instruction("lsr x4, x4, #8");                                      // extract length (shift right 8)
     emitter.instruction("add x21, x21, #1");                                    // increment arg index
+
+    // -- plain `%s`: copy the bytes as they are (any length, embedded NULs included) --
+    emitter.instruction("add x5, sp, #82");                                     // end of a bare "%s" mini format
+    emitter.instruction("cmp x10, x5");                                         // no flags, width or precision?
+    emitter.instruction("b.ne __rt_sprintf_str_formatted");                     // no: format through snprintf
+    emitter.label("__rt_sprintf_str_plain");
+    emitter.instruction("cbz x4, __rt_sprintf_loop");                           // every byte copied
+    emitter.instruction("ldrb w15, [x3], #1");                                  // next source byte
+    emitter.instruction("strb w15, [x23], #1");                                 // append it to the concat buffer
+    emitter.instruction("sub x4, x4, #1");                                      // one byte fewer
+    emitter.instruction("b __rt_sprintf_str_plain");                            // continue copying
+    emitter.label("__rt_sprintf_str_formatted");
 
     // -- copy string to temp buffer at sp+240 and null-terminate --
     // Limit copy to 127 bytes to fit in our 128-byte buffer

@@ -73,7 +73,12 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 {
                     // Heap values (arrays, mixed cells) are already handed over with their own
                     // reference by the parameter ABI; only borrowed strings need one here.
-                    if source_ty.codegen_repr() == PhpType::Str {
+                    // Method calls already retain a passthrough result through the
+                    // return-alias summaries (`types::return_alias`).
+                    if source_ty.codegen_repr() == PhpType::Str
+                        && !ctx.function.flags.is_method
+                        && !ctx.function.flags.is_closure
+                    {
                         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
                     }
                 }

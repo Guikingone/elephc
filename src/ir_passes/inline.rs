@@ -188,6 +188,16 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
     if !direct_return_cleanup_is_inline_safe(callee) {
         return false;
     }
+    // A refcounted internal local is released by the callee's epilogue on every call; once
+    // spliced into a loop, overwriting it on the next iteration never releases the old value.
+    let params = callee_param_slots(callee);
+    if callee
+        .locals
+        .iter()
+        .any(|local| !params.contains(&local.id) && local.ir_type.is_refcounted_storage())
+    {
+        return false;
+    }
     // Returning a refcounted parameter hands the caller a value it then owns and releases,
     // but the spliced body would pass the host's borrowed argument through unchanged (the
     // real call's return path retains it), so the caller's release would free the

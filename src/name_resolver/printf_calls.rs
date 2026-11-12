@@ -7,30 +7,48 @@
 //!
 //! Key details:
 //! - The native `__rt_sprintf` path stays for literal formats whose every conversion is a
-//!   plain `%d`/`%s`/`%f`/`%x`/`%X`/`%o`/`%c` with `-`/`+`/`0` flags, a width and a decimal
-//!   precision, where libc's output equals PHP's and each argument is converted at compile
+//!   plain `%d`/`%x`/`%X`/`%o` (flags and width), `%f` (flags other than `0`, width,
+//!   precision) or bare `%s`/`%c`, where libc's output equals PHP's and each argument is converted at compile
 //!   time; everything else (dynamic formats, `%1$s`, `*`, `'c` padding, `b`/`u`/`e`/`g`/`F`,
 //!   the `l` modifier, spread or named arguments, too few arguments) goes to the prelude.
 //! - `vsprintf`, `vprintf`, `fprintf` and `vfprintf` always use the prelude.
 
 use crate::parser::ast::{Expr, ExprKind};
 
-/// Returns the prelude function a `sprintf`-family call must be rewritten to, or `None` when
-/// the call is not one of them or the native formatter handles it exactly.
-pub(super) fn printf_prelude_target(function_name: &str, args: &[Expr]) -> Option<&'static str> {
-    let target = match function_name.to_ascii_lowercase().as_str() {
+/// How a `sprintf`-family call is routed to the prelude.
+pub(super) enum PrintfRoute {
+    /// Call the named prelude function with the same arguments.
+    Rename(&'static str),
+    /// Call the named prelude function with one array holding every argument (used when the
+    /// call spreads an array, which cannot bind to the fixed `$format` parameter).
+    Packed(&'static str),
+}
+
+/// Returns how a `sprintf`-family call must be rewritten, or `None` when the call is not one
+/// of them or the native formatter handles it exactly.
+pub(super) fn printf_prelude_target(function_name: &str, args: &[Expr]) -> Option<PrintfRoute> {
+    let lower = function_name.to_ascii_lowercase();
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        return match lower.as_str() {
+            "sprintf" => Some(PrintfRoute::Packed("__elephc_sprintf_all")),
+            "printf" => Some(PrintfRoute::Packed("__elephc_printf_all")),
+            "fprintf" => Some(PrintfRoute::Packed("__elephc_fprintf_all")),
+            _ => None,
+        };
+    }
+    let target = match lower.as_str() {
         "sprintf" => "__elephc_sprintf",
         "printf" => "__elephc_printf",
-        "vsprintf" => return Some("__elephc_vsprintf"),
-        "vprintf" => return Some("__elephc_vprintf"),
-        "fprintf" => return Some("__elephc_fprintf"),
-        "vfprintf" => return Some("__elephc_vfprintf"),
+        "vsprintf" => return Some(PrintfRoute::Rename("__elephc_vsprintf")),
+        "vprintf" => return Some(PrintfRoute::Rename("__elephc_vprintf")),
+        "fprintf" => return Some(PrintfRoute::Rename("__elephc_fprintf")),
+        "vfprintf" => return Some(PrintfRoute::Rename("__elephc_vfprintf")),
         _ => return None,
     };
     if native_format_handles(args) {
         None
     } else {
-        Some(target)
+        Some(PrintfRoute::Rename(target))
     }
 }
 
@@ -67,6 +85,7 @@ fn native_conversion_count(format: &[u8]) -> Option<usize> {
             i += 1;
             continue;
         }
+        let spec_start = i;
         let mut zero = false;
         while let Some(&flag) = format.get(i) {
             match flag {
@@ -85,7 +104,9 @@ fn native_conversion_count(format: &[u8]) -> Option<usize> {
         if i - width_start > 3 {
             return None;
         }
+        let mut precision = false;
         if format.get(i) == Some(&b'.') {
+            precision = true;
             i += 1;
             let start = i;
             while format.get(i).is_some_and(u8::is_ascii_digit) {
@@ -96,10 +117,13 @@ fn native_conversion_count(format: &[u8]) -> Option<usize> {
                 return None;
             }
         }
+        let bare = i == spec_start;
         match format.get(i)? {
-            b'd' | b'x' | b'X' | b'o' | b'c' => {}
-            // libc pads strings with spaces where PHP honours `0`.
-            b's' if !zero => {}
+            // PHP ignores a precision on integers (`%.2x` even prints nothing).
+            b'd' | b'x' | b'X' | b'o' if !precision => {}
+            // PHP's `%c` takes no width or flags; a bare `%s` is copied byte for byte
+            // (libc stops at NUL bytes and pads strings with spaces where PHP honours `0`).
+            b'c' | b's' if bare => {}
             // PHP keeps zero padding on the right of a left-aligned float, and a zero-padded
             // INF/NaN gets its first letter replaced by the sign; libc does neither.
             b'f' if !zero => {}

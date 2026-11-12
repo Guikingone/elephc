@@ -17,7 +17,7 @@ use crate::codegen::{
 use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen::platform::Arch;
 use crate::codegen::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, Ownership, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -95,6 +95,11 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     let array = expect_operand(inst, 0)?;
     indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
+    // The runtime rewrites a uniquely referenced array in place. When the operand is borrowed
+    // from a local that keeps it (the converted copy goes elsewhere, e.g. to a call argument),
+    // take a reference first so the conversion copies instead of mutating the local's array.
+    let copy_borrowed = ctx.value_ownership(array)? != Ownership::Owned
+        && !array_to_mixed_result_replaces_source(ctx, array, inst.result);
     let done = ctx.next_label("array_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -106,6 +111,11 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
+            if copy_borrowed {
+                ctx.emitter.instruction("str x1, [sp, #-16]!");                 // keep the value_type across the retain
+                abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Int)));
+                ctx.emitter.instruction("ldr x1, [sp], #16");                   // restore the value_type
+            }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
         Arch::X86_64 => {
@@ -119,11 +129,50 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
+            if copy_borrowed {
+                ctx.emitter.instruction("push rsi");                            // keep the value_type across the retain
+                ctx.emitter.instruction("push rdi");                            // keep the array across the retain
+                ctx.emitter.instruction("mov rax, rdi");                        // retain the borrowed array
+                abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Int)));
+                ctx.emitter.instruction("pop rdi");                             // restore the array
+                ctx.emitter.instruction("pop rsi");                             // restore the value_type
+            }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
     }
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Returns whether an `array_to_mixed` result is stored back into the local slot its operand
+/// was loaded from (the in-place widening of that local), so converting in place is intended.
+fn array_to_mixed_result_replaces_source(
+    ctx: &FunctionContext<'_>,
+    array: ValueId,
+    result: Option<ValueId>,
+) -> bool {
+    let Some(result) = result else {
+        return false;
+    };
+    let source_slot = ctx.function.value(array).and_then(|value| match value.def {
+        ValueDef::Instruction { inst, .. } => ctx
+            .function
+            .instruction(inst)
+            .filter(|inst| inst.op == Op::LoadLocal)
+            .and_then(|inst| match inst.immediate {
+                Some(Immediate::LocalSlot(slot)) => Some(slot),
+                _ => None,
+            }),
+        _ => None,
+    });
+    let Some(source_slot) = source_slot else {
+        return false;
+    };
+    ctx.function.instructions.iter().any(|inst| {
+        inst.op == Op::StoreLocal
+            && inst.operands.first() == Some(&result)
+            && inst.immediate == Some(Immediate::LocalSlot(source_slot))
+    })
 }
 
 /// Lowers indexed-array promotion to associative hash storage.

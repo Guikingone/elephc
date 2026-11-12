@@ -80,7 +80,8 @@ pub(crate) struct FunctionContext<'a> {
     /// Checked int add/sub/mul instructions lowered together with the cast to `int` that
     /// consumes their boxed result (checked instruction -> cast instruction).
     pub(super) fused_checked_casts: HashMap<InstId, InstId>,
-    /// Values with an explicit `release` instruction; their producers must hand out an owned result.
+    /// Values released, stored, returned or passed as branch arguments: their producers must hand
+    /// out an owned result.
     pub(super) released_values: HashSet<ValueId>,
     label_counter: usize,
 }

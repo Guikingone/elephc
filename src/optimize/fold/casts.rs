@@ -83,7 +83,9 @@ fn truncate_float_to_i64(value: f64) -> Option<i64> {
         return None;
     }
     let truncated = value.trunc();
-    if truncated < i64::MIN as f64 || truncated > i64::MAX as f64 {
+    // 2^63 itself is out of range (`i64::MAX as f64` rounds up to it); PHP wraps such values
+    // modulo 2^64, which the runtime conversion implements, so they are left unfolded.
+    if truncated < i64::MIN as f64 || truncated >= i64::MAX as f64 {
         return None;
     }
     Some(truncated as i64)

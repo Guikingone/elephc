@@ -76,6 +76,12 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // x9 = output start
     emitter.instruction("ldr x10, [sp, #80]");                                  // reload the raw length
+    emitter.instruction("add x11, x8, x10, lsl #1");                            // scratch offset past the raw text ...
+    emitter.instruction("add x11, x11, x10");                                   // ... (output + raw text <= 3 * len) ...
+    emitter.instruction("add x11, x11, #64");                                   // ... plus slack
+    emitter.instruction(&format!("mov x12, #{}", crate::codegen_support::runtime::data::CONCAT_BUF_SIZE)); // concat scratch capacity
+    emitter.instruction("cmp x11, x12");                                        // would the formatting overflow the scratch buffer?
+    emitter.instruction("b.hi __rt_heap_exhausted");                            // report memory exhaustion instead of writing past it
     emitter.instruction("add x9, x9, x10, lsl #1");                             // skip twice the raw length (grouping adds at most len/3 bytes)
     emitter.instruction("add x9, x9, #16");                                     // plus slack for the sign
     emitter.instruction("str x9, [sp, #64]");                                   // save the raw text pointer
@@ -203,6 +209,10 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // current concat-buffer offset
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    emitter.instruction("lea rcx, [rax + rax * 2]");                            // output + raw text <= 3 * len ...
+    emitter.instruction("lea rcx, [rcx + r8 + 64]");                            // ... past the current offset, plus slack
+    emitter.instruction(&format!("cmp rcx, {}", crate::codegen_support::runtime::data::CONCAT_BUF_SIZE)); // would the formatting overflow the scratch buffer?
+    emitter.instruction("ja __rt_heap_exhausted");                              // report memory exhaustion instead of writing past it
     emitter.instruction("lea rdi, [r9 + r8 + 16]");                             // output start plus slack for the sign
     emitter.instruction("lea rdi, [rdi + rax * 2]");                            // raw text goes past the widest grouped output
     emitter.instruction("mov QWORD PTR [rbp - 72], rdi");                       // save the raw text pointer

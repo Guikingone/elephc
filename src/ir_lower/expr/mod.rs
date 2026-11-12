@@ -2689,6 +2689,35 @@ fn emit_builtin_call_value(
                     ReturnArgAlias::Unknown
                 }
             };
+            // A result that may be a slice of an owning temporary argument (`trim(str_replace(..))`)
+            // would keep that temporary alive forever: take an owned copy of the result so the
+            // temporary can be released like any other argument.
+            let aliases_owning_temporary = !matches!(return_alias, ReturnArgAlias::None)
+                && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(call.value))
+                && operands.iter().enumerate().any(|(index, value)| {
+                    let lowered = LoweredValue {
+                        value: *value,
+                        ir_type: value_ir_type(&ctx.builder.value_php_type(*value)),
+                    };
+                    return_alias.may_alias_parameter(index)
+                        && ctx.value_is_owning_temporary(lowered)
+                        && ctx.call_result_may_alias_arg(*value, call.value)
+                        && !registry_signature.as_ref().is_some_and(|signature| {
+                            signature.ref_params.get(index).copied().unwrap_or(false)
+                        })
+                });
+            if aliases_owning_temporary {
+                let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, call, Some(span));
+                release_owned_call_arg_temporaries_with_signature(
+                    ctx,
+                    &operands,
+                    Some(owned.value),
+                    &ReturnArgAlias::None,
+                    registry_signature.as_ref(),
+                    span,
+                );
+                return owned;
+            }
             release_owned_call_arg_temporaries_with_signature(
                 ctx,
                 &operands,

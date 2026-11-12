@@ -91,12 +91,18 @@ pub(super) fn resolve_expr(
                     name: resolved_name(function_name),
                     args: resolved_args,
                 }
-            } else if let Some(prelude) =
+            } else if let Some(route) =
                 super::printf_calls::printf_prelude_target(&function_name, &resolved_args)
             {
-                ExprKind::FunctionCall {
-                    name: resolved_name(prelude.to_string()),
-                    args: resolved_args,
+                match route {
+                    super::printf_calls::PrintfRoute::Rename(prelude) => ExprKind::FunctionCall {
+                        name: resolved_name(prelude.to_string()),
+                        args: resolved_args,
+                    },
+                    super::printf_calls::PrintfRoute::Packed(prelude) => ExprKind::FunctionCall {
+                        name: resolved_name(prelude.to_string()),
+                        args: vec![Expr::new(ExprKind::ArrayLiteral(resolved_args), expr.span)],
+                    },
                 }
             } else if let Some(rewritten) =
                 rewrite_date_procedural_alias(&function_name, &resolved_args)

@@ -7,7 +7,10 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - A result that would not fit in the concat scratch buffer is built in an owned heap string
+//!   instead (like `str_repeat`), so concatenation never writes past `_concat_buf`.
 
+use crate::codegen_support::runtime::data::CONCAT_BUF_SIZE;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_concat` runtime helper for concatenating two byte-strings.
@@ -38,40 +41,43 @@ pub fn emit_concat(emitter: &mut Emitter) {
     emitter.instruction("add x5, x2, x4");                                      // compute total result length
     emitter.instruction("str x5, [sp, #32]");                                   // save total length on stack
 
-    // -- get concat_buf write position --
+    // -- choose the destination: concat scratch when the result fits, else an owned heap string --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current write offset
+    emitter.instruction("add x9, x8, x5");                                      // scratch end offset after this append
+    emitter.instruction(&format!("mov x12, #{}", CONCAT_BUF_SIZE));              // concat scratch capacity
+    emitter.instruction("cmp x9, x12");                                         // does the result fit in concat scratch?
+    emitter.instruction("b.hi __rt_concat_heap");                               // no: never write past the scratch buffer
     crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer: buf + offset
     emitter.instruction("str x9, [sp, #40]");                                   // save result start pointer on stack
+    emitter.instruction("mov x13, #0");                                         // scratch-backed result
+    emitter.instruction("b __rt_concat_copy");                                  // copy both operands
+    emitter.label("__rt_concat_heap");
+    emitter.instruction("mov x0, x5");                                          // payload size for the heap allocator
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate an owned string payload
+    emitter.instruction("mov x6, #1");                                          // heap kind 1 = owned elephc string
+    emitter.instruction("str x6, [x0, #-8]");                                   // stamp the heap allocation as a string payload
+    emitter.instruction("mov x9, x0");                                          // destination is the heap payload
+    emitter.instruction("str x9, [sp, #40]");                                   // save result start pointer on stack
+    emitter.instruction("mov x13, #1");                                         // heap-backed result: the scratch offset stays unchanged
 
-    // -- copy left string bytes --
-    emitter.instruction("ldp x1, x2, [sp, #0]");                                // reload left ptr and length
+    emitter.label("__rt_concat_copy");
     emitter.instruction("mov x10, x9");                                         // set dest cursor to start of output
-    emitter.label("__rt_concat_cl");
-    emitter.instruction("cbz x2, __rt_concat_cr_setup");                        // if no bytes left, move to right string
-    emitter.instruction("ldrb w11, [x1], #1");                                  // load byte from left string, advance src
-    emitter.instruction("strb w11, [x10], #1");                                 // store byte to dest, advance dest
-    emitter.instruction("sub x2, x2, #1");                                      // decrement remaining left bytes
-    emitter.instruction("b __rt_concat_cl");                                    // continue copying left string
-
-    // -- copy right string bytes --
-    emitter.label("__rt_concat_cr_setup");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // reload left ptr and length
+    emit_copy_aarch64(emitter, "x1", "x2", "__rt_concat_cl");
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // reload right ptr and length
-    emitter.label("__rt_concat_cr");
-    emitter.instruction("cbz x4, __rt_concat_done");                            // if no bytes left, concatenation complete
-    emitter.instruction("ldrb w11, [x3], #1");                                  // load byte from right string, advance src
-    emitter.instruction("strb w11, [x10], #1");                                 // store byte to dest, advance dest
-    emitter.instruction("sub x4, x4, #1");                                      // decrement remaining right bytes
-    emitter.instruction("b __rt_concat_cr");                                    // continue copying right string
+    emit_copy_aarch64(emitter, "x3", "x4", "__rt_concat_cr");
 
-    // -- update concat_buf offset and return result --
+    // -- publish the new scratch offset for scratch-backed results --
     emitter.label("__rt_concat_done");
+    emitter.instruction("cbnz x13, __rt_concat_return");                        // heap results leave the scratch offset alone
     emitter.instruction("ldr x5, [sp, #32]");                                   // reload total result length
     crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
     emitter.instruction("add x8, x8, x5");                                      // advance offset by total length written
     emitter.instruction("str x8, [x6]");                                        // store updated offset
+    emitter.label("__rt_concat_return");
 
     // -- set return values and restore frame --
     emitter.instruction("ldr x1, [sp, #40]");                                   // return result pointer (start of output)
@@ -92,7 +98,7 @@ fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while concat uses stack locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for concat bookkeeping
-    emitter.instruction("sub rsp, 48");                                         // reserve local slots for input strings, total length, and result pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve local slots for input strings, total length, result pointer, and storage kind
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save left string pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save left string length
@@ -104,45 +110,88 @@ fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
 
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load current concat write offset
+    emitter.instruction("lea r11, [r9 + rdx]");                                 // scratch end offset ...
+    emitter.instruction("add r11, rsi");                                        // ... after this append
+    emitter.instruction(&format!("cmp r11, {}", CONCAT_BUF_SIZE));               // does the result fit in concat scratch?
+    emitter.instruction("ja __rt_concat_heap_linux_x86_64");                    // no: never write past the scratch buffer
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
     emitter.instruction("lea r10, [r10 + r9]");                                 // compute destination pointer: concat_buf + offset
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save result start pointer for return
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // scratch-backed result
+    emitter.instruction("jmp __rt_concat_copy_linux_x86_64");                   // copy both operands
+    emitter.label("__rt_concat_heap_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // payload size for the heap allocator
+    emitter.instruction("call __rt_heap_alloc");                                // allocate an owned string payload
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // owned-string heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a string payload
+    emitter.instruction("mov r10, rax");                                        // destination is the heap payload
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save result start pointer for return
+    emitter.instruction("mov QWORD PTR [rbp - 56], 1");                         // heap-backed result: the scratch offset stays unchanged
 
+    emitter.label("__rt_concat_copy_linux_x86_64");
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // load left source pointer
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // load remaining left byte count
-    emitter.label("__rt_concat_cl");
-    emitter.instruction("test r9, r9");                                         // check whether all left bytes have been copied
-    emitter.instruction("je __rt_concat_cr_setup");                             // continue with the right string when left is exhausted
-    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one byte from the left string
-    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store the byte into the concat destination
-    emitter.instruction("add r8, 1");                                           // advance the left source pointer
-    emitter.instruction("add r10, 1");                                          // advance the concat destination pointer
-    emitter.instruction("sub r9, 1");                                           // decrement remaining left bytes
-    emitter.instruction("jmp __rt_concat_cl");                                  // continue copying left bytes
-
-    emitter.label("__rt_concat_cr_setup");
+    emit_copy_x86_64(emitter, "__rt_concat_cl");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // load right source pointer
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // load remaining right byte count
-    emitter.label("__rt_concat_cr");
-    emitter.instruction("test r9, r9");                                         // check whether all right bytes have been copied
-    emitter.instruction("je __rt_concat_done");                                 // finish once the right string is exhausted
-    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one byte from the right string
-    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store the byte into the concat destination
-    emitter.instruction("add r8, 1");                                           // advance the right source pointer
-    emitter.instruction("add r10, 1");                                          // advance the concat destination pointer
-    emitter.instruction("sub r9, 1");                                           // decrement remaining right bytes
-    emitter.instruction("jmp __rt_concat_cr");                                  // continue copying right bytes
+    emit_copy_x86_64(emitter, "__rt_concat_cr");
 
     emitter.label("__rt_concat_done");
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // heap results leave the scratch offset alone
+    emitter.instruction("jne __rt_concat_return_linux_x86_64");                 // skip the offset update
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload current concat write offset
     emitter.instruction("add r9, QWORD PTR [rbp - 40]");                        // advance offset by total bytes written
     emitter.instruction("mov QWORD PTR [r8], r9");                              // store updated concat write offset
+    emitter.label("__rt_concat_return_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // return result length
-    emitter.instruction("add rsp, 48");                                         // release concat local slots
+    emitter.instruction("add rsp, 64");                                         // release concat local slots
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return concatenated string in rax/rdx
+}
+
+/// Copies `len` bytes from `src` to the destination cursor x10, eight bytes at a time and then
+/// byte by byte; `src`, `len`, x10 and x11 are clobbered.
+fn emit_copy_aarch64(emitter: &mut Emitter, src: &str, len: &str, label: &str) {
+    emitter.label(&format!("{}_words", label));
+    emitter.instruction(&format!("cmp {}, #8", len));                         // at least one whole word left?
+    emitter.instruction(&format!("b.lo {}", label));                          // no: finish byte by byte
+    emitter.instruction(&format!("ldr x11, [{}], #8", src));                  // load eight source bytes
+    emitter.instruction("str x11, [x10], #8");                                  // store them at the destination cursor
+    emitter.instruction(&format!("sub {}, {}, #8", len, len));                // eight bytes fewer
+    emitter.instruction(&format!("b {}_words", label));                       // continue with the next word
+    emitter.label(label);
+    emitter.instruction(&format!("cbz {}, {}_end", len, label));              // every byte copied
+    emitter.instruction(&format!("ldrb w11, [{}], #1", src));                 // load one source byte
+    emitter.instruction("strb w11, [x10], #1");                                 // store it at the destination cursor
+    emitter.instruction(&format!("sub {}, {}, #1", len, len));                // one byte fewer
+    emitter.instruction(&format!("b {}", label));                             // continue copying bytes
+    emitter.label(&format!("{}_end", label));
+}
+
+/// Copies r9 bytes from r8 to the destination cursor r10, eight bytes at a time and then byte
+/// by byte; r8, r9, r10 and r11 are clobbered.
+fn emit_copy_x86_64(emitter: &mut Emitter, label: &str) {
+    emitter.label(&format!("{}_words", label));
+    emitter.instruction("cmp r9, 8");                                           // at least one whole word left?
+    emitter.instruction(&format!("jb {}", label));                            // no: finish byte by byte
+    emitter.instruction("mov r11, QWORD PTR [r8]");                             // load eight source bytes
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // store them at the destination cursor
+    emitter.instruction("add r8, 8");                                           // advance the source pointer
+    emitter.instruction("add r10, 8");                                          // advance the destination cursor
+    emitter.instruction("sub r9, 8");                                           // eight bytes fewer
+    emitter.instruction(&format!("jmp {}_words", label));                     // continue with the next word
+    emitter.label(label);
+    emitter.instruction("test r9, r9");                                         // every byte copied?
+    emitter.instruction(&format!("je {}_end", label));                        // yes
+    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one source byte
+    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store it at the destination cursor
+    emitter.instruction("add r8, 1");                                           // advance the source pointer
+    emitter.instruction("add r10, 1");                                          // advance the destination cursor
+    emitter.instruction("sub r9, 1");                                           // one byte fewer
+    emitter.instruction(&format!("jmp {}", label));                           // continue copying bytes
+    emitter.label(&format!("{}_end", label));
 }
 
 #[cfg(test)]

@@ -140,3 +140,47 @@ echo run(), "\n";
     assert_eq!(out.stdout, "v0vv1vv2v\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Fixes from an independent review: a mixed local returned as a string is copied (it was
+/// borrowed and then freed by the slot cleanup), foreach keys read only through `++`/`--` are
+/// kept, a typed array passed to a widened `array` parameter is converted on a copy, inlined
+/// callees do not leak their string locals, dynamic `sprintf` does not leak, `(int)` folding and
+/// numeric strings follow PHP for out-of-range/non-finite values, and the native `sprintf` path
+/// only takes conversions libc reproduces exactly (`%s` of any length or with NUL bytes, `%c`,
+/// integer precisions, `-0.0`). Runs under heap debug, which must stay clean.
+#[test]
+fn test_review_fixes_ownership_casts_and_sprintf() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function v1(bool $c, string $a): string { $x = 5; if ($c) { $x = $a . "?"; } return $x; }
+function v2(bool $c, string $a): string { $x = 5; if ($c) { $x = $a . "?"; } $y = $x; return $y; }
+echo v1(true, str_repeat("ab", 2)), v1(false, "q"), v2(true, str_repeat("cd", 2)), v2(false, "q"), "\n";
+function f() { foreach ([10 => "x", 20 => "y"] as $k => $v) { echo $k++, ","; } foreach ([10 => "x"] as $k => $v) { echo ++$k; } }
+f(); echo "\n";
+function d2(array $a) { return count($a); }
+function m() { $fl = [1.5, 2.5]; $n = d2($fl); $other = [9.5, 8.5, 7.5]; return $fl[0] + $fl[1] + $n + count($fl) + count($other); }
+echo m(), "\n"; echo d2(["a"]), "\n";
+$fl=[1.5]; $mx=[1,"a"]; echo d2($fl), d2($mx), "\n";
+function miss(array $g, int $u) { return @$g[$u][0] ?? "none"; }
+$g = [[1,2,3],[4,5,6]]; echo miss($g, 1), miss($g, 5), miss([[]], 0), count($g), "\n";
+function fill2(int $w): string { $fill = ''; if ($w > 1) { $fill = "yy"; } return $fill . "x"; }
+function run2() { $n = 0; for ($i = 0; $i < 100; $i++) { $n += strlen(fill2(0)); } return $n; }
+echo run2(), "\n";
+for ($i = 0; $i < 50; $i++) { $f = "%d-%s-%f-%x-%e-%g"; $o = sprintf($f, $i, "s", 1.5, 255, 2.5, 0.1); } echo $o, "\n";
+var_dump((int)(PHP_INT_MAX + 1), (int)9.2233720368547758e18, (int)"NAN", (int)"1e400", (int)"-1e400", (int)"0x1A", (int)" 12abc", (int)"1.9e3");
+echo strlen(sprintf("%s", str_repeat("a", 5000))), "|", strlen(sprintf("%s", "a\0b")), "|", sprintf("%5c|%-5c|%05c|", 65, 66, 67), sprintf("%.3d|%.2x|%.2o|", 5, 255, 255), sprintf("%f|%5.1f", -0.0, -0.0), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "abab?5cdcd?5\n10,20,11\n11\n1\n12\n4nonenone2\n100\n49-s-1.500000-ff-2.500000e+0-0.1\nint(-9223372036854775808)\nint(-9223372036854775808)\nint(0)\nint(0)\nint(0)\nint(0)\nint(12)\nint(1900)\n5000|3|A|B|C|5|||0.000000|  0.0\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Prelude `sprintf` errors follow PHP: a lone `%` without arguments is an argument-count error,
+/// `%.f`/`%.e` keep the default precision 6, and precision -1 is only accepted for `%g`/`%G`
+/// (where it means the shortest round-trip representation).
+#[test]
+fn test_sprintf_error_precedence_and_minus_one_precision() {
+    let out = compile_and_run(r#"<?php
+foreach ([["%"],["%",1],["%.f",1.5],["%.e",1.5],["%.*g",-1,0.1],["%.*G",-1,1e20],["%.*f",-1,3.14],["%5"],["%5", 1]] as $a) { try { var_dump(sprintf(...$a)); } catch (\Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; } }
+"#);
+    assert_eq!(out, "ArgumentCountError: 2 arguments are required, 1 given\nValueError: Missing format specifier at end of string\nstring(8) \"1.500000\"\nstring(11) \"1.500000e+0\"\nstring(3) \"0.1\"\nstring(7) \"1.0E+20\"\nValueError: Precision -1 is only supported for %g, %G, %h and %H\nArgumentCountError: 2 arguments are required, 1 given\nValueError: Missing format specifier at end of string\n");
+}

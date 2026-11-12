@@ -166,6 +166,7 @@ fn collect_body_variable_reads(
     use crate::parser::ast::{ExprKind, StmtKind};
     let mut reads = std::collections::HashSet::new();
     let mut dynamic = false;
+    let mut has_keyed_foreach = false;
     crate::int_range::walk_program(body, &mut |node| match node {
         crate::int_range::Node::Expr(expr) => match &expr.kind {
             ExprKind::Variable(name) => {
@@ -196,8 +197,36 @@ fn collect_body_variable_reads(
             if let StmtKind::Global { vars } = &stmt.kind {
                 reads.extend(vars.iter().cloned());
             }
+            if let StmtKind::Foreach { key_var: Some(_), .. } = &stmt.kind {
+                has_keyed_foreach = true;
+            }
         }
     });
+    if !has_keyed_foreach {
+        // The set only decides whether a foreach key is needed.
+        return (!dynamic).then_some(reads);
+    }
+    // Variables also appear outside `ExprKind::Variable` (`$k++`, `$k[] = ...`, list targets,
+    // static/unset lists, ...). Over-approximate with every quoted identifier in the body's
+    // debug rendering so a variable that is used in any form is never treated as unread.
+    let rendered = format!("{:?}", body);
+    let bytes = rendered.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] >= 0x80) {
+                end += 1;
+            }
+            if end < bytes.len() && bytes[end] == b'"' && end > start {
+                reads.insert(rendered[start..end].to_string());
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
     (!dynamic).then_some(reads)
 }
 

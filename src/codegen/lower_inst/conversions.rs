@@ -215,7 +215,21 @@ pub(super) fn lower_cast_to_string(
             strings::lower_int_like_to_string(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_mixed_string_context_result(ctx, value)?;
+            // A cast whose result is only read (never released, stored or returned) can borrow
+            // a boxed string payload instead of persisting a copy nobody would free.
+            let borrowed = match inst.result {
+                Some(result) => {
+                    ctx.value_ownership(result)? != crate::ir::Ownership::Owned
+                        && !ctx.released_values.contains(&result)
+                }
+                None => false,
+            };
+            let mode = if borrowed {
+                MixedStringContextMode::ResultBorrowed
+            } else {
+                MixedStringContextMode::Result
+            };
+            emit_mixed_string_context(ctx, value, mode)?;
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
@@ -229,14 +243,6 @@ pub(super) fn lower_cast_to_string(
     }
 }
 
-/// Leaves a string result for a boxed Mixed value, dispatching objects through `__toString()`.
-pub(super) fn emit_mixed_string_context_result(
-    ctx: &mut FunctionContext<'_>,
-    value: ValueId,
-) -> Result<()> {
-    emit_mixed_string_context(ctx, value, MixedStringContextMode::Result)
-}
-
 /// Writes a boxed Mixed value to stdout, dispatching objects through `__toString()`.
 pub(super) fn emit_mixed_string_context_stdout(
     ctx: &mut FunctionContext<'_>,
@@ -248,6 +254,8 @@ pub(super) fn emit_mixed_string_context_stdout(
 /// Describes whether a Mixed string context should leave a string result or write it.
 enum MixedStringContextMode {
     Result,
+    /// Like `Result`, but a boxed string is returned as a borrow of the box payload.
+    ResultBorrowed,
     Stdout,
 }
 
@@ -329,6 +337,9 @@ fn emit_mixed_string_scalar_fallback(
     match mode {
         MixedStringContextMode::Result => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+        MixedStringContextMode::ResultBorrowed => {
+            super::emit_borrow_mixed_local_as_string(ctx);
         }
         MixedStringContextMode::Stdout => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_write_stdout");

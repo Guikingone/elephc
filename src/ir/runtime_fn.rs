@@ -970,6 +970,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strrpos
                 | RuntimeFnId::ZvalUnpack
+                // The trim family always persists its slice into an owned copy
+                // (`lower_trim_like`), so the result is fresh and must be released.
+                | RuntimeFnId::Trim
+                | RuntimeFnId::Ltrim
+                | RuntimeFnId::Rtrim
+                | RuntimeFnId::Chop
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
