@@ -67,6 +67,10 @@ pub struct Function {
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     pub generator_source: Option<GeneratorSource>,
     pub flags: FunctionFlags,
+    /// Names the source body writes in place as containers
+    /// (`crate::types::names_written_in_place`). By-value parameters named here own their
+    /// slot's reference (retained in the prologue), matching the return-alias summaries.
+    pub written_params: std::collections::HashSet<String>,
 }
 
 impl Function {
@@ -89,6 +93,7 @@ impl Function {
             attribute_args: Vec::new(),
             generator_source: None,
             flags: FunctionFlags::default(),
+            written_params: std::collections::HashSet::new(),
         }
     }
 

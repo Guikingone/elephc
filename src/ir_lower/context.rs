@@ -151,6 +151,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
+    /// Locals of the body being lowered that appear directly as a call argument
+    /// (`sort($b)`, `array_merge($b, ...)`); see `empty_literal_hash_loop_contract`.
+    pub(crate) direct_call_arg_locals: std::collections::HashSet<String>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
@@ -310,6 +313,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             loop_storage_types,
             loop_storage_scope,
+            direct_call_arg_locals: std::collections::HashSet::new(),
             constants: constants.clone(),
             top_level_env,
             current_class,

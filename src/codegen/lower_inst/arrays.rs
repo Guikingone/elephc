@@ -510,6 +510,58 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     Ok(())
 }
 
+/// Lowers `ArrayFetchDimW` through `__rt_array_fetch_dim_w`: the result is the borrowed child
+/// pointer (0 when the generic nested write must run), and the parent — split by copy-on-write
+/// when it was shared — is written back to its SSA home and source local like `array_set`.
+pub(super) fn lower_array_fetch_dim_w(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    require_integer_like_index(ctx.value_php_type(index)?, inst)?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    let (array_reg, index_reg, child_reg, parent_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x0", "x1"),
+        Arch::X86_64 => ("rdi", "rsi", "rax", "rdx"),
+    };
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.load_value_to_reg(index, index_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_fetch_dim_w");
+    abi::emit_push_reg(ctx.emitter, child_reg);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result_reg, parent_reg);
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    ctx.writeback_global_array_source(array)?;
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `ArrayStoreElemRaw`: stores a child array pointer into a parent indexed-array slot with
+/// no refcount change (the fetch-for-write already moved the parent's reference to it).
+pub(super) fn lower_array_store_elem_raw(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let child = expect_operand(inst, 2)?;
+    require_integer_like_index(ctx.value_php_type(index)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(index, "x1")?;
+            ctx.load_value_to_reg(child, "x2")?;
+            ctx.emitter.instruction("add x0, x0, #24");                         // parent payload base
+            ctx.emitter.instruction("str x2, [x0, x1, lsl #3]");                // store the child pointer into its slot
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(index, "rsi")?;
+            ctx.load_value_to_reg(child, "rdx")?;
+            ctx.emitter.instruction("mov QWORD PTR [rdi + rsi * 8 + 24], rdx"); // store the child pointer into its slot
+        }
+    }
+    Ok(())
+}
+
 /// Lowers a boxed-Mixed-key write into a statically `Array(Mixed)` indexed local.
 ///
 /// The key tag is only known at runtime (PHP `foreach` keys are always `Mixed`

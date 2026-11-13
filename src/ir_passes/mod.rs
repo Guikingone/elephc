@@ -15,6 +15,7 @@
 mod allocation;
 mod borrow_reads;
 mod branch_simplify;
+mod checked_cast_hoist;
 mod cfg;
 mod concat_reset;
 mod clobber;

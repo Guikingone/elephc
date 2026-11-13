@@ -15,7 +15,8 @@ use crate::codegen_support::platform::Arch;
 /// Uses `__rt_hash_key_hash` to compute the initial slot and `__rt_hash_key_eq` for equality checks.
 /// Falls through to `__rt_hash_get_not_found` when the table is null, empty, or the key is absent.
 /// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (key_hi=-1 means integer key, otherwise string key with key_lo=ptr, key_hi=len)
-/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag (PhpType tag; null tag on miss)
+/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag (PhpType tag; null tag on miss),
+///         x4=matching entry address on a hit (x86_64: r8)
 pub fn emit_hash_get(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_get_linux_x86_64(emitter);
@@ -134,6 +135,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #40");                                   // x12 = entry address
 
     emitter.instruction("mov x0, #1");                                          // found = 1
+    emitter.instruction("mov x4, x12");                                         // x4 = matching entry address (used by in-place update helpers)
     emitter.instruction("ldr x1, [x12, #24]");                                  // x1 = value_lo
     emitter.instruction("ldr x2, [x12, #32]");                                  // x2 = value_hi
     emitter.instruction("ldr x3, [x12, #40]");                                  // x3 = value_tag
@@ -154,7 +156,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux variant of `__rt_hash_get`.
 /// Uses SysV ABI: rdi=hash_table_ptr, rsi=key_lo, rdx=key_hi (key_hi=-1 means integer key, otherwise string key with rsi=ptr, rdx=len).
-/// Returns: rax=found (1 or 0), rdi=value_lo, rsi=value_hi, rcx=value_tag.
+/// Returns: rax=found (1 or 0), rdi=value_lo, rsi=value_hi, rcx=value_tag, r8=matching entry address on a hit.
 fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_get ---");

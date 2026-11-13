@@ -84,7 +84,7 @@ fn reads_by_value(data: &DataPool, inst: &Instruction, index: usize) -> bool {
         return true;
     }
     match inst.op {
-        ArrayGet | ArrayGetSilent | HashGet | HashGetSilent | ArrayIsset | HashIsset | ArraySet
+        ArrayGet | ArrayGetSilent | HashGet | HashGetSilent | ArrayIsset | HashIsset | HashAddInt | ArrayFetchDimW | ArrayStoreElemRaw | ArraySet
         | HashSet | ArrayPush | HashAppend | ArrayKeyExists | PropGet | PropSet | ArrayNew
         | HashNew | ThrowCheckedReturnTypeError | ThrowCheckedTypeError => true,
         Call => {

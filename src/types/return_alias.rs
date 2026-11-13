@@ -66,12 +66,33 @@ impl ReturnArgAlias {
 pub(crate) struct ReturnAliasSummaries {
     functions: HashMap<String, ReturnArgAlias>,
     methods: HashMap<(String, String), ReturnArgAlias>,
+    /// `owned_array_params` of each summarized body, computed from the same AST as the summary
+    /// so codegen's parameter ownership can never be narrower than the summary assumes.
+    written_functions: HashMap<String, std::collections::HashSet<String>>,
+    written_methods: HashMap<(String, String), std::collections::HashSet<String>>,
 }
 
 impl ReturnAliasSummaries {
     /// Looks up a source-declared function summary by its canonical name.
     pub(crate) fn function(&self, name: &str) -> Option<&ReturnArgAlias> {
         self.functions.get(name)
+    }
+
+    /// Names a summarized function body writes in place (see `names_written_in_place`).
+    pub(crate) fn function_written(&self, name: &str) -> Option<&std::collections::HashSet<String>> {
+        self.written_functions.get(name)
+    }
+
+    /// Names a summarized method body writes in place (see `names_written_in_place`).
+    pub(crate) fn method_written(
+        &self,
+        class_name: &str,
+        method: &str,
+    ) -> Option<&std::collections::HashSet<String>> {
+        self.written_methods.get(&(
+            class_name.trim_start_matches('\\').to_string(),
+            php_symbol_key(method),
+        ))
     }
 
     /// Looks up a method implementation summary by class and case-folded method name.
@@ -103,10 +124,14 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                 return_type,
                 ..
             } => {
+                summaries.written_functions.insert(
+                    name.clone(),
+                    owned_array_params(params.iter().map(|(name, ty, _, by_ref)| (name.as_str(), ty.as_ref(), *by_ref)), body),
+                );
                 summaries.functions.insert(
                     name.clone(),
                     summarize_callable(
-                        params.iter().map(|(name, _, _, _)| name.as_str()),
+                        params.iter().map(|(name, ty, _, _)| (name.as_str(), ty.as_ref())),
                         variadic.as_deref(),
                         *by_ref_return,
                         return_type.as_ref(),
@@ -137,7 +162,7 @@ fn collect_method_summaries(
     for method in methods {
         let summary = if method.has_body {
             summarize_callable(
-                method.params.iter().map(|(name, _, _, _)| name.as_str()),
+                method.params.iter().map(|(name, ty, _, _)| (name.as_str(), ty.as_ref())),
                 method.variadic.as_deref(),
                 method.by_ref_return,
                 method.return_type.as_ref(),
@@ -146,19 +171,26 @@ fn collect_method_summaries(
         } else {
             ReturnArgAlias::Unknown
         };
-        summaries.methods.insert(
-            (
-                class_name.trim_start_matches('\\').to_string(),
-                php_symbol_key(&method.name),
-            ),
-            summary,
+        let key = (
+            class_name.trim_start_matches('\\').to_string(),
+            php_symbol_key(&method.name),
         );
+        if method.has_body {
+            summaries.written_methods.insert(
+                key.clone(),
+                owned_array_params(
+                    method.params.iter().map(|(name, ty, _, by_ref)| (name.as_str(), ty.as_ref(), *by_ref)),
+                    &method.body,
+                ),
+            );
+        }
+        summaries.methods.insert(key, summary);
     }
 }
 
 /// Summarizes one function-like body from its parameter names and statements.
 fn summarize_callable<'a>(
-    params: impl Iterator<Item = &'a str>,
+    params: impl Iterator<Item = (&'a str, Option<&'a crate::parser::ast::TypeExpr>)>,
     variadic: Option<&str>,
     by_ref_return: bool,
     return_type: Option<&crate::parser::ast::TypeExpr>,
@@ -182,10 +214,23 @@ fn summarize_callable<'a>(
         Some(TypeExpr::Named(name)) if name.as_str().eq_ignore_ascii_case("mixed")
     );
     ELEMENT_READS_INDEPENDENT.with(|flag| flag.set(mixed_return));
+    let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
+    let owned = owned_array_params(params.iter().map(|(name, ty)| (*name, *ty, false)), body);
     let mut state = HashMap::new();
-    for (index, name) in params.enumerate() {
-        state.insert(name.to_string(), ReturnArgAlias::parameter(index));
+    let mut owned_params = std::collections::HashSet::new();
+    for (index, (name, _ty)) in params.into_iter().enumerate() {
+        // An `array` parameter written in place owns its own reference in the callee (codegen
+        // retains it in the prologue from the same `owned_array_params` set, so copy-on-write
+        // separates it from the caller), so returning it always hands back an independent
+        // reference, whatever calls in between might have done to the name.
+        if owned.contains(name) {
+            owned_params.insert(name.to_string());
+            state.insert(name.to_string(), ReturnArgAlias::None);
+        } else {
+            state.insert(name.to_string(), ReturnArgAlias::parameter(index));
+        }
     }
+    OWNED_ARRAY_PARAMS.with(|owned| *owned.borrow_mut() = owned_params);
     if let Some(name) = variadic {
         let index = state.len();
         state.insert(name.to_string(), ReturnArgAlias::parameter(index));
@@ -193,10 +238,96 @@ fn summarize_callable<'a>(
     let mut returned = ReturnArgAlias::None;
     analyze_body(body, &mut state, &mut returned);
     ELEMENT_READS_INDEPENDENT.with(|flag| flag.set(false));
+    OWNED_ARRAY_PARAMS.with(|owned| owned.borrow_mut().clear());
     returned
 }
 
+/// By-value parameters declared `array` that the body writes in place (`names_written_in_place`).
+///
+/// This is the parameter ownership contract shared by the return-alias summaries (such a
+/// parameter returns independent storage) and codegen (its slot owns a reference,
+/// `ir::Function::written_params`); both read it from the same AST.
+pub(crate) fn owned_array_params<'a>(
+    params: impl Iterator<Item = (&'a str, Option<&'a crate::parser::ast::TypeExpr>, bool)>,
+    body: &[Stmt],
+) -> std::collections::HashSet<String> {
+    let written = names_written_in_place(body);
+    params
+        .filter(|(name, ty, by_ref)| {
+            !by_ref
+                && written.contains(*name)
+                && matches!(ty, Some(crate::parser::ast::TypeExpr::Named(type_name)) if type_name.as_str().eq_ignore_ascii_case("array"))
+        })
+        .map(|(name, _, _)| name.to_string())
+        .collect()
+}
+
+/// Names of variables this body writes in place as containers: element assignments and appends
+/// (`$a[$k] = ...`, `$a[] = ...`, compound forms), nested writes (`$a[$k][$j] = ...`),
+/// `unset($a[$k])`, and plain variables passed to a by-reference builtin parameter
+/// (`sort($a)`, `array_push($a, ...)`). Nested function, class and closure bodies are excluded.
+///
+/// This one AST-derived set drives both sides of the parameter ownership contract: the
+/// return-alias summary treats such parameters as returning independent storage, and codegen
+/// (`ir::Function::written_params`) makes their slots own a reference. Dead code counts too,
+/// so the two sides can never disagree in the direction that would free a caller's temporary
+/// while the result still borrows it.
+pub(crate) fn names_written_in_place(body: &[Stmt]) -> std::collections::HashSet<String> {
+    fn root_variable(expr: &Expr) -> Option<&str> {
+        match &expr.kind {
+            ExprKind::Variable(name) => Some(name),
+            ExprKind::ArrayAccess { array, .. } => root_variable(array),
+            _ => None,
+        }
+    }
+    let mut written = std::collections::HashSet::new();
+    crate::int_range::walk_stmts_shallow(body, &mut |node| match node {
+        crate::int_range::Node::Stmt(stmt) => match &stmt.kind {
+            StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => {
+                written.insert(array.clone());
+            }
+            StmtKind::NestedArrayAssign { target, .. } => {
+                if let Some(name) = root_variable(target) {
+                    written.insert(name.to_string());
+                }
+            }
+            _ => {}
+        },
+        crate::int_range::Node::Expr(expr) => {
+            let ExprKind::FunctionCall { name, args } = &expr.kind else {
+                return;
+            };
+            let key = php_symbol_key(name.as_str().trim_start_matches('\\'));
+            if key == "unset" {
+                for arg in args {
+                    if matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
+                        if let Some(root) = root_variable(arg) {
+                            written.insert(root.to_string());
+                        }
+                    }
+                }
+                return;
+            }
+            let Some(sig) = crate::builtins::registry::function_sig(&key) else {
+                return;
+            };
+            for (index, arg) in args.iter().enumerate() {
+                if sig.ref_params.get(index).copied().unwrap_or(false) {
+                    if let Some(root) = root_variable(arg) {
+                        written.insert(root.to_string());
+                    }
+                }
+            }
+        }
+    });
+    written
+}
+
 thread_local! {
+    /// `array` parameters of the callable being summarized that own their reference (written in
+    /// place), so a `return $param` never shares the caller's argument reference.
+    static OWNED_ARRAY_PARAMS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
     /// Set while summarizing a callable whose declared result is `mixed`: there an element read
     /// returned by value is boxed or retained at the return, so it does not alias the container.
     static ELEMENT_READS_INDEPENDENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -522,6 +653,11 @@ fn merge_states(
 /// Computes the argument provenance of one expression's resulting storage.
 fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArgAlias {
     match &expr.kind {
+        ExprKind::Variable(name)
+            if OWNED_ARRAY_PARAMS.with(|owned| owned.borrow().contains(name)) =>
+        {
+            ReturnArgAlias::None
+        }
         ExprKind::Variable(name) => state
             .get(name)
             .cloned()

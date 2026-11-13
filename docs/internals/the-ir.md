@@ -525,6 +525,9 @@ across a reset point.
 | `HashGet` | hash, key | value type | `reads_heap`, `may_warn`, maybe `may_fatal` |
 | `ArraySet` | array, index, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `HashSet` | hash, key, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
+| `HashAddInt` | hash, key, int delta | `I64` (1 = updated in place) | `reads_heap`, `writes_heap` |
+| `ArrayFetchDimW` | parent array, int index | `I64` (borrowed child pointer, 0 = generic path) | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
+| `ArrayStoreElemRaw` | parent array, int index, child array | `Void` | `writes_heap` (no refcount change) |
 | `ArrayPush`, `HashAppend` | container, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `ArrayEnsureUnique`, `HashEnsureUnique` | container | same container | `reads_heap`, maybe `alloc_heap`, `refcount_op` |
 | `ArrayCloneShallow`, `HashCloneShallow` | container | same kind | `alloc_heap`, `refcount_op` |
@@ -1168,6 +1171,20 @@ or length in the same block, followed by exactly one `release`, and the
 instructions in between are pure reads or arithmetic (so the parent cannot be
 written, released or freed while the element pointer is held). The read is marked
 `Borrowed`, which makes codegen skip its incref, and the release becomes `nop`.
+A boxed `mixed` element may also be borrowed when it only feeds mixed arithmetic, a
+null test, or the receiver of a `method_call` whose effects show that no possible
+target writes or releases anything (`$shapes[$i]->area()`); the window may then
+continue past the receiver's null check into the call block when the other branch
+only throws.
+
+### Checked Cast Hoisting
+
+`src/ir_passes/checked_cast_hoist.rs` runs after the borrow pass. A checked
+`+`/`-`/`*` (or mixed numeric binop) whose boxed result is cast back to `int` is
+fused by the backend into a native operation with a boxed slow path only on
+overflow, but only when the cast directly follows it. The pass moves such a cast up
+next to its producer across instructions with no effects (the cast reads nothing
+else), rewriting the moved results' recorded definition positions.
 
 ### Small-Function Inlining
 

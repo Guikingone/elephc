@@ -1030,9 +1030,30 @@ impl<'a> FunctionContext<'a> {
         if self.value_ownership(value)? != Ownership::Owned {
             return Ok(false);
         }
+        // A load of an owned temp slot whose share is later released through ANOTHER load of
+        // the same slot (`v11 = load_local t; hash_set h k v11; v12 = load_local t; release v12`,
+        // the nested-write write-back) does not hand its reference over: the slot keeps it, so
+        // the consumer must retain its own or the release frees the stored value.
+        let loaded_slot = self.loaded_local_slot(value);
         Ok(!self.function.instructions.iter().any(|inst| {
-            inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            inst.op == Op::Release
+                && inst.operands.first().copied().is_some_and(|released| {
+                    released == value
+                        || (loaded_slot.is_some() && self.loaded_local_slot(released) == loaded_slot)
+                })
         }))
+    }
+
+    /// Returns the slot a value was read from by a plain `LoadLocal`, if any.
+    fn loaded_local_slot(&self, value: ValueId) -> Option<LocalSlotId> {
+        let ValueDef::Instruction { inst, .. } = self.function.value(value)?.def else {
+            return None;
+        };
+        let inst = self.function.instruction(inst)?;
+        match (inst.op, inst.immediate.as_ref()) {
+            (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => Some(*slot),
+            _ => None,
+        }
     }
 
     /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.

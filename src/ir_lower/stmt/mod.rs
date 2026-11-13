@@ -653,6 +653,25 @@ fn contextualize_local_assignment(
     // A first assignment precedes the loop whose contract was computed from the final checker
     // environment. Preserve the literal's natural storage here; the loop preheader owns the
     // one-time conversion, including empty arrays whose runtime header still needs promotion.
+    if !ctx.has_local_slot(name) {
+        // An empty `[]` first assignment whose loop contract is an associative array is created
+        // as an empty hash directly: the two are indistinguishable in PHP, and the local then
+        // keeps one hash representation instead of a frame slot shared by an indexed array and
+        // its preheader promotion (which forces boxed `mixed` storage and an incref on every
+        // load).
+        if let Some(hash_ty) = empty_literal_hash_loop_contract(ctx, name, value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+            let hash = ctx.emit_value(
+                Op::HashNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                hash_ty.clone(),
+                Op::HashNew.default_effects(),
+                Some(span),
+            );
+            return (hash, hash_ty);
+        }
+    }
     if has_loop_contract && !ctx.has_local_slot(name) {
         return (lowered, source_ty);
     }
@@ -728,6 +747,44 @@ fn contextualize_local_assignment(
     // local's recorded type feeds `is_resource`/`gettype` and nullable-union lowering, so the
     // collapsed form must stay confined to the storage-contract comparisons above.
     (lowered, source_ty)
+}
+
+/// Returns the associative-array loop contract of `name` when `value` is an empty array literal.
+///
+/// The contracts recorded for `name` on this scope's loop headers are widened with the same rule
+/// the loop preheaders use (`wider_container_contract`), so the empty hash is created exactly when
+/// the local would otherwise be promoted to that hash type before its first keyed write.
+fn empty_literal_hash_loop_contract(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    value: &Expr,
+) -> Option<PhpType> {
+    // A local handed to a call (`sort($b)`, `array_merge($b, ...)`) keeps its indexed storage:
+    // several builtins have no associative lowering, and the promotion would reach them first.
+    if !matches!(&value.kind, ExprKind::ArrayLiteral(items) if items.is_empty())
+        || crate::superglobals::is_superglobal(name)
+        || ctx.is_ref_bound_local(name)
+        || ctx.direct_call_arg_locals.contains(name)
+    {
+        return None;
+    }
+    let mut widest: Option<PhpType> = None;
+    for ((scope, _), contracts) in ctx.loop_storage_types.iter() {
+        if scope != &ctx.loop_storage_scope {
+            continue;
+        }
+        let Some(contract) = contracts.get(name) else {
+            continue;
+        };
+        if !matches!(contract.codegen_repr(), PhpType::AssocArray { .. } | PhpType::Array(_)) {
+            return None;
+        }
+        widest = Some(match widest {
+            None => contract.clone(),
+            Some(current) => wider_container_contract(&current, contract).unwrap_or(current),
+        });
+    }
+    widest.filter(|ty| matches!(ty.codegen_repr(), PhpType::AssocArray { .. }))
 }
 
 /// Returns whether this function-like scope records `target` for `name` on any loop header.
@@ -2150,6 +2207,148 @@ fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    if let Some(delta) = hash_counter_update_delta(ctx, array, index, value) {
+        lower_hash_counter_update(ctx, array, index, value, delta, span);
+        return;
+    }
+    lower_array_assign_generic(ctx, array, index, value, span);
+}
+
+/// The integer delta of a recognised associative-array counter update.
+enum HashCounterDelta {
+    /// A literal delta (already negated for `$h[$k] - c`).
+    Literal(i64),
+    /// An int-typed local added to the element (`$h[$k] + $n`).
+    Local(String),
+}
+
+/// Recognises the counter idiom `$h[$k] = $h[$k] + $n` (also `$n + $h[$k]`, `$h[$k] - c`, and the
+/// desugared `$h[$k] += $n` / `$h[$k]++`) on a `mixed`-valued associative-array local.
+///
+/// The key must be the same side-effect-free operand on both sides (an int/string local or
+/// literal) and the delta an int literal or int local, so evaluating them once for the fast path
+/// and again on the generic fallback is unobservable. Mixed value storage is required so the
+/// generic fallback never widens the local's storage type (which would make the two paths
+/// disagree about the table's representation after they merge).
+fn hash_counter_update_delta(
+    ctx: &LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+) -> Option<HashCounterDelta> {
+    if ctx.is_ref_bound_local(array) {
+        return None;
+    }
+    let PhpType::AssocArray { value: storage, .. } = ctx.local_type(array).codegen_repr() else {
+        return None;
+    };
+    if storage.codegen_repr() != PhpType::Mixed {
+        return None;
+    }
+    let index_ok = match &index.kind {
+        ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) => true,
+        ExprKind::Variable(name) => {
+            name != array
+                && !ctx.is_ref_bound_local(name)
+                && matches!(ctx.local_type(name).codegen_repr(), PhpType::Int | PhpType::Str)
+        }
+        _ => false,
+    };
+    if !index_ok {
+        return None;
+    }
+    let ExprKind::BinaryOp { left, op, right } = &value.kind else {
+        return None;
+    };
+    let is_element = |expr: &Expr| match &expr.kind {
+        ExprKind::ArrayAccess { array: target, index: read_index } => {
+            matches!(&target.kind, ExprKind::Variable(name) if name == array)
+                && read_index.kind == index.kind
+        }
+        _ => false,
+    };
+    let delta_of = |expr: &Expr, negate: bool| match &expr.kind {
+        ExprKind::IntLiteral(n) if !negate => Some(HashCounterDelta::Literal(*n)),
+        ExprKind::IntLiteral(n) => n.checked_neg().map(HashCounterDelta::Literal),
+        ExprKind::Variable(name)
+            if !negate
+                && name != array
+                && !ctx.is_ref_bound_local(name)
+                && ctx.local_type(name).codegen_repr() == PhpType::Int =>
+        {
+            Some(HashCounterDelta::Local(name.clone()))
+        }
+        _ => None,
+    };
+    match op {
+        BinOp::Add if is_element(left) => delta_of(right, false),
+        BinOp::Add if is_element(right) => delta_of(left, false),
+        BinOp::Sub if is_element(left) => delta_of(right, true),
+        _ => None,
+    }
+}
+
+/// Lowers a recognised counter update: `HashAddInt` updates an existing integer entry in place
+/// (no boxing, no allocation); when it reports 0 the generic read-add-write path runs unchanged,
+/// so missing keys (warning + null arithmetic), shared tables, non-int values and overflow to
+/// float keep their exact PHP semantics.
+fn lower_hash_counter_update(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    delta: HashCounterDelta,
+    span: Span,
+) {
+    let array_value = ctx.load_local(array, Some(span));
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Hash) {
+        lower_array_assign_generic(ctx, array, index, value, span);
+        return;
+    }
+    let index_value = lower_expr(ctx, index);
+    let delta_expr = match delta {
+        HashCounterDelta::Literal(n) => Expr::new(ExprKind::IntLiteral(n), value.span),
+        HashCounterDelta::Local(name) => Expr::new(ExprKind::Variable(name), value.span),
+    };
+    let delta_value = lower_expr(ctx, &delta_expr);
+    if delta_value.ir_type != IrType::I64
+        || !matches!(index_value.ir_type, IrType::I64 | IrType::Str)
+    {
+        lower_array_assign_generic(ctx, array, index, value, span);
+        return;
+    }
+    let status = ctx.emit_value(
+        Op::HashAddInt,
+        vec![array_value.value, index_value.value, delta_value.value],
+        None,
+        PhpType::Bool,
+        Op::HashAddInt.default_effects(),
+        Some(span),
+    );
+    release_persisted_string_operand(ctx, index_value, span);
+    let slow = ctx.builder.create_named_block("hash_add.slow", Vec::new());
+    let done = ctx.builder.create_named_block("hash_add.done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: status.value,
+        then_target: done,
+        then_args: Vec::new(),
+        else_target: slow,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(slow);
+    lower_array_assign_generic(ctx, array, index, value, span);
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+}
+
+/// Lowers an indexed array assignment without the counter fast path.
+fn lower_array_assign_generic(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) {
     let array_value = ctx.load_local(array, Some(span));
     let mut index_value = lower_expr(ctx, index);
     let mut value_value = lower_expr(ctx, value);
@@ -2228,6 +2427,17 @@ fn lower_array_assign(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+    // A boxed `mixed` value written into concrete (int/float/bool/string) hash slots is cast and
+    // copied by the write, which does not consume the box: release an owned box afterwards
+    // (`$h["k"] = $h["missing"] + 1` on an `array<string, int>` boxes the checked sum).
+    if op == Op::HashSet
+        && value_value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && hash_value_storage_is_concrete(ctx, array_value)
+        && ctx.value_is_owning_temporary(value_value)
+        && ctx.builder.value_defining_op(value_value.value) != Some(Op::LoadLocal)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, value_value, Some(span));
+    }
     // A boxed `mixed` key (`$m[$row["id"]] = ...`) is only read by the write, which copies the
     // normalized key into the table: release an owned key box afterwards.
     if op == Op::HashSet
@@ -2240,6 +2450,14 @@ fn lower_array_assign(
     {
         crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(span));
     }
+}
+
+/// Returns whether the associative array's value slots hold concrete scalars (not boxed `mixed`).
+fn hash_value_storage_is_concrete(ctx: &LoweringContext<'_, '_>, hash: LoweredValue) -> bool {
+    let PhpType::AssocArray { value, .. } = ctx.builder.value_php_type(hash.value).codegen_repr() else {
+        return false;
+    };
+    matches!(value.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str)
 }
 
 /// Widens an associative-array local to `mixed` values before storing a value of another type.
@@ -2610,6 +2828,130 @@ fn lower_nested_local_assign_with_parent_writeback(
     // ascending write-back (the index is the same key on the way down and up).
     let indices: Vec<LoweredValue> = chain.iter().map(|e| lower_expr(ctx, e)).collect();
     let value_val = lower_expr(ctx, value);
+
+    if let Some(child_ty) = indexed_fetch_for_write_child_type(ctx, name, &indices, root_is_ref_bound) {
+        lower_nested_indexed_fetch_for_write(ctx, name, &indices, value_val, child_ty, span);
+        return;
+    }
+    lower_nested_local_assign_parent_writeback_lowered(
+        ctx,
+        name,
+        &indices,
+        value_val,
+        span,
+        root_is_ref_bound,
+    );
+}
+
+/// Returns the child array type when `$name[$i][$j] = ...` can write in place through
+/// `ArrayFetchDimW`: a plain (not reference-bound) local holding an indexed array of indexed
+/// arrays, written with two integer keys.
+fn indexed_fetch_for_write_child_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    indices: &[LoweredValue],
+    root_is_ref_bound: bool,
+) -> Option<PhpType> {
+    if root_is_ref_bound || indices.len() != 2 || ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    if !indices.iter().all(|index| index.ir_type == IrType::I64)
+        || !indices
+            .iter()
+            .all(|index| ctx.builder.value_php_type(index.value).codegen_repr() == PhpType::Int)
+    {
+        return None;
+    }
+    let PhpType::Array(child) = ctx.local_type(name).codegen_repr() else {
+        return None;
+    };
+    matches!(child.codegen_repr(), PhpType::Array(_)).then(|| (*child).clone())
+}
+
+/// Lowers `$m[$i][$j] = $v` on an indexed array of indexed arrays without copying the row.
+///
+/// `ArrayFetchDimW` separates the parent and the row only when they are shared and hands the row
+/// out borrowed; the leaf write then mutates it in place (growing it if needed) and
+/// `ArrayStoreElemRaw` stores the possibly relocated row pointer back. When the row is missing or
+/// is not an indexed array at runtime, the generic owned-temp write-back path runs instead, so
+/// warnings, autovivification and conversions are unchanged.
+fn lower_nested_indexed_fetch_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    indices: &[LoweredValue],
+    value_val: LoweredValue,
+    child_ty: PhpType,
+    span: Span,
+) {
+    let root = ctx.load_local(name, Some(span));
+    if root.ir_type != IrType::Heap(IrHeapKind::Array) {
+        lower_nested_local_assign_parent_writeback_lowered(ctx, name, indices, value_val, span, false);
+        return;
+    }
+    let child_ptr = ctx.emit_value(
+        Op::ArrayFetchDimW,
+        vec![root.value, indices[0].value],
+        None,
+        PhpType::Int,
+        Op::ArrayFetchDimW.default_effects(),
+        Some(span),
+    );
+    let fast = ctx.builder.create_named_block("nested_w.fast", Vec::new());
+    let slow = ctx.builder.create_named_block("nested_w.slow", Vec::new());
+    let done = ctx.builder.create_named_block("nested_w.done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: child_ptr.value,
+        then_target: fast,
+        then_args: Vec::new(),
+        else_target: slow,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(fast);
+    let parent = ctx.load_local(name, Some(span));
+    let child_ir = IrType::Heap(IrHeapKind::Array);
+    let child = ctx
+        .builder
+        .emit_with_effects(
+            Op::ArrayGet,
+            vec![parent.value, indices[0].value],
+            None,
+            child_ir,
+            child_ty.clone(),
+            Ownership::Borrowed,
+            Op::ArrayGet.default_effects(),
+            Some(span),
+        )
+        .expect("array_get produces the borrowed row");
+    let child = LoweredValue { value: child, ir_type: child_ir };
+    write_nested_element_in_place(ctx, child, child_ty, indices[1], value_val, span);
+    ctx.emit_void(
+        Op::ArrayStoreElemRaw,
+        vec![parent.value, indices[0].value, child.value],
+        None,
+        Op::ArrayStoreElemRaw.default_effects(),
+        Some(span),
+    );
+    branch_to(ctx, done);
+
+    ctx.builder.position_at_end(slow);
+    lower_nested_local_assign_parent_writeback_lowered(ctx, name, indices, value_val, span, false);
+    branch_to(ctx, done);
+
+    ctx.builder.position_at_end(done);
+}
+
+/// Generic nested write-back over already-lowered indices and value (see
+/// `lower_nested_local_assign_with_parent_writeback`).
+fn lower_nested_local_assign_parent_writeback_lowered(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    indices: &[LoweredValue],
+    value_val: LoweredValue,
+    span: Span,
+    root_is_ref_bound: bool,
+) {
+    let depth = indices.len();
 
     // 1. Head: load the alias inner through the kind-6 ref cell.
     let mut head = ctx.load_local(name, Some(span));

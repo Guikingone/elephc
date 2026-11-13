@@ -501,3 +501,126 @@ echo $sum, "\n"; var_dump([$n + 1, $n * 2]);
     assert_eq!(out.stdout, "119\narray(2) {\n  [0]=>\n  int(5)\n  [1]=>\n  int(8)\n}\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `$h[$k] = $h[$k] + $n` (and `+=`, `++`, `-=`, `--`) on a `mixed` hash updates an existing
+/// integer entry in place; shared tables, captured values, missing keys, non-int values and
+/// overflow keep the generic PHP semantics.
+#[test]
+fn test_hash_counter_update_fast_path_keeps_php_semantics() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function run() {
+    $words = ["alpha", "beta", "gamma", "alpha", "beta", "alpha"];
+    $counts = [];
+    for ($i = 0; $i < 3; $i++) {
+        foreach ($words as $w) {
+            if (isset($counts[$w])) { $counts[$w] = $counts[$w] + 1; } else { $counts[$w] = 1; }
+        }
+    }
+    foreach ($counts as $w => $c) { echo $w, "=", $c, "\n"; }
+    $copy = $counts;
+    $counts["alpha"] += 10;
+    echo $copy["alpha"], " ", $counts["alpha"], "\n";
+    $x = $counts["beta"];
+    $counts["beta"]++;
+    $counts["beta"] = $counts["beta"] + 1;
+    echo $x, " ", $counts["beta"], "\n";
+    $counts["big2"] = PHP_INT_MAX - 1;
+    $counts["big2"]++;
+    var_dump($counts["big2"]);
+    $counts["f"] = 1.5;
+    $counts["f"] += 1;
+    var_dump($counts["f"]);
+    $n = 7;
+    $counts["alpha"] = $n + $counts["alpha"];
+    $counts["alpha"] = $counts["alpha"] - 3;
+    $counts["alpha"] -= 2;
+    $counts["alpha"]--;
+    echo $counts["alpha"], "\n";
+    $h = ["a" => 1];
+    $h[5] = 1;
+    $h[5]++;
+    $k = "5";
+    $h[$k] += 3;
+    $j = 5;
+    $h[$j] = $h[$j] + 1;
+    echo json_encode($h), "\n";
+}
+run();
+$g = ["x" => 1];
+$g["x"] += 1;
+$g["x"]++;
+$alias = $g;
+$g["x"]++;
+echo $g["x"], " ", $alias["x"], "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "alpha=9\nbeta=6\ngamma=3\n9 19\n6 8\nint(9223372036854775807)\nfloat(2.5)\n20\n{\"a\":1,\"5\":6}\n4 3\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// `$m[$i][$j] = $v` on an indexed array of indexed arrays writes the row in place
+/// (`ArrayFetchDimW`): shared parents and rows are still separated by copy-on-write, rows grow,
+/// and by-value parameters, copies and compound assignments keep PHP's value semantics.
+#[test]
+fn test_nested_indexed_write_in_place_keeps_value_semantics() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(int $m) {
+    $b = [[1.0, 2.0], [3.0, 4.0]];
+    for ($i = 0; $i < 2; $i++) { $b[$i][1] = $b[$i][1] + 0.5 * $m; }
+    echo $b[0][1], " ", $b[1][1], "\n";
+    $copy = $b;
+    $b[0][0] = 9.5;
+    echo $copy[0][0], " ", $b[0][0], "\n";
+    $r = [1, 2];
+    $mm = [$r, $r];
+    $mm[0][0] = 7 * $m;
+    echo $r[0], " ", $mm[0][0], " ", $mm[1][0], "\n";
+    $row = $mm[1];
+    $mm[1][1] = 5;
+    echo $row[1], " ", $mm[1][1], "\n";
+    $g = [[1], [2]];
+    for ($k = 1; $k < 20; $k++) { $g[0][$k] = $k * $m; }
+    echo count($g[0]), " ", $g[0][19], " ", count($g[1]), "\n";
+    $s = [["a", "b"], ["c"]];
+    $s[1][0] = "z" . $m;
+    $s[0][1] = str_repeat("q", 3);
+    echo implode(",", $s[0]), implode(",", $s[1]), "\n";
+    return $b;
+}
+function p(array $a, int $m) { $a[0][0] = 100 + $m; return $a[0][0]; }
+$x = f($argc);
+echo json_encode($x), "\n";
+$q = [[1, 2], [3, 4]];
+echo p($q, $argc), " ", $q[0][0], "\n";
+$mm2 = [[1, 2]];
+$mm2[0][1] += 10;
+$mm2[0][1]++;
+echo $mm2[0][1], "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2.5 4.5\n1 9.5\n1 7 1\n2 5\n20 19 1\na,qqqz1\n[[9.5,2.5],[3,4.5]]\n101 1\n13\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// A method call on a boxed `mixed` array element borrows the element (no incref/decref pair)
+/// only when every possible target method writes and releases nothing; a method that clears the
+/// container while it runs keeps the retained receiver.
+#[test]
+fn test_mixed_element_method_receiver_borrow_is_safe() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class A { public int $v = 1; public function get(): int { return $this->v * 2; } }
+class B { public int $w = 7; public function get(): int { global $arr; $arr = []; return $this->w; } }
+$arr = [new A(), new B(), new A()];
+$t = 0;
+for ($i = 0; $i < 2; $i++) { $t += $arr[$i % 2]->get(); }
+echo $t, " ", count($arr), "\n";
+function sum(array $xs): int { $s = 0; for ($i = 0; $i < count($xs); $i++) { $s += $xs[$i]->get(); } return $s; }
+echo sum([new A(), new A()]), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "9 0\n4\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

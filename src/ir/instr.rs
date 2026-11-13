@@ -479,6 +479,20 @@ pub enum Op {
     HashGetSilent,
     ArrayIsset,
     HashIsset,
+    /// In-place integer add on an existing associative-array entry (`$h[$k] += $n` fast path).
+    /// Operands: hash, key, int delta. Returns I64 1 when the entry was updated, 0 when the
+    /// caller must run the generic read-add-write path (missing key, shared table, non-int
+    /// value or overflow); it never mutates memory in the 0 case.
+    HashAddInt,
+    /// Fetch-for-write of a nested indexed array (`$m[$i][$j] = $v`). Operands: parent array,
+    /// int index. Separates a shared parent (written back to its source local) and a shared
+    /// child (stored into the parent slot), and returns the child pointer as I64, or 0 when the
+    /// element is not a live indexed array (the caller then runs the generic nested write).
+    ArrayFetchDimW,
+    /// Raw store of a (possibly relocated) child array pointer into a parent indexed-array slot,
+    /// without refcount changes: the pair `ArrayFetchDimW` / in-place write already balanced the
+    /// parent's reference. Operands: parent array, int index, child array.
+    ArrayStoreElemRaw,
     ArrayElemAddr,
     ArraySet,
     HashSet,
@@ -849,6 +863,11 @@ impl Op {
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             BindPropRefCell => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
+            HashAddInt => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL,
+            ArrayFetchDimW => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
+            }
+            ArrayStoreElemRaw => E::WRITES_HEAP,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -1092,6 +1111,9 @@ impl Op {
             HashGetSilent => "hash_get_silent",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
+            HashAddInt => "hash_add_int",
+            ArrayFetchDimW => "array_fetch_dim_w",
+            ArrayStoreElemRaw => "array_store_elem_raw",
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",

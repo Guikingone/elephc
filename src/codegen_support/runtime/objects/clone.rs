@@ -89,6 +89,13 @@ fn emit_object_clone_payload_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source payload base
     emitter.instruction("ldr x2, [sp, #8]");                                    // x2 = new payload base
     emitter.instruction("ldr x3, [sp, #40]");                                   // x3 = number of payload bytes to copy
+    emitter.label("__rt_object_clone_payload_copy8");
+    emitter.instruction("cmp x3, #8");                                          // at least one whole 8-byte word left?
+    emitter.instruction("b.lo __rt_object_clone_payload_copy");                 // no — finish byte by byte
+    emitter.instruction("ldr x4, [x1], #8");                                    // copy eight bytes at a time, advance the source
+    emitter.instruction("str x4, [x2], #8");                                    // store the eight bytes, advance the destination
+    emitter.instruction("sub x3, x3, #8");                                      // account for the copied word
+    emitter.instruction("b __rt_object_clone_payload_copy8");                   // continue copying whole words
     emitter.label("__rt_object_clone_payload_copy");
     emitter.instruction("cbz x3, __rt_object_clone_payload_walk");              // stop once every payload byte has been copied
     emitter.instruction("ldrb w4, [x1], #1");                                   // load one payload byte from the source object
@@ -339,6 +346,15 @@ fn emit_object_clone_payload_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // rsi = source payload base
     emitter.instruction("mov rdi, r12");                                        // rdi = new payload base
     emitter.instruction("mov rcx, QWORD PTR [rbp - 80]");                       // rcx = number of payload bytes to copy
+    emitter.label("__rt_object_clone_payload_copy8");
+    emitter.instruction("cmp rcx, 8");                                          // is at least one whole 8-byte word left?
+    emitter.instruction("jb __rt_object_clone_payload_copy");                   // no — finish the tail byte by byte
+    emitter.instruction("mov r8, QWORD PTR [rsi]");                             // copy eight bytes at a time
+    emitter.instruction("mov QWORD PTR [rdi], r8");                             // store the eight bytes
+    emitter.instruction("add rsi, 8");                                          // advance the source cursor by a word
+    emitter.instruction("add rdi, 8");                                          // advance the destination cursor by a word
+    emitter.instruction("sub rcx, 8");                                          // account for the copied word
+    emitter.instruction("jmp __rt_object_clone_payload_copy8");                 // continue copying whole words
     emitter.label("__rt_object_clone_payload_copy");
     emitter.instruction("test rcx, rcx");                                       // have we copied every payload byte?
     emitter.instruction("jz __rt_object_clone_payload_walk");                   // stop once the payload region is exhausted

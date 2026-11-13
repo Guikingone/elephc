@@ -153,6 +153,37 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     Ok(())
 }
 
+/// Lowers `HashAddInt`: the in-place `$h[$k] += $n` fast path through `__rt_hash_add_int`.
+///
+/// The helper returns 1 after updating an existing integer entry of an unshared table in place,
+/// or 0 (memory untouched) so the IR falls through to the generic read-add-write sequence.
+/// The table is never relocated, so no write-back of the hash pointer is needed.
+pub(super) fn lower_hash_add_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let delta = expect_operand(inst, 2)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(delta, "x3")?;
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_add_int");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(delta, "rcx")?;
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_add_int");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `HashRefElement`: promotes a hash element to a kind-6 reference cell (`$x = &$arr[$k]`).
 ///
 /// Calls `__rt_hash_ref_element(hash, key)`, which returns the possibly-relocated hash and the

@@ -83,7 +83,14 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("mul x3, x9, x11");                                     // x3 = bytes to copy (length * elem_size)
     emitter.instruction("str x0, [sp, #24]");                                   // save new array ptr (reusing slot)
 
-    // -- byte-copy loop --
+    // -- word-copy loop, then a byte tail --
+    emitter.label("__rt_array_grow_copy8");
+    emitter.instruction("cmp x3, #8");                                          // at least one whole 8-byte word left?
+    emitter.instruction("b.lo __rt_array_grow_copy");                           // no — finish byte by byte
+    emitter.instruction("ldr x4, [x1], #8");                                    // load eight bytes from old, advance
+    emitter.instruction("str x4, [x2], #8");                                    // store eight bytes to new, advance
+    emitter.instruction("sub x3, x3, #8");                                      // decrement remaining by a word
+    emitter.instruction("b __rt_array_grow_copy8");                             // continue copying words
     emitter.label("__rt_array_grow_copy");
     emitter.instruction("cbz x3, __rt_array_grow_done");                        // all bytes copied
     emitter.instruction("ldrb w4, [x1], #1");                                   // load byte from old, advance
@@ -158,6 +165,15 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rax + 24]");                                 // advance to the payload base of the grown indexed-array storage
     emitter.instruction("mov rcx, r10");                                        // seed the payload byte-count computation from the previous logical length
     emitter.instruction("imul rcx, r12");                                       // compute the number of live payload bytes that must be copied into the grown indexed array
+    emitter.label("__rt_array_grow_copy8");
+    emitter.instruction("cmp rcx, 8");                                          // is at least one whole 8-byte word of payload left?
+    emitter.instruction("jb __rt_array_grow_copy");                             // no — finish the tail byte by byte
+    emitter.instruction("mov r8, QWORD PTR [rsi]");                             // load the next eight payload bytes from the previous storage
+    emitter.instruction("mov QWORD PTR [rdi], r8");                             // store them into the grown storage
+    emitter.instruction("add rsi, 8");                                          // advance the source payload cursor by a word
+    emitter.instruction("add rdi, 8");                                          // advance the destination payload cursor by a word
+    emitter.instruction("sub rcx, 8");                                          // account for the copied word
+    emitter.instruction("jmp __rt_array_grow_copy8");                           // continue copying whole words
     emitter.label("__rt_array_grow_copy");
     emitter.instruction("test rcx, rcx");                                       // have we copied every live payload byte into the grown indexed-array storage?
     emitter.instruction("je __rt_array_grow_done");                             // stop the payload copy loop once the live payload region is exhausted

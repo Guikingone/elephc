@@ -57,6 +57,13 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("add x1, x1, #24");                                     // x1 = source payload base
     emitter.instruction("add x2, x20, #24");                                    // x2 = clone payload base
     emitter.instruction("mul x3, x19, x21");                                    // x3 = payload bytes to copy
+    emitter.label("__rt_array_clone_shallow_copy8");
+    emitter.instruction("cmp x3, #8");                                          // at least one whole 8-byte word left?
+    emitter.instruction("b.lo __rt_array_clone_shallow_copy");                  // no — finish byte by byte
+    emitter.instruction("ldr x4, [x1], #8");                                    // copy eight bytes at a time, advance the source
+    emitter.instruction("str x4, [x2], #8");                                    // store the eight bytes, advance the destination
+    emitter.instruction("sub x3, x3, #8");                                      // account for the copied word
+    emitter.instruction("b __rt_array_clone_shallow_copy8");                    // continue copying whole words
     emitter.label("__rt_array_clone_shallow_copy");
     emitter.instruction("cbz x3, __rt_array_clone_shallow_fixup");              // skip the copy loop when the array is empty
     emitter.instruction("ldrb w4, [x1], #1");                                   // load one byte from the source payload
@@ -167,6 +174,15 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rax + 24]");                                 // advance to the cloned indexed-array payload base
     emitter.instruction("mov rcx, r12");                                        // seed the payload byte-count computation from the source logical length
     emitter.instruction("imul rcx, r14");                                       // compute the number of live payload bytes that must be copied into the clone
+    emitter.label("__rt_array_clone_shallow_copy8");
+    emitter.instruction("cmp rcx, 8");                                          // is at least one whole 8-byte word left?
+    emitter.instruction("jb __rt_array_clone_shallow_copy");                    // no — finish the tail byte by byte
+    emitter.instruction("mov r8, QWORD PTR [rsi]");                             // copy eight bytes at a time
+    emitter.instruction("mov QWORD PTR [rdi], r8");                             // store the eight bytes
+    emitter.instruction("add rsi, 8");                                          // advance the source cursor by a word
+    emitter.instruction("add rdi, 8");                                          // advance the destination cursor by a word
+    emitter.instruction("sub rcx, 8");                                          // account for the copied word
+    emitter.instruction("jmp __rt_array_clone_shallow_copy8");                  // continue copying whole words
     emitter.label("__rt_array_clone_shallow_copy");
     emitter.instruction("test rcx, rcx");                                       // have we copied every live payload byte into the cloned indexed-array storage?
     emitter.instruction("je __rt_array_clone_shallow_fixup");                   // stop the payload copy loop once the live payload region is exhausted

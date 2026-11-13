@@ -213,3 +213,47 @@ var_dump(first([1.5]));
     );
     assert_eq!(out, "int(1)\nstring(5) \"hello\"\nfloat(1.5)\n");
 }
+
+/// A by-value `array` parameter written in place (element write, append, `unset`, `sort`, nested
+/// write, compound assignment) is separated from the caller's array by copy-on-write: the callee
+/// used to mutate the caller's array (or split it and drop the caller's reference, crashing
+/// later), and a nested write-back freed the stored inner array while it was still in use.
+#[test]
+fn test_by_value_array_param_writes_do_not_reach_the_caller() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function bump(array $a) { $a["delta"] = 9; echo $a["delta"], "\n"; }
+function bumpi(array $a) { $a[0] = 9; $a[] = 4; echo $a[0], count($a), "\n"; }
+function s(array $a) { sort($a); echo implode(",", $a), "\n"; }
+function u(array $a) { unset($a["x"]); echo count($a), "\n"; }
+function n(array $a) { $a["in"]["k"] = 5; echo $a["in"]["k"], count($a["in"]), "\n"; }
+function p(array $a) { $a[] = 7; echo count($a), "\n"; return $a; }
+function c(array $a) { $a["n"] += 5; $a["n"]++; return $a["n"]; }
+function run(int $m) {
+    $c = ["delta" => $m];
+    bump($c);
+    echo $c["delta"], "\n";
+    $l = [$m, $m];
+    $l2 = $l;
+    bumpi($l);
+    echo $l[0], count($l), $l2[0], "\n";
+    $l = [3 * $m, 1, 2];
+    s($l); echo implode(",", $l), "\n";
+    $h = ["x" => $m, "y" => 2];
+    u($h); echo count($h), "\n";
+    $g = ["in" => ["k" => $m]];
+    n($g); echo $g["in"]["k"], "\n";
+    $q = [$m];
+    $q2 = p($q); echo count($q), " ", count($q2), "\n";
+    $q3 = p(p($q)); echo count($q3), "\n";
+    $cn = ["n" => $m];
+    echo c($cn), " ", $cn["n"], "\n";
+    $loc = ["in" => ["k" => $m]];
+    $loc["in"]["k"] = 5;
+    echo count($loc["in"]), $loc["in"]["k"], "\n";
+}
+run($argc);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "9\n1\n93\n121\n1,2,3\n3,1,2\n1\n2\n51\n1\n2\n1 2\n2\n3\n3\n7 1\n15\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

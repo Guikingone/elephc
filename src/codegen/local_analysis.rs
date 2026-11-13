@@ -341,10 +341,55 @@ fn owned_parameter_slots(
                 && param.php_type.codegen_repr() != PhpType::Mixed;
             (stored_slots.contains(&slot)
                 || ever_ref_cell_slots.contains(&slot)
-                || prologue_boxes_owned_mixed)
+                || prologue_boxes_owned_mixed
+                || function.written_params.contains(&param.name)
+                || (matches!(local_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    && container_written_in_place(function, slot)))
                 .then_some(slot)
         })
         .collect()
+}
+
+/// Returns whether a by-value container parameter is written in place (`$a[$k] = $v`,
+/// `$a[] = $v`, `unset($a[$k])`, `$a[$k] += $n`, ...).
+///
+/// Those writes store the possibly-separated container back into the slot without an EIR
+/// `StoreLocal`. A borrowed parameter slot would let the write mutate (or split and then
+/// drop a reference of) the caller's container, so such a slot must own its own reference:
+/// the prologue retains it, making copy-on-write separate it from the caller.
+fn container_written_in_place(function: &Function, slot: LocalSlotId) -> bool {
+    function.instructions.iter().any(|inst| {
+        matches!(
+            inst.op,
+            Op::ArraySet
+                | Op::ArraySetMixedKey
+                | Op::ArrayPush
+                | Op::ArrayElemAddr
+                | Op::HashSet
+                | Op::HashAppend
+                | Op::HashUnset
+                | Op::HashAddInt
+                | Op::ArrayFetchDimW
+                | Op::ArrayStoreElemRaw
+                | Op::HashRefElement
+                | Op::HashBindRefElement
+                | Op::HashRefAppendElement
+        ) && inst.operands.first().is_some_and(|operand| {
+            loads_local_slot(function, *operand) == Some(slot)
+        })
+    })
+}
+
+/// Returns the slot a value was loaded from by a plain `LoadLocal`, if any.
+fn loads_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
+        return None;
+    };
+    let inst = function.instruction(inst)?;
+    match (inst.op, inst.immediate.as_ref()) {
+        (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => Some(*slot),
+        _ => None,
+    }
 }
 
 /// Returns whether a local representation has an implemented frame cleanup path.

@@ -854,6 +854,9 @@ pub(crate) fn lower_user_function(
         None,
         web,
     );
+    if let Some(written) = check_result.return_alias_summaries.function_written(name) {
+        function.written_params.extend(written.iter().cloned());
+    }
     add_closures(module, closures);
     module.add_function(function);
 }
@@ -971,6 +974,12 @@ pub(crate) fn lower_class_method(
         None,
         web,
     );
+    if let Some(written) = check_result
+        .return_alias_summaries
+        .method_written(class_name, method_name)
+    {
+        function.written_params.extend(written.iter().cloned());
+    }
     add_closures(module, closures);
     module.class_methods.push(function);
 }
@@ -1485,6 +1494,37 @@ fn lower_closure_function_with_signature(
 }
 
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
+/// Returns the locals passed directly as an argument of a call anywhere in `body` (nested
+/// function, class and closure bodies excluded).
+fn direct_call_arg_locals(body: &[Stmt]) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    crate::int_range::walk_stmts_shallow(body, &mut |node| {
+        let crate::int_range::Node::Expr(expr) = node else {
+            return;
+        };
+        let args = match &expr.kind {
+            ExprKind::FunctionCall { args, .. }
+            | ExprKind::MethodCall { args, .. }
+            | ExprKind::NullsafeMethodCall { args, .. }
+            | ExprKind::StaticMethodCall { args, .. }
+            | ExprKind::ClosureCall { args, .. }
+            | ExprKind::ExprCall { args, .. }
+            | ExprKind::NewObject { args, .. } => args,
+            _ => return,
+        };
+        for arg in args {
+            let arg = match &arg.kind {
+                ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) => value.as_ref(),
+                _ => arg,
+            };
+            if let ExprKind::Variable(name) = &arg.kind {
+                names.insert(name.clone());
+            }
+        }
+    });
+    names
+}
+
 fn lower_body_into_function(
     function: &mut Function,
     data: &mut crate::ir::DataPool,
@@ -1524,6 +1564,21 @@ fn lower_body_into_function(
     web: bool,
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
+    // Parameters of the lowered body that are written in place as containers own their slot
+    // (codegen retains them). Summarized functions and methods add the checker-side
+    // `owned_array_params` set after lowering; this lowered-body part covers closures and only
+    // ever widens ownership (a leak at worst, never an early free).
+    let written = crate::types::names_written_in_place(body);
+    function.written_params = function
+        .params
+        .iter()
+        .filter(|param| {
+            !param.by_ref
+                && written.contains(&param.name)
+                && matches!(param.php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        })
+        .map(|param| param.name.clone())
+        .collect();
     let function_by_ref_return = function.flags.by_ref_return;
     let by_ref_params = function
         .params
@@ -1565,6 +1620,7 @@ fn lower_body_into_function(
     );
     ctx.by_ref_return = function_by_ref_return;
     ctx.class_from_bind_scope = class_from_bind_scope;
+    ctx.direct_call_arg_locals = direct_call_arg_locals(body);
     ctx.body_variable_reads = if eval_scope_reads.is_some() {
         None
     } else {
