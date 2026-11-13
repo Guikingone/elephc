@@ -655,7 +655,14 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let callback_arg_types = array_filter_callback_arg_types(ctx, mode, &elem_ty)?;
     if let Some(visible_arg_types) = callback_arg_types.clone() {
         match ctx.value_php_type(callback)?.codegen_repr() {
-            PhpType::Callable => {
+            PhpType::Callable
+                if !capture_free_closure_callback(
+                    ctx,
+                    callback,
+                    &visible_arg_types,
+                    &[PhpType::Bool, PhpType::Int],
+                ) =>
+            {
                 lower_descriptor_callback_runtime(
                     ctx,
                     callback,
@@ -751,7 +758,14 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 1)?;
     let elem_ty = array_map_callback_array_element_type(ctx.value_php_type(array)?)?;
     match ctx.value_php_type(callback)?.codegen_repr() {
-        PhpType::Callable => {
+        PhpType::Callable
+            if !capture_free_closure_callback(
+                ctx,
+                callback,
+                std::slice::from_ref(&elem_ty),
+                &[PhpType::Int, PhpType::Bool, PhpType::Str],
+            ) =>
+        {
             let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
             let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
             return lower_array_map_descriptor_callback(
@@ -1129,7 +1143,15 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let initial_ty =
         eight_byte_callback_value_type(ctx.value_php_type(initial)?, "array_reduce initial")?;
     match ctx.value_php_type(callback)?.codegen_repr() {
-        PhpType::Callable => {
+        PhpType::Callable
+            if initial_ty != PhpType::Int
+                || !capture_free_closure_callback(
+                    ctx,
+                    callback,
+                    &[initial_ty.clone(), elem_ty.clone()],
+                    &[PhpType::Int],
+                ) =>
+        {
             lower_descriptor_callback_runtime(
                 ctx,
                 callback,
@@ -3943,6 +3965,8 @@ fn static_callback_name_operand(
     let kind = match inst_ref.op {
         Op::ConstStr => StaticCallbackOperandKind::StringLiteral,
         Op::FirstClassCallableNew => StaticCallbackOperandKind::FirstClassCallable,
+        // A capture-free closure is a plain function call to its generated body.
+        Op::ClosureNew => StaticCallbackOperandKind::StringLiteral,
         _ => unreachable!("callback source instruction was validated earlier"),
     };
     let Some(Immediate::Data(data)) = inst_ref.immediate.as_ref() else {
@@ -3987,6 +4011,50 @@ fn static_callback_source_instruction<'a>(
         return static_callback_local_source_instruction(ctx, block, index, inst_ref, owner);
     }
     require_static_callback_source(inst_ref, owner)
+}
+
+/// Returns true when a callable operand is a closure literal created right here with no
+/// captures (no `use`, no bound `$this`) whose body takes plain by-value parameters: the
+/// array callback runtimes can then call its generated function directly instead of going
+/// through the descriptor invoker (which boxes every argument into an argument array). The
+/// closure's declared return type must be one `accepted_returns` lists: what the builtin's
+/// direct runtime consumes natively (the descriptor path normalizes anything else).
+fn capture_free_closure_callback(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    visible_arg_types: &[PhpType],
+    accepted_returns: &[PhpType],
+) -> bool {
+    let Some(ValueDef::Instruction { inst, .. }) = ctx.function.value(value).map(|v| v.def.clone()) else {
+        return false;
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return false;
+    };
+    if inst_ref.op != Op::ClosureNew || !inst_ref.operands.is_empty() {
+        return false;
+    }
+    let Some(Immediate::Data(data)) = inst_ref.immediate.as_ref() else {
+        return false;
+    };
+    let Some(name) = ctx.module.data.strings.get(data.as_raw() as usize) else {
+        return false;
+    };
+    ctx.callable_function_by_name(name).is_some_and(|callee| {
+        callee.flags.is_closure
+            && accepted_returns.contains(&callee.return_php_type.codegen_repr())
+            && !callee.flags.is_generator
+            && !callee.flags.by_ref_return
+            && callee.params.iter().all(|param| !param.by_ref && !param.variadic)
+            // Each declared parameter takes exactly the native argument the runtime passes, so
+            // no boxing or coercion adapter is needed (untyped parameters keep the descriptor).
+            && callee.params.len() == visible_arg_types.len()
+            && callee
+                .params
+                .iter()
+                .zip(visible_arg_types)
+                .all(|(param, arg)| param.php_type.codegen_repr() == arg.codegen_repr())
+    })
 }
 
 /// Returns whether a callback operand can use the static callback binding path.
@@ -4109,7 +4177,9 @@ fn require_static_callback_source<'a>(
     inst: &'a Instruction,
     owner: &str,
 ) -> Result<&'a Instruction> {
-    if matches!(inst.op, Op::ConstStr | Op::FirstClassCallableNew) {
+    if matches!(inst.op, Op::ConstStr | Op::FirstClassCallableNew)
+        || (inst.op == Op::ClosureNew && inst.operands.is_empty())
+    {
         Ok(inst)
     } else {
         Err(CodegenIrError::unsupported(format!(

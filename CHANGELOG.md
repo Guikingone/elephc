@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- `array_map()`, `array_filter()` and `array_reduce()` call a capture-free closure literal directly when its declared parameter and return types match the native element types, instead of boxing every argument into an argument array for the generic callable invoker (funcarr −96 % instructions).
 - Fixed: `&`, `|` and `^` between two runtime `mixed` integers computed with zeros on x86_64 (the helper passed each operand to the int cast in the wrong register).
 - Fixed (register coalescing): two parameters of one block could share a register, so a never-read loop variable's edge copy overwrote a live one; and a call-save reload could restore a dead value over a coalesced partner (a `(int)($a + $b)` result was lost). Call saves now skip reloading values that are dead after the call.
 - Mixed `is_null()`/kind checks and method calls on a `mixed` receiver unbox the value inline instead of calling `__rt_mixed_unbox` (oop −9 % instructions).

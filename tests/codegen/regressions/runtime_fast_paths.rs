@@ -464,3 +464,26 @@ echo $a ^ $b, " ", ($a ^ $b) ^ 77, " ", (($a ^ $b ^ 77) ^ 1) ^ $t, " ", $a | $b,
 "#);
     assert_eq!(out, "3 78 76 3 3 -4 sb\n");
 }
+
+/// `array_map`/`array_filter`/`array_reduce` call a capture-free closure literal whose
+/// parameters and return type match the native element types directly (no descriptor
+/// invoker, no boxed argument array); untyped or mismatched closures keep the descriptor path.
+#[test]
+fn test_capture_free_closure_callbacks_call_directly() {
+    let out = compile_and_run(r#"<?php
+$ints = [3, 1, 4, 1, 5, 9, 2, 6];
+$strs = ["a", "bb", "", "dddd"];
+print_r(array_map(fn(int $x): int => $x * $x, $ints));
+print_r(array_map(fn(string $s): string => strtoupper($s) . "!", $strs));
+print_r(array_map(fn($x) => $x > 2, $ints));
+echo array_reduce($ints, fn(int $c, int $x): int => $c + $x, 0), "\n";
+echo array_reduce($ints, fn($c, $x) => max($c, $x), PHP_INT_MIN), "\n";
+var_dump(array_reduce([], fn($c, $x) => $c + $x, 7));
+print_r(array_map(function (int $x): string { $y = $x * 3; return "v$y"; }, $ints));
+echo count(array_filter($ints, fn(int $x): bool => $x > 2)), " ", array_sum(array_filter($ints, fn(int $x): int => $x % 3)), "\n";
+echo implode(",", array_map(fn(int $x): string => str_repeat("*", $x), [1, 2, 3])), "\n";
+echo array_reduce(array_map(fn(int $x): int => $x * 3, $ints), fn(int $c, int $x): int => $c - $x, 100), "\n";
+echo array_reduce([1, 2, 3], fn(int $c, int $x): int => $c * 10 + $x, 0), "\n";
+"#);
+    assert_eq!(out, "Array\n(\n    [0] => 9\n    [1] => 1\n    [2] => 16\n    [3] => 1\n    [4] => 25\n    [5] => 81\n    [6] => 4\n    [7] => 36\n)\nArray\n(\n    [0] => A!\n    [1] => BB!\n    [2] => !\n    [3] => DDDD!\n)\nArray\n(\n    [0] => 1\n    [1] => \n    [2] => 1\n    [3] => \n    [4] => 1\n    [5] => 1\n    [6] => \n    [7] => 1\n)\n31\n9\nint(7)\nArray\n(\n    [0] => v9\n    [1] => v3\n    [2] => v12\n    [3] => v3\n    [4] => v15\n    [5] => v27\n    [6] => v6\n    [7] => v18\n)\n5 13\n*,**,***\n7\n123\n");
+}
