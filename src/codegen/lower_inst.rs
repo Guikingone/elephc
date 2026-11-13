@@ -184,6 +184,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
         Op::StrOffsetSet => strings::lower_str_offset_set(ctx, &inst),
         Op::StrPersist => strings::lower_str_persist(ctx, &inst),
+        Op::ArrayCloneShallow | Op::HashCloneShallow => lower_container_clone_shallow(ctx, &inst),
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
@@ -9404,4 +9405,38 @@ fn expect_operand(inst: &Instruction, index: usize) -> Result<ValueId> {
     inst.operands.get(index).copied().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("{} missing operand {}", inst.op.name(), index))
     })
+}
+
+/// Lowers `array_clone_shallow` / `hash_clone_shallow`: an independent copy of the operand
+/// container (children retained, strings re-persisted). An `Array`-typed value can hold hash
+/// storage at runtime, so the helper is chosen from the heap kind byte.
+fn lower_container_clone_shallow(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let hash = ctx.next_label("clone_shallow_hash");
+    let done = ctx.next_label("clone_shallow_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(value, "x0")?;
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // heap kind word of the container
+            ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the heap kind byte
+            ctx.emitter.instruction("cmp x9, #3");                              // hash storage?
+            ctx.emitter.instruction(&format!("b.eq {}", hash));                 // clone it as a hash
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+            ctx.emitter.instruction(&format!("b {}", done));                    // indexed clone ready
+            ctx.emitter.label(&hash);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(value, "rdi")?;
+            ctx.emitter.instruction("movzx eax, BYTE PTR [rdi - 8]");           // heap kind byte of the container
+            ctx.emitter.instruction("cmp eax, 3");                              // hash storage?
+            ctx.emitter.instruction(&format!("je {}", hash));                   // clone it as a hash
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // indexed clone ready
+            ctx.emitter.label(&hash);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
 }

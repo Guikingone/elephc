@@ -87,6 +87,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
     strings::emit_implode_float(emitter);
+    strings::emit_implode_bool(emitter);
     strings::emit_dval_to_lval_slow(emitter);
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);

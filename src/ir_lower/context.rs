@@ -59,6 +59,8 @@ pub(crate) struct LoopFrame {
     pub break_block: BlockId,
     pub continue_block: BlockId,
     pub cleanup: Option<LoopCleanup>,
+    /// A second value released on early exits (the by-value foreach snapshot reference).
+    pub snapshot_cleanup: Option<LoopCleanup>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.

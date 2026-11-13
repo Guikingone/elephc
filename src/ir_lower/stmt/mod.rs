@@ -1935,6 +1935,7 @@ fn lower_while(
         break_block: exit,
         continue_block: header,
         cleanup: None,
+        snapshot_cleanup: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -1968,6 +1969,7 @@ fn lower_do_while(
         break_block: exit,
         continue_block: cond_block,
         cleanup: None,
+        snapshot_cleanup: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -2045,6 +2047,7 @@ fn lower_for(
         break_block: exit,
         continue_block: update_block,
         cleanup: None,
+        snapshot_cleanup: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -3582,6 +3585,28 @@ fn lower_foreach(
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, body, Some(array.span));
     let source = lower_expr(ctx, array);
+    // By-value foreach iterates a snapshot in PHP: when the body can write the iterated
+    // variable, hold a reference for the whole loop so such writes copy-on-write instead of
+    // mutating (and possibly reallocating) the array under the iterator.
+    // By-value foreach iterates a snapshot in PHP. Container writes mutate in place, so when
+    // the body writes the iterated variable the loop walks a shallow copy instead.
+    let snapshot = match &array.kind {
+        ExprKind::Variable(name)
+            if !value_by_ref
+                && matches!(source.ir_type, IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash))
+                && body_writes_variable(body, name) =>
+        {
+            let op = if source.ir_type == IrType::Heap(IrHeapKind::Hash) {
+                Op::HashCloneShallow
+            } else {
+                Op::ArrayCloneShallow
+            };
+            let php_type = ctx.builder.value_php_type(source.value);
+            Some(ctx.emit_value(op, vec![source.value], None, php_type, op.default_effects(), Some(array.span)))
+        }
+        _ => None,
+    };
+    let iter_source = snapshot.unwrap_or(source);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
@@ -3601,7 +3626,7 @@ fn lower_foreach(
     }
     let iterator = ctx.emit_value(
         Op::IterStart,
-        vec![source.value],
+        vec![iter_source.value],
         value_by_ref.then_some(Immediate::Bool(true)),
         PhpType::Iterable,
         Op::IterStart.default_effects(),
@@ -3668,6 +3693,10 @@ fn lower_foreach(
         break_block: exit,
         continue_block: header,
         cleanup,
+        snapshot_cleanup: snapshot.map(|value| LoopCleanup {
+            value,
+            span: array.span,
+        }),
     });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
@@ -3717,6 +3746,9 @@ fn lower_foreach(
     // — that would double-free.)
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
+    }
+    if let Some(snapshot) = snapshot {
+        crate::ir_lower::ownership::release_if_owned(ctx, snapshot, Some(array.span));
     }
 }
 
@@ -3970,6 +4002,7 @@ fn lower_switch_bodies(
         break_block: exit,
         continue_block: exit,
         cleanup: None,
+        snapshot_cleanup: None,
     });
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
@@ -4882,6 +4915,8 @@ fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                // A by-reference parameter or reference-bound local: the cell keeps its value.
+                | Op::LoadRefCell
         )
     ) {
         return value;
@@ -5015,6 +5050,9 @@ fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, count: usize)
         .collect::<Vec<_>>();
     for frame in frames {
         if let Some(cleanup) = frame.cleanup {
+            crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
+        }
+        if let Some(cleanup) = frame.snapshot_cleanup {
             crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
         }
     }
@@ -7030,4 +7068,36 @@ fn normalize_value_php_type(php_type: PhpType) -> PhpType {
     } else {
         php_type
     }
+}
+
+/// Returns whether a loop body may write the local `name` (assignment, element write, push,
+/// list target, unset, by-reference use, or any expression-level assignment), scanning the
+/// debug rendering conservatively for statement kinds that name it as a target.
+fn body_writes_variable(body: &[Stmt], name: &str) -> bool {
+    let mut writes = false;
+    crate::int_range::walk_stmts_shallow(body, &mut |node| {
+        if let crate::int_range::Node::Stmt(stmt) = node {
+            match &stmt.kind {
+                StmtKind::Assign { name: target, .. }
+                | StmtKind::TypedAssign { name: target, .. }
+                | StmtKind::ArrayAssign { array: target, .. }
+                | StmtKind::ArrayPush { array: target, .. } => {
+                    if target == name {
+                        writes = true;
+                    }
+                }
+                StmtKind::NestedArrayAssign { .. }
+                | StmtKind::ListUnpack { .. }
+                | StmtKind::RefAssign { .. }
+                | StmtKind::RefAssignToTarget { .. }
+                | StmtKind::Synthetic(_) => {
+                    if format!("{:?}", stmt.kind).contains(&format!("{:?}", name)) {
+                        writes = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    writes
 }

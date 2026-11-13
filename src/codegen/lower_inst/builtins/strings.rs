@@ -579,7 +579,13 @@ fn lower_implode_dynamic_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_implode_float");                   // raw float elements: PHP float-to-string per element
     ctx.emitter.instruction(&format!("b {}", done_label));
     ctx.emitter.label(&int_label);
+    let bool_label = ctx.next_label("implode_dyn_bool_elem");
+    ctx.emitter.instruction("cmp x10, #3");                                     // are the array's elements raw bools?
+    ctx.emitter.instruction(&format!("b.eq {}", bool_label));
     abi::emit_call_label(ctx.emitter, "__rt_implode_int");                     // raw scalar elements (and any other tag): convert each via itoa
+    ctx.emitter.instruction(&format!("b {}", done_label));
+    ctx.emitter.label(&bool_label);
+    abi::emit_call_label(ctx.emitter, "__rt_implode_bool");                    // raw bool elements: false prints as the empty string
     ctx.emitter.instruction(&format!("b {}", done_label));
     ctx.emitter.label(&generic_label);
     abi::emit_call_label(ctx.emitter, "__rt_implode");                         // string/boxed-mixed elements: the generic implode helper
@@ -623,7 +629,13 @@ fn lower_implode_dynamic_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_implode_float");                   // raw float elements: PHP float-to-string per element
     ctx.emitter.instruction(&format!("jmp {}", done_label));
     ctx.emitter.label(&int_label);
+    let bool_label = ctx.next_label("implode_dyn_bool_elem");
+    ctx.emitter.instruction("cmp r10, 3");                                      // are the array's elements raw bools?
+    ctx.emitter.instruction(&format!("je {}", bool_label));
     abi::emit_call_label(ctx.emitter, "__rt_implode_int");                     // raw scalar elements (and any other tag): convert each via itoa
+    ctx.emitter.instruction(&format!("jmp {}", done_label));
+    ctx.emitter.label(&bool_label);
+    abi::emit_call_label(ctx.emitter, "__rt_implode_bool");                    // raw bool elements: false prints as the empty string
     ctx.emitter.instruction(&format!("jmp {}", done_label));
     ctx.emitter.label(&generic_label);
     abi::emit_call_label(ctx.emitter, "__rt_implode");                         // string/boxed-mixed elements: the generic implode helper
@@ -2972,7 +2984,8 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     let array = expect_operand(inst, 1)?;
     match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
-            PhpType::Int | PhpType::Bool | PhpType::Void => Ok("__rt_implode_int"),
+            PhpType::Bool => Ok("__rt_implode_bool"),
+            PhpType::Int | PhpType::Void => Ok("__rt_implode_int"),
             PhpType::Float => Ok("__rt_implode_float"),
             PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
             other => Err(CodegenIrError::unsupported(format!(

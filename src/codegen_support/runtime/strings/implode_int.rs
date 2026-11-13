@@ -30,9 +30,26 @@ pub fn emit_implode_float(emitter: &mut Emitter) {
 /// Emits `__rt_implode_int` or `__rt_implode_float`, which differ only in how one element is
 /// loaded and converted to a string.
 fn emit_implode_scalar(emitter: &mut Emitter, float: bool) {
-    let p = if float { "__rt_implode_float" } else { "__rt_implode_int" };
+    emit_implode_scalar_mode(emitter, float, false);
+}
+
+/// Emits `__rt_implode_bool`: the integer helper, except that `false` contributes no bytes
+/// (PHP's string form of `false` is the empty string).
+pub fn emit_implode_bool(emitter: &mut Emitter) {
+    emit_implode_scalar_mode(emitter, false, true);
+}
+
+/// Emits one implode-over-scalars helper; `boolean` drops the digits of zero elements.
+fn emit_implode_scalar_mode(emitter: &mut Emitter, float: bool, boolean: bool) {
+    let p = if float {
+        "__rt_implode_float"
+    } else if boolean {
+        "__rt_implode_bool"
+    } else {
+        "__rt_implode_int"
+    };
     if emitter.target.arch == Arch::X86_64 {
-        emit_implode_int_linux_x86_64(emitter, p, float);
+        emit_implode_int_linux_x86_64(emitter, p, float, boolean);
         return;
     }
 
@@ -101,6 +118,14 @@ fn emit_implode_scalar(emitter: &mut Emitter, float: bool) {
     } else {
         emitter.instruction("ldr x0, [x3, x11, lsl #3]");                       // load integer element at index (8 bytes each)
         emitter.instruction("bl __rt_itoa");                                    // convert integer to string → x1=ptr, x2=len
+        if boolean {
+            emitter.instruction("ldr x3, [sp, #16]");                           // reload array pointer
+            emitter.instruction("ldr x11, [sp, #56]");                          // reload current element index
+            emitter.instruction("add x3, x3, #24");                             // skip the array header
+            emitter.instruction("ldr x13, [x3, x11, lsl #3]");                  // the bool element again
+            emitter.instruction("cmp x13, #0");                                 // false?
+            emitter.instruction("csel x2, xzr, x2, eq");                        // false prints as the empty string
+        }
     }
 
     // -- copy itoa result bytes to output --
@@ -147,7 +172,7 @@ fn emit_implode_scalar(emitter: &mut Emitter, float: bool) {
 /// Copies glue and each integer element (converted via `__rt_itoa`) into the shared concat buffer.
 /// Advances `_concat_off` by the total bytes written.
 /// Stack frame: 64 bytes of spill slots for glue, array, destination cursor, length, and loop index.
-fn emit_implode_int_linux_x86_64(emitter: &mut Emitter, p: &str, float: bool) {
+fn emit_implode_int_linux_x86_64(emitter: &mut Emitter, p: &str, float: bool, boolean: bool) {
     emitter.blank();
     emitter.comment(&format!("--- runtime: {} ---", p));
     emitter.label_global(p);
@@ -208,6 +233,13 @@ fn emit_implode_int_linux_x86_64(emitter: &mut Emitter, p: &str, float: bool) {
     } else {
         emitter.instruction("mov rax, QWORD PTR [r10 + r11 * 8 + 24]");         // load the current indexed-array integer payload into the integer-to-string helper input register
         emitter.instruction("call __rt_itoa");                                  // convert the current indexed-array integer element into a concat-buffer-backed decimal string
+        if boolean {
+            emitter.instruction("mov r11, QWORD PTR [rbp - 56]");               // reload the element index
+            emitter.instruction("mov r10, QWORD PTR [rbp - 24]");               // reload the array pointer
+            emitter.instruction("xor ecx, ecx");                                // empty length for false
+            emitter.instruction("cmp QWORD PTR [r10 + r11 * 8 + 24], 0");       // false?
+            emitter.instruction("cmove rdx, rcx");                              // false prints as the empty string
+        }
     }
     emitter.instruction("mov r8, rax");                                         // preserve the decimal string pointer returned by the integer-to-string helper before copying bytes
     emitter.instruction("mov r9, rdx");                                         // preserve the decimal string length returned by the integer-to-string helper before copying bytes

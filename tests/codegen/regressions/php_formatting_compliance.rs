@@ -184,3 +184,53 @@ foreach ([["%"],["%",1],["%.f",1.5],["%.e",1.5],["%.*g",-1,0.1],["%.*G",-1,1e20]
 "#);
     assert_eq!(out, "ArgumentCountError: 2 arguments are required, 1 given\nValueError: Missing format specifier at end of string\nstring(8) \"1.500000\"\nstring(11) \"1.500000e+0\"\nstring(3) \"0.1\"\nstring(7) \"1.0E+20\"\nValueError: Precision -1 is only supported for %g, %G, %h and %H\nArgumentCountError: 2 arguments are required, 1 given\nValueError: Missing format specifier at end of string\n");
 }
+
+/// `$a[$i][0]` copies the selected byte (the source string used to be read after release), by-value `foreach` walks a snapshot of an array its body writes, returning a by-reference string parameter leaves the caller's variable intact, and `implode()` prints `false` as an empty string.
+#[test]
+fn test_string_offsets_foreach_snapshot_by_ref_return_and_bool_implode() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$arr = ["hello", "world", "abc"];
+$t = 0; for ($i = 0; $i < 3; $i++) { $t += ord($arr[$i][0]); } echo $t, "\n";
+$h = ["a" => 1.5, "b" => 2.5];
+foreach ($h as $k => $v) { $h["c" . $k] = $v * 2; echo $k, "=", $v, " "; } echo count($h), "\n";
+function r(string &$a): string { return $a; }
+$x = str_repeat("q", 3); $y = r($x); echo $x, $y, "\n";
+$l = ["abcdefghijklmnop", "x"]; for ($i = 0; $i < 2; $i++) { $l[$i] = substr($l[$i], 0, 10); } echo implode(",", $l), "\n";
+echo implode(",", [true, false]), "\n";
+$l2 = []; for ($i = 0; $i < 3; $i++) { if ($i > 0) { $l2[1] .= "C"; } else { $l2[1] = "s"; } } echo $l2[1], "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "320\na=1.5 b=2.5 4\nqqqqqq\nabcdefghij,x\n1,\nsCC\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Writes to the iterated array inside a by-value `foreach` (hash or list, with `break`/`return` exits) do not change the iteration, like PHP.
+#[test]
+fn test_foreach_by_value_iterates_a_snapshot() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$h = ["a" => 1, "b" => 2];
+foreach ($h as $k => $v) { $h["c" . $k] = $v * 2; echo $k, " "; } echo count($h), "\n";
+$a = [1, 2, 3];
+foreach ($a as $v) { $a[] = $v; if ($v == 2) { break; } } echo count($a), "\n";
+function f(array $x) { foreach ($x as $i => $v) { $x[] = $v; if ($i > 5) { return count($x); } } return count($x); }
+echo f([1, 2]), "\n";
+$h2 = ["a" => 1.5, "b" => 2.5];
+foreach ($h2 as $k => $v) { $h2["c" . $k] = $v * 2; echo $k, "=", $v, " "; } echo count($h2), "\n";
+$s = ["x", "y"]; foreach ($s as $v) { echo $v, count($s); } echo "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a b 4\n5\n4\na=1.5 b=2.5 4\nx2y2\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `implode()` over bool lists, statically typed or through a generic `array` parameter.
+#[test]
+fn test_implode_bool_lists() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$b = [true, false, true]; echo implode(",", $b), "|", implode("-", [false]), "\n";
+function g(array $a) { return implode(",", $a); } echo g([true, false]), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,,1|\n1,\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

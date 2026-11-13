@@ -4,6 +4,10 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed (use-after-free): `$s[$i]` on a temporary string (`ord($arr[$i][0])`) returned a slice of a string released before it was read; the selected byte is now copied into concat scratch.
+- By-value `foreach` iterates a snapshot when its body writes the iterated variable (PHP semantics): appending to or rewriting the array inside the loop no longer extends the iteration or crashes. The `array_clone_shallow`/`hash_clone_shallow` IR ops are now lowered.
+- Fixed: returning a by-reference string parameter released the caller's string (values read through a reference cell are retained before `return`).
+- `implode()` prints `false` elements as the empty string (`__rt_implode_bool`).
 - Memory safety: string concatenation no longer writes past the 64 MiB concat scratch buffer (an oversized result is built in an owned heap string, like `str_repeat`), and `number_format()` with an enormous decimal count reports memory exhaustion instead of overflowing it. Concatenation also copies eight bytes at a time.
 - Fixed (use-after-free): a `mixed` local read as a string and returned, stored or passed along a branch borrowed the box payload that the slot cleanup then freed.
 - Fixed (use-after-free): passing a typed array local to a parameter widened to `array<mixed>` converted the caller's array in place; the conversion now works on a copy when the operand is borrowed.

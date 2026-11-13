@@ -217,9 +217,19 @@ pub(super) fn lower_cast_to_string(
         PhpType::Mixed | PhpType::Union(_) => {
             // A cast whose result is only read (never released, stored or returned) can borrow
             // a boxed string payload instead of persisting a copy nobody would free.
+            // The box must also outlive the result: only a box held by a local slot does (a
+            // temporary box, e.g. a call result, is released right after the cast).
+            let source_is_local = ctx.function.value(value).is_some_and(|source| match source.def {
+                crate::ir::ValueDef::Instruction { inst, .. } => ctx
+                    .function
+                    .instruction(inst)
+                    .is_some_and(|inst| inst.op == crate::ir::Op::LoadLocal),
+                _ => false,
+            });
             let borrowed = match inst.result {
                 Some(result) => {
-                    ctx.value_ownership(result)? != crate::ir::Ownership::Owned
+                    source_is_local
+                        && ctx.value_ownership(result)? != crate::ir::Ownership::Owned
                         && !ctx.released_values.contains(&result)
                 }
                 None => false,

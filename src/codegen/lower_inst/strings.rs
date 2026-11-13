@@ -314,7 +314,14 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.label(&non_negative);
             ctx.emitter.instruction("cmp x0, x2");                              // compare the requested offset against the string length
             ctx.emitter.instruction(&format!("b.ge {}", oob));                  // offsets at or beyond length return an empty string
-            ctx.emitter.instruction("add x1, x1, x0");                          // point the string result at the selected byte
+            ctx.emitter.instruction("ldrb w9, [x1, x0]");                       // the selected byte
+            abi::emit_symbol_address(ctx.emitter, "x10", "_concat_off");
+            ctx.emitter.instruction("ldr x11, [x10]");                          // concat scratch write offset
+            abi::emit_symbol_address(ctx.emitter, "x12", "_concat_buf");
+            ctx.emitter.instruction("add x1, x12, x11");                        // the one-byte result lives in concat scratch, not in the source
+            ctx.emitter.instruction("strb w9, [x1]");                           // copy the byte (the source may be released before the result is read)
+            ctx.emitter.instruction("add x11, x11, #1");                        // one byte of scratch used
+            ctx.emitter.instruction("str x11, [x10]");                          // publish the scratch offset
             ctx.emitter.instruction("mov x2, #1");                              // in-bounds string indexing returns one byte
             ctx.emitter.instruction(&format!("b {}", end));                     // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
@@ -332,8 +339,14 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.label(&non_negative);
             ctx.emitter.instruction("cmp rax, r9");                             // compare the requested offset against the string length
             ctx.emitter.instruction(&format!("jge {}", oob));                   // offsets at or beyond length return an empty string
-            ctx.emitter.instruction("add r8, rax");                             // point the string result at the selected byte
-            ctx.emitter.instruction("mov rax, r8");                             // publish the selected byte pointer as the string result pointer
+            ctx.emitter.instruction("movzx r9d, BYTE PTR [r8 + rax]");          // the selected byte
+            abi::emit_symbol_address(ctx.emitter, "r10", "_concat_off");
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // concat scratch write offset
+            abi::emit_symbol_address(ctx.emitter, "rax", "_concat_buf");
+            ctx.emitter.instruction("add rax, r11");                            // the one-byte result lives in concat scratch, not in the source
+            ctx.emitter.instruction("mov BYTE PTR [rax], r9b");                 // copy the byte (the source may be released before the result is read)
+            ctx.emitter.instruction("add r11, 1");                              // one byte of scratch used
+            ctx.emitter.instruction("mov QWORD PTR [r10], r11");                // publish the scratch offset
             ctx.emitter.instruction("mov rdx, 1");                              // in-bounds string indexing returns one byte
             ctx.emitter.instruction(&format!("jmp {}", end));                   // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
