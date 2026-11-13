@@ -94,6 +94,21 @@ pub(crate) fn emit_gen_suspend(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gen_suspend_yield");                            // skip the auto-key path
 
     emitter.label("__rt_gen_suspend_auto_key");
+    // -- reuse the previous auto key box when the generator is its only owner --
+    emitter.instruction(&format!("ldr x9, [x19, #{}]", GEN_LAST_KEY_OFFSET));   // x9 = previous last_key occupant
+    emitter.instruction("cbz x9, __rt_gen_suspend_box_key");                    // no previous key: box a fresh one
+    emitter.instruction("ldr w10, [x9, #-12]");                                 // refcount of the previous key box
+    emitter.instruction("cmp w10, #1");                                         // is the generator its only owner?
+    emitter.instruction("b.ne __rt_gen_suspend_box_key");                       // shared: box a fresh key
+    emitter.instruction("ldr x10, [x9]");                                       // runtime tag of the previous key box
+    emitter.instruction(&format!("cmp x10, #{}", INT_TAG));                     // an int payload owns nothing
+    emitter.instruction("b.ne __rt_gen_suspend_box_key");                       // other payloads: box a fresh key
+    emitter.instruction(&format!("ldr x10, [x19, #{}]", GEN_AUTO_KEY_OFFSET));  // current auto-increment integer key
+    emitter.instruction("str x10, [x9, #8]");                                   // overwrite the int payload in place
+    emitter.instruction("add x10, x10, #1");                                    // advance the auto-increment counter
+    emitter.instruction(&format!("str x10, [x19, #{}]", GEN_AUTO_KEY_OFFSET));  // persist the advanced counter
+    emitter.instruction("b __rt_gen_suspend_yield");                            // key recorded
+    emitter.label("__rt_gen_suspend_box_key");
     emitter.instruction(&format!("ldr x1, [x19, #{}]", GEN_AUTO_KEY_OFFSET));   // x1 = current auto-increment integer key payload
     emitter.instruction(&format!("mov x0, #{}", INT_TAG));                      // runtime tag 0 = integer
     emitter.instruction("mov x2, #0");                                          // integer payload has no high word
@@ -154,6 +169,20 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gen_suspend_yield");                          // skip the auto-key path
 
     emitter.label("__rt_gen_suspend_auto_key");
+    // -- reuse the previous auto key box when the generator is its only owner --
+    emitter.instruction(&format!("mov rcx, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // rcx = previous last_key occupant
+    emitter.instruction("test rcx, rcx");                                       // any previous key?
+    emitter.instruction("jz __rt_gen_suspend_box_key");                         // no: box a fresh one
+    emitter.instruction("cmp DWORD PTR [rcx - 12], 1");                         // is the generator its only owner?
+    emitter.instruction("jne __rt_gen_suspend_box_key");                        // shared: box a fresh key
+    emitter.instruction(&format!("cmp QWORD PTR [rcx], {}", INT_TAG));          // an int payload owns nothing
+    emitter.instruction("jne __rt_gen_suspend_box_key");                        // other payloads: box a fresh key
+    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_AUTO_KEY_OFFSET)); // current auto-increment integer key
+    emitter.instruction("mov QWORD PTR [rcx + 8], rax");                        // overwrite the int payload in place
+    emitter.instruction("add rax, 1");                                          // advance the auto-increment counter
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", GEN_AUTO_KEY_OFFSET)); // persist the advanced counter
+    emitter.instruction("jmp __rt_gen_suspend_yield");                          // key recorded
+    emitter.label("__rt_gen_suspend_box_key");
     emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", GEN_AUTO_KEY_OFFSET)); // rdi = current auto-increment integer key payload
     emitter.instruction(&format!("mov rax, {}", INT_TAG));                      // runtime tag 0 = integer
     emitter.instruction("xor esi, esi");                                        // integer payload has no high word

@@ -6465,8 +6465,15 @@ fn emit_property_store(
         return emit_reference_property_write(ctx, value, slot, base_reg);
     }
     let value_ty = ctx.value_php_type(value)?;
+    // A `mixed` slot stores a boxed `int 0` (the literal-zero shortcut only means null for
+    // object/array/callable slots).
+    let mixed_slot = matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
     if is_pointer_sized_property_type(&slot.php_type)
-        && is_pointer_slot_null_sentinel(ctx, value, &value_ty)?
+        && (if mixed_slot {
+            matches!(value_ty, PhpType::Void)
+        } else {
+            is_pointer_slot_null_sentinel(ctx, value, &value_ty)?
+        })
     {
         release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
         abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset);

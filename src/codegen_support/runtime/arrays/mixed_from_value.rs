@@ -181,6 +181,7 @@ pub fn emit_mixed_box_scalar(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_box_scalar ---");
     emitter.label_global("__rt_mixed_box_scalar");
+    emit_mixed_box_scalar_fast_path(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emitter.instruction("sub rsp, 24");                                     // spill slots (keeps the call aligned)
         emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the runtime tag
@@ -210,4 +211,163 @@ pub fn emit_mixed_box_scalar(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x0, #16]");                                  // scalars use no second word
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return the cell in x0
+}
+
+/// Emits `__rt_borrow_ring_park`: keeps a freshly boxed value produced by a *borrowed*
+/// array read (a null miss or a by-reference marker) alive in a four-entry ring and releases
+/// the box it evicts.
+///
+/// A borrowed read has no matching release, and its box is dead once its consumer (a mixed
+/// arithmetic operation of the same block) has run; nested operations can keep at most three
+/// such boxes live at once (`$a[9] + ($b[9] + $c[9])`), so a ring of four never evicts a live one.
+/// Input/output: the box in x0 (AArch64) / rax (x86_64), returned unchanged.
+pub fn emit_borrow_ring_park(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: borrow_ring_park ---");
+    emitter.label_global("__rt_borrow_ring_park");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address
+            emitter.instruction("mov x29, sp");                                 // anchor the helper frame
+            emitter.instruction("str x0, [sp, #16]");                           // keep the parked box for the return
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_borrow_ring_idx");
+            emitter.instruction("ldr x10, [x9]");                               // current ring slot
+            emitter.instruction("add x11, x10, #1");                            // next ring slot
+            emitter.instruction("and x11, x11, #3");                            // wrap within the four entries
+            emitter.instruction("str x11, [x9]");                               // advance the ring cursor
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_borrow_ring");
+            emitter.instruction("ldr x13, [x12, x10, lsl #3]");                 // the box parked four reads ago
+            emitter.instruction("str x0, [x12, x10, lsl #3]");                  // park the new box
+            emitter.instruction("mov x0, x13");                                 // release the evicted box (null is safe)
+            emitter.instruction("bl __rt_decref_mixed");
+            emitter.instruction("ldr x0, [sp, #16]");                           // return the parked box
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // save the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // anchor the helper frame
+            emitter.instruction("sub rsp, 16");                                 // aligned slot for the parked box
+            emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // keep the parked box for the return
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_borrow_ring_idx");
+            emitter.instruction("mov r9, QWORD PTR [r8]");                      // current ring slot
+            emitter.instruction("lea r10, [r9 + 1]");                           // next ring slot
+            emitter.instruction("and r10, 3");                                  // wrap within the four entries
+            emitter.instruction("mov QWORD PTR [r8], r10");                     // advance the ring cursor
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_borrow_ring");
+            emitter.instruction("mov rcx, QWORD PTR [r11 + r9 * 8]");           // the box parked four reads ago
+            emitter.instruction("mov QWORD PTR [r11 + r9 * 8], rax");           // park the new box
+            emitter.instruction("mov rax, rcx");                                // release the evicted box (null is safe)
+            emitter.instruction("call __rt_decref_mixed");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // return the parked box
+            emitter.instruction("leave");                                       // drop the helper frame
+            emitter.instruction("ret");
+        }
+    }
+}
+
+/// Emits the allocation fast path of `__rt_mixed_box_scalar`: with heap debugging off, a box
+/// is popped from the 24-byte size-class bin or carved from the bump tail, stamped, counted
+/// exactly like `__rt_heap_alloc` does, filled and returned. Anything else (debug mode, a full
+/// heap) falls through to the generic path that follows. Clobbers only registers
+/// `__rt_heap_alloc` clobbers.
+fn emit_mixed_box_scalar_fast_path(emitter: &mut Emitter) {
+    use crate::codegen_support::abi::emit_symbol_address;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
+            emitter.instruction("ldr x9, [x9]");                                // heap-debug mode validates every allocation
+            emitter.instruction("cbnz x9, __rt_mixed_box_scalar_slow");         // keep the generic path for it
+            emit_symbol_address(emitter, "x10", "_heap_small_bins");
+            emitter.instruction("ldr x11, [x10, #16]");                         // head of the 24-byte class bin
+            emitter.instruction("cbz x11, __rt_mixed_box_scalar_bump");         // empty: carve from the bump tail
+            emitter.instruction("ldr x12, [x11, #16]");                         // next cached block
+            emitter.instruction("str x12, [x10, #16]");                         // unlink the reused block
+            emitter.instruction("b __rt_mixed_box_scalar_stamp");
+            emitter.label("__rt_mixed_box_scalar_bump");
+            emit_symbol_address(emitter, "x10", "_heap_off");
+            emitter.instruction("ldr x12, [x10]");                              // current bump offset
+            emitter.instruction("add x13, x12, #40");                           // header plus the 24-byte cell
+            emit_symbol_address(emitter, "x14", "_heap_max");
+            emitter.instruction("ldr x14, [x14]");                              // heap capacity
+            emitter.instruction("cmp x13, x14");                                // does the cell fit at the tail?
+            emitter.instruction("b.hi __rt_mixed_box_scalar_slow");             // no: the generic allocator reuses or fails
+            emitter.instruction("str x13, [x10]");                              // commit the bump
+            emit_symbol_address(emitter, "x14", "_heap_buf");
+            emitter.instruction("add x11, x14, x12");                           // header of the new block
+            emitter.instruction("mov w12, #24");                                // payload size
+            emitter.instruction("str w12, [x11]");
+            emitter.label("__rt_mixed_box_scalar_stamp");
+            emitter.instruction("mov w12, #1");                                 // refcount 1
+            emitter.instruction("str w12, [x11, #4]");
+            emitter.instruction("mov x12, #5");                                 // mixed-cell heap kind
+            emitter.instruction("str x12, [x11, #8]");
+            emit_symbol_address(emitter, "x12", "_gc_allocs");
+            emitter.instruction("ldr x13, [x12]");                              // count the allocation
+            emitter.instruction("add x13, x13, #1");
+            emitter.instruction("str x13, [x12]");
+            emitter.instruction("ldr w14, [x11]");                              // block payload size
+            emitter.instruction("add x14, x14, #16");                           // plus its header
+            emit_symbol_address(emitter, "x12", "_gc_live");
+            emitter.instruction("ldr x13, [x12]");                              // live bytes
+            emitter.instruction("add x13, x13, x14");
+            emitter.instruction("str x13, [x12]");
+            emit_symbol_address(emitter, "x12", "_gc_peak");
+            emitter.instruction("ldr x15, [x12]");                              // peak live bytes
+            emitter.instruction("cmp x13, x15");
+            emitter.instruction("csel x15, x13, x15, hi");
+            emitter.instruction("str x15, [x12]");
+            emitter.instruction("add x15, x11, #16");                           // the cell
+            emitter.instruction("stp x0, x1, [x15]");                           // mixed[0] = tag, mixed[8] = payload
+            emitter.instruction("str xzr, [x15, #16]");                         // scalars use no second word
+            emitter.instruction("mov x0, x15");                                 // return the cell
+            emitter.instruction("ret");
+            emitter.label("__rt_mixed_box_scalar_slow");
+        }
+        Arch::X86_64 => {
+            emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+            emitter.instruction("cmp QWORD PTR [r8], 0");                       // heap-debug mode validates every allocation
+            emitter.instruction("jne __rt_mixed_box_scalar_slow");              // keep the generic path for it
+            emit_symbol_address(emitter, "r9", "_heap_small_bins");
+            emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                // head of the 24-byte class bin
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_mixed_box_scalar_bump");               // empty: carve from the bump tail
+            emitter.instruction("mov r11, QWORD PTR [r10 + 16]");               // next cached block
+            emitter.instruction("mov QWORD PTR [r9 + 16], r11");                // unlink the reused block
+            emitter.instruction("jmp __rt_mixed_box_scalar_stamp");
+            emitter.label("__rt_mixed_box_scalar_bump");
+            emit_symbol_address(emitter, "r9", "_heap_off");
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // current bump offset
+            emitter.instruction("lea rcx, [r10 + 40]");                         // header plus the 24-byte cell
+            emit_symbol_address(emitter, "r8", "_heap_max");
+            emitter.instruction("cmp rcx, QWORD PTR [r8]");                     // does the cell fit at the tail?
+            emitter.instruction("ja __rt_mixed_box_scalar_slow");               // no: the generic allocator reuses or fails
+            emitter.instruction("mov QWORD PTR [r9], rcx");                     // commit the bump
+            emit_symbol_address(emitter, "r11", "_heap_buf");
+            emitter.instruction("add r10, r11");                                // header of the new block
+            emitter.instruction("mov DWORD PTR [r10], 24");                     // payload size
+            emitter.label("__rt_mixed_box_scalar_stamp");
+            emitter.instruction("mov DWORD PTR [r10 + 4], 1");                  // refcount 1
+            emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // mixed-cell heap kind word
+            emitter.instruction("mov QWORD PTR [r10 + 8], r11");
+            emit_symbol_address(emitter, "r8", "_gc_allocs");
+            emitter.instruction("add QWORD PTR [r8], 1");                       // count the allocation
+            emitter.instruction("mov r11d, DWORD PTR [r10]");                   // block payload size
+            emitter.instruction("add r11, 16");                                 // plus its header
+            emit_symbol_address(emitter, "r8", "_gc_live");
+            emitter.instruction("add r11, QWORD PTR [r8]");                     // new live bytes
+            emitter.instruction("mov QWORD PTR [r8], r11");
+            emit_symbol_address(emitter, "r8", "_gc_peak");
+            emitter.instruction("cmp r11, QWORD PTR [r8]");                     // a new peak?
+            emitter.instruction("jbe __rt_mixed_box_scalar_counted");
+            emitter.instruction("mov QWORD PTR [r8], r11");
+            emitter.label("__rt_mixed_box_scalar_counted");
+            emitter.instruction("mov QWORD PTR [r10 + 16], rax");               // mixed[0] = tag
+            emitter.instruction("mov QWORD PTR [r10 + 24], rdi");               // mixed[8] = payload
+            emitter.instruction("mov QWORD PTR [r10 + 32], 0");                 // scalars use no second word
+            emitter.instruction("lea rax, [r10 + 16]");                         // return the cell
+            emitter.instruction("ret");
+            emitter.label("__rt_mixed_box_scalar_slow");
+        }
+    }
 }

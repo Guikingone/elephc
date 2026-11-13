@@ -36,6 +36,7 @@ use super::literal_defaults::emit_string_literal_default_to_result;
 use super::{CodegenIrError, Result};
 
 mod arithmetic;
+pub(super) use arithmetic::mixed_numeric_int_fast_path_applies;
 mod arrays;
 mod buffers;
 mod runtime_functions;
@@ -7853,7 +7854,7 @@ pub(super) fn direct_call_stack_pad_bytes(
     abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
 
-/// Lowers a checked int add/sub/mul fused with the `int` cast of its boxed result.
+/// Lowers a checked int (or mixed) add/sub/mul fused with the `int` cast of its boxed result.
 pub(super) fn lower_fused_checked_cast(
     ctx: &mut FunctionContext<'_>,
     checked_id: InstId,
@@ -7869,12 +7870,39 @@ pub(super) fn lower_fused_checked_cast(
         .instruction(cast_id)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", cast_id.as_raw()))?
         .clone();
+    if checked.op == Op::MixedNumericBinop {
+        return arithmetic::lower_fused_mixed_numeric_to_int(ctx, &checked, &cast);
+    }
     let helper = match checked.op {
         Op::ICheckedAdd => "__rt_int_add_checked",
         Op::ICheckedSub => "__rt_int_sub_checked",
         _ => "__rt_int_mul_checked",
     };
     arithmetic::lower_fused_checked_to_int(ctx, &checked, &cast, helper)
+}
+
+/// Lowers a checked int add/sub/mul together with the mixed `+`/`-`/`*` consuming its result.
+pub(super) fn lower_fused_checked_mixed(
+    ctx: &mut FunctionContext<'_>,
+    checked_id: InstId,
+    binop_id: InstId,
+) -> Result<()> {
+    let checked = ctx
+        .function
+        .instruction(checked_id)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", checked_id.as_raw()))?
+        .clone();
+    let binop = ctx
+        .function
+        .instruction(binop_id)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", binop_id.as_raw()))?
+        .clone();
+    let helper = match checked.op {
+        Op::ICheckedAdd => "__rt_int_add_checked",
+        Op::ICheckedSub => "__rt_int_sub_checked",
+        _ => "__rt_int_mul_checked",
+    };
+    arithmetic::lower_fused_checked_into_mixed(ctx, &checked, &binop, helper)
 }
 
 /// Lowers a signed integer comparison into a boolean result value.

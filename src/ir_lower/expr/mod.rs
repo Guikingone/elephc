@@ -10420,6 +10420,11 @@ fn lower_packed_array_associative_get(
         Some(expr.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, mixed_array, Some(expr.span));
+    // The box retained the array, and the reader returns a fresh box that never aliases it:
+    // an owned receiver (`$this->a[$k]` acquires the property array) is released here.
+    if ctx.value_is_owning_temporary(array_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
+    }
     // An owning boxed key temporary (e.g. the `$i + 1` checked-arithmetic box in
     // `$B[$i + 1]`) is consumed by `__rt_mixed_array_get` without any refcount
     // operation on the key, and the result never aliases it — release it here or

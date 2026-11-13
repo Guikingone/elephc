@@ -235,3 +235,91 @@ $m = [PHP_INT_MAX]; var_dump($m[0] + 1, @$m[3] + 1, @$m[3] | 4);
 "#);
     assert_eq!(out, "1,4 3,7 6,6 -1,5 -8,5 float(9.223372036854776E+18)\nint(1)\nint(4)\n");
 }
+
+/// Mixed `+`/`-`/`*` take a native int path when both operands hold ints (including
+/// `int|null` reads and checked products fused into the mixed operation), and fall back to
+/// PHP's float/null/string rules otherwise; generators reuse their auto-key box.
+#[test]
+fn test_mixed_arithmetic_int_fast_path_and_generator_keys() {
+    let out = compile_and_run(r#"<?php
+function f(array $a, int $x, int $y) {
+  $r = [];
+  foreach ($a as $k => $v) { $r[] = $v + $x * $y; $r[] = $v - ($x + $y); $r[] = ($v * 2 + $x) % 1000; }
+  return $r;
+}
+echo json_encode(f([1, 2.5, "3", null, true, PHP_INT_MAX], 3, 4)), "\n";
+echo json_encode(f([1, -3], PHP_INT_MAX, 2)), "\n";
+$row = [0, 0, 1.5]; $t = [5, null];
+for ($j = 0; $j < 3; $j++) { $row[$j] += 7 * $j; $row[$j] -= @$t[$j]; }
+echo json_encode($row), "\n";
+function g() { yield 1; $x = yield 2; echo "sent=", $x, "\n"; yield "k" => 3; yield 4; }
+$keys = []; foreach (g() as $k => $v) { $keys[] = $k; } echo json_encode($keys), "\n";
+$gen = g(); $gen->current(); $a = $gen->key(); $gen->next(); $gen->send("hi"); echo $a, $gen->key(), $gen->current(), "\n";
+"#);
+    assert_eq!(out, "[13,-6,5,14.5,-4.5,8,15,-4,9,12,-7,3,13,-6,5,9.223372036854776e+18,9223372036854775800,0]\n[1.8446744073709552e+19,-9.223372036854776e+18,-808,1.8446744073709552e+19,-9.223372036854776e+18,801]\n[-5,7,15.5]\nsent=\n[0,1,\"k\",2]\nsent=hi\n0k3\n");
+}
+
+/// Scalar indexed-array reads keep loop state in caller-saved registers (no spills around the
+/// read); their miss path warns through register-preserving wrappers, so int/float/string
+/// accumulators survive missing keys. Arrays order after scalars but before objects.
+#[test]
+fn test_scalar_array_reads_keep_registers_across_misses() {
+    let out = compile_and_run(r#"<?php
+class O {}
+function f(array $v, int $n): float { $s = 0.0; $t = 0; $u = 2.5; for ($i = 0; $i < $n; $i++) { $s += @$v[$i] * 1.5 + $u; $t += $i; } return $s + $t; }
+function g(array $w, int $n): int { $s = 0; $k = 3; for ($i = 0; $i < $n; $i++) { $s += @$w[$i] + $k; } return $s; }
+function h(array $q, int $n): string { $o = ""; $z = "|"; for ($i = 0; $i < $n; $i++) { $o .= @$q[$i] . $z; } return $o; }
+var_dump(f([1.0, 2.0, 3.0], 3), f([1.0, 2.0], 5), g([1, 2, 3], 3), g([5], 4), h(["a", "b"], 4));
+function c(array $a) { $r = []; foreach ($a as $x) foreach ($a as $y) $r[] = $x <=> $y; return implode(",", $r); }
+echo c([[], new O, [1, 2]]), "\n";
+"#);
+    assert_eq!(out, "float(19.5)\nfloat(27)\nint(15)\nint(17)\nstring(6) \"a|b|||\"\n0,-1,-1,1,0,1,1,-1,0\n");
+}
+
+/// `json_decode()` of deeply nested documents uses the one-pass bracket-match table to skip
+/// nested containers (linear instead of quadratic), and documents with brackets inside
+/// strings, escaped quotes, unbalanced brackets or trailing garbage decode (or fail) exactly
+/// as before, in both array and object mode.
+#[test]
+fn test_json_decode_nested_documents_with_match_table() {
+    let out = compile_and_run(r#"<?php
+$docs = [
+  str_repeat("[", 300) . "1" . str_repeat("]", 300),
+  '{"a":[1,2,{"b":"x]y}z","c":[[],{}]}],"d":"\\"[{","e":{"f":[3,[4,[5]]]}}' . str_repeat(" ", 300),
+  '[' . str_repeat('{"k":[1,"]",2],"m":{"n":"}"}},', 40) . '7]',
+  str_repeat("[", 300) . "1" . str_repeat("]", 299),
+  '[1,2' . str_repeat(" ", 300) . ']]',
+  '{"a":' . str_repeat("[", 100) . '"\\\\"' . str_repeat("]", 100) . '}',
+];
+foreach ($docs as $d) { $v = json_decode($d, true); echo json_encode($v), " ", json_last_error(), "\n"; $o = json_decode($d); echo json_encode($o), "\n"; }
+"#);
+    assert_eq!(out, "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]] 0\n[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]\n{\"a\":[1,2,{\"b\":\"x]y}z\",\"c\":[[],[]]}],\"d\":\"\\\"[{\",\"e\":{\"f\":[3,[4,[5]]]}} 0\n{\"a\":[1,2,{\"b\":\"x]y}z\",\"c\":[[],{}]}],\"d\":\"\\\"[{\",\"e\":{\"f\":[3,[4,[5]]]}}\n[{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},7] 0\n[{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},{\"k\":[1,\"]\",2],\"m\":{\"n\":\"}\"}},7]\nnull 0\nnull\nnull 0\nnull\n{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"\\\\\"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]} 0\n{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"\\\\\"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}\n");
+}
+
+/// Heap-clean run over the new fast paths and lifetime fixes: object foreach exits (break,
+/// `continue 2`, return, a throw caught inside the body), a closure only called directly,
+/// a deep `json_encode(json_decode(...))` round trip and scalar boxes in arrays.
+#[test]
+fn test_fast_paths_and_iterator_exits_leave_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class It implements Iterator { private $a = [1, 2, 3]; private $i = 0; function current(): mixed { return $this->a[$this->i]; } function key(): mixed { return $this->i; } function next(): void { $this->i++; } function rewind(): void { $this->i = 0; } function valid(): bool { return $this->i < 3; } }
+class Ag implements IteratorAggregate { function getIterator(): Iterator { return new It(); } }
+function g() { yield 1; yield 2; yield 3; }
+function first() { foreach (g() as $v) { if ($v == 2) return $v; } return 0; }
+$it = new It();
+foreach ($it as $v) { try { if ($v < 3) throw new Exception("x"); } catch (Exception $e) { echo "c"; } }
+echo "\n", first(), "\n";
+foreach ([1, 2] as $w) { foreach (new Ag() as $k => $v) { if ($k == 1) continue 2; echo "$k=$v "; } }
+foreach (g() as $v) { try { throw new Exception("y"); } catch (Exception $e) { echo $v; } finally { echo "f"; } }
+echo "\n";
+$sum = 0;
+for ($i = 0; $i < 50; $i++) { $add = fn(int $x): int => $x + $i; $sum += $add($i); }
+echo $sum, "\n";
+$doc = str_repeat("[", 200) . "1" . str_repeat("]", 200);
+echo json_encode(json_decode($doc, true)) === $doc ? "same" : "diff", "\n";
+$b = []; for ($i = 0; $i < 100; $i++) { $b[] = $i + 0.5; $b[] = $i % 3 == 0; $b[] = null; } echo count($b), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "cc\n2\n0=1 0=1 1f2f3f\n2450\nsame\n300\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

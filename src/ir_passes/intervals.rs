@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use crate::ir::{BlockId, Function, InstId, IrType, ValueDef, ValueId};
 use crate::ir_passes::cfg::reverse_postorder;
-use crate::ir_passes::clobber::{op_is_volatile_safe, terminator_is_volatile_safe};
+use crate::ir_passes::clobber::{inst_is_volatile_safe, ref_cell_slots, terminator_is_volatile_safe};
 use crate::ir_passes::liveness::{terminator_uses, LivenessInfo};
 
 /// A value's contiguous live range in linear program order: live from `start`
@@ -118,6 +118,7 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
 
     let mut weights: HashMap<ValueId, u32> = HashMap::new();
     let mut clobbers: Vec<u32> = Vec::new();
+    let ref_slots = ref_cell_slots(func);
 
     let extend = |value: ValueId, position: u32, ends: &mut HashMap<ValueId, u32>| {
         if let Some(end) = ends.get_mut(&value) {
@@ -137,7 +138,7 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
                 extend(*operand, position, &mut ends);
                 *weights.entry(*operand).or_insert(0) += 1;
             }
-            if !op_is_volatile_safe(inst.op) {
+            if !inst_is_volatile_safe(func, inst, &ref_slots) {
                 clobbers.push(position);
             }
         }
@@ -191,12 +192,13 @@ fn clobbers_within(clobbers: &[u32], start: u32, end: u32) -> u32 {
 /// interval bounds.
 pub fn clobber_instructions(func: &Function) -> Vec<(u32, InstId)> {
     let numbering = number_positions(func);
+    let ref_slots = ref_cell_slots(func);
     let mut out = Vec::new();
     for &block_id in &numbering.order {
         let block = func.block(block_id).expect("ordered block exists");
         for inst_id in &block.instructions {
             let inst = func.instruction(*inst_id).expect("valid instruction");
-            if !op_is_volatile_safe(inst.op) {
+            if !inst_is_volatile_safe(func, inst, &ref_slots) {
                 out.push((numbering.inst_pos[inst_id], *inst_id));
             }
         }

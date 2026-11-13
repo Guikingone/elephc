@@ -1417,12 +1417,26 @@ fn class_method_body_exists(ctx: &FunctionContext<'_>, class_name: &str, method_
 }
 
 /// Lowers iterator cleanup; Phase 04 array iterator state is stack-resident.
-pub(super) fn lower_iter_end(_ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_iter_end(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.result.is_some() {
         return Err(CodegenIrError::invalid_module(
             "iter_end must not produce a result".to_string(),
         ));
     }
+    let Some(&iterator) = inst.operands.first() else {
+        return Ok(());
+    };
+    // Object iterators own a reference to what they drive: `iter_start` retained the iterated
+    // object, or stored the owned iterator returned by `getIterator()`.
+    let object_ty = match iterator_source_kind(ctx, iterator, inst)? {
+        IteratorSourceKind::Object { class_name, .. } => PhpType::Object(class_name),
+        IteratorSourceKind::Interface { interface_name, .. } => PhpType::Object(interface_name),
+        _ => return Ok(()),
+    };
+    let offset = ctx.value_frame_offset(iterator)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_decref_if_refcounted(ctx.emitter, &object_ty);
     Ok(())
 }
 

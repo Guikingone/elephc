@@ -1220,7 +1220,14 @@ fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
             let Some(checked) = function.instruction(*checked_id) else {
                 continue;
             };
-            if !matches!(checked.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul) {
+            let fusible = match checked.op {
+                Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => true,
+                Op::MixedNumericBinop => {
+                    lower_inst::mixed_numeric_int_fast_path_applies(ctx, checked).unwrap_or(false)
+                }
+                _ => false,
+            };
+            if !fusible {
                 continue;
             }
             let Some(result) = checked.result else {
@@ -1229,9 +1236,19 @@ fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
             if use_counts.get(&result).copied() != Some(2) {
                 continue;
             }
-            let Some(cast_id) = order.get(position + 1).copied() else {
+            // Pure constants may sit between the operation and its cast (`($a + $b) % N`).
+            let Some(cast_offset) = order[position + 1..].iter().position(|id| {
+                !function.instruction(*id).is_some_and(|inst| {
+                    matches!(
+                        inst.op,
+                        Op::ConstI64 | Op::ConstF64 | Op::ConstBool | Op::ConstNull | Op::ConstStr
+                    )
+                })
+            }) else {
                 continue;
             };
+            let cast_position = position + 1 + cast_offset;
+            let cast_id = order[cast_position];
             let Some(cast) = function.instruction(cast_id) else {
                 continue;
             };
@@ -1242,7 +1259,7 @@ fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
             if !casts_to_int {
                 continue;
             }
-            let release = order[position + 2..].iter().copied().find(|id| {
+            let release = order[cast_position + 1..].iter().copied().find(|id| {
                 function
                     .instruction(*id)
                     .is_some_and(|inst| inst.op == Op::Release && inst.operands.as_slice() == [result])
@@ -1252,6 +1269,68 @@ fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
             };
             ctx.fused_checked_casts.insert(*checked_id, cast_id);
             ctx.skipped_consts.insert(cast_id);
+            ctx.skipped_consts.insert(release_id);
+        }
+    }
+    collect_fused_checked_mixed(ctx, &use_counts);
+}
+
+/// Finds checked int add/sub/mul instructions whose boxed result only feeds the very next
+/// instruction, a mixed `+`/`-`/`*` (`$row[$j] += $a * $b`), and is then released: both lower
+/// together at the mixed operation so the checked result stays a raw int unless it overflows.
+fn collect_fused_checked_mixed(
+    ctx: &mut FunctionContext<'_>,
+    use_counts: &std::collections::HashMap<ValueId, usize>,
+) {
+    let function = ctx.function;
+    for block in &function.blocks {
+        let order: Vec<InstId> = block
+            .instructions
+            .iter()
+            .copied()
+            .filter(|id| {
+                !ctx.skipped_consts.contains(id)
+                    && function.instruction(*id).is_some_and(|inst| inst.op != Op::Nop)
+            })
+            .collect();
+        for (position, checked_id) in order.iter().enumerate() {
+            if ctx.fused_checked_casts.contains_key(checked_id) {
+                continue;
+            }
+            let Some(checked) = function.instruction(*checked_id) else {
+                continue;
+            };
+            if !matches!(checked.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul) {
+                continue;
+            }
+            let Some(result) = checked.result else {
+                continue;
+            };
+            if use_counts.get(&result).copied() != Some(2) {
+                continue;
+            }
+            let Some(&binop_id) = order.get(position + 1) else {
+                continue;
+            };
+            let Some(binop) = function.instruction(binop_id) else {
+                continue;
+            };
+            let consumes = binop.op == Op::MixedNumericBinop
+                && binop.operands.iter().filter(|operand| **operand == result).count() == 1
+                && !ctx.fused_checked_casts.contains_key(&binop_id);
+            if !consumes {
+                continue;
+            }
+            let release = order[position + 2..].iter().copied().find(|id| {
+                function
+                    .instruction(*id)
+                    .is_some_and(|inst| inst.op == Op::Release && inst.operands.as_slice() == [result])
+            });
+            let Some(release_id) = release else {
+                continue;
+            };
+            ctx.fused_checked_mixed.insert(binop_id, *checked_id);
+            ctx.skipped_consts.insert(*checked_id);
             ctx.skipped_consts.insert(release_id);
         }
     }
@@ -1319,6 +1398,8 @@ fn emit_block(
         }
         if let Some(cast_id) = ctx.fused_checked_casts.get(inst_id).copied() {
             lower_inst::lower_fused_checked_cast(ctx, *inst_id, cast_id)?;
+        } else if let Some(checked_id) = ctx.fused_checked_mixed.get(inst_id).copied() {
+            lower_inst::lower_fused_checked_mixed(ctx, checked_id, *inst_id)?;
         } else {
             lower_inst::lower_instruction(ctx, *inst_id)?;
         }

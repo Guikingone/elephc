@@ -43,7 +43,11 @@ pub(crate) fn lower_json_decode(
     }
     load_json_source_string(ctx, json, "json_decode source")?;
     store_json_error_source_ptr(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_json_match_build"); // index nested brackets (keeps the source registers)
     abi::emit_call_label(ctx.emitter, "__rt_json_decode_mixed");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_json_match_free");
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     box_null_on_json_decode_failure(ctx);
     store_if_result(ctx, inst)
 }

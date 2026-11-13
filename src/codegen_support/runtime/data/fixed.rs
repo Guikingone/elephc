@@ -324,6 +324,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _gc_collecting, 8, 3\n");
     out.push_str(".comm _gc_release_suppressed, 8, 3\n");
     out.push_str(".comm _json_last_error, 8, 3\n");
+    out.push_str(".comm _json_match_tbl, 8, 3\n");
+    out.push_str(".comm _json_match_base, 8, 3\n");
+    out.push_str(".comm _json_match_len, 8, 3\n");
     out.push_str(".comm _json_active_flags, 8, 3\n");
     out.push_str(".comm _json_active_depth, 8, 3\n");
     out.push_str(".comm _json_indent_depth, 8, 3\n");
@@ -529,6 +532,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _gc_frees, 8, 3\n");
     out.push_str(".comm _gc_live, 8, 3\n");
     out.push_str(".comm _gc_peak, 8, 3\n");
+    out.push_str(".comm _borrow_ring, 32, 3\n");
+    out.push_str(".comm _borrow_ring_idx, 8, 3\n");
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");

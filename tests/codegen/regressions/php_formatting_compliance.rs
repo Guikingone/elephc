@@ -234,3 +234,44 @@ function g(array $a) { return implode(",", $a); } echo g([true, false]), "\n";
     assert_eq!(out.stdout, "1,,1|\n1,\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// PHP 8 ordering and loose equality over boxed values: null/bool operands compare as bools,
+/// null against a string compares with "", arrays sort after scalars and by size, NAN is
+/// uncomparable, two ints compare exactly (also when folded at compile time).
+#[test]
+fn test_mixed_php8_comparison_rules() {
+    let out = compile_and_run(r#"<?php
+function cmp_all(array $m) {
+  $r = [];
+  foreach ($m as $x) { foreach ($m as $y) { $r[] = ($x <=> $y) . (($x == $y) ? 'T' : 'F') . (($x < $y) ? 'L' : '-'); } }
+  return implode(",", $r);
+}
+echo cmp_all([null, "", "0", "a", [], [1], 0.0, NAN, -1, 1, true, false, "1e3", 1000]), "\n";
+var_dump(PHP_INT_MAX > PHP_INT_MAX - 1, PHP_INT_MAX <=> PHP_INT_MAX - 1);
+$big = [PHP_INT_MAX, PHP_INT_MAX - 1, null];
+var_dump($big[0] > $big[1], $big[0] == $big[1], $big[2] == 0, $big[2] < -1);
+"#);
+    assert_eq!(out, "0T-,0T-,-1FL,-1FL,0T-,-1FL,0T-,-1FL,-1FL,-1FL,-1FL,0T-,-1FL,-1FL,0T-,0T-,-1FL,-1FL,-1FL,-1FL,-1FL,1F-,-1FL,-1FL,-1FL,0T-,-1FL,-1FL,1F-,1F-,0T-,-1FL,-1FL,-1FL,0T-,1F-,1F-,-1FL,-1FL,0T-,-1FL,-1FL,1F-,1F-,1F-,0T-,-1FL,-1FL,1F-,1F-,1F-,1F-,0T-,1F-,1F-,1F-,0T-,1F-,1F-,1F-,0T-,-1FL,1F-,1F-,1F-,1F-,-1FL,0T-,1F-,1F-,1F-,1F-,1F-,1F-,1F-,0T-,1F-,1F-,1F-,1F-,0T-,1F-,1F-,1F-,0T-,1F-,0T-,-1FL,-1FL,-1FL,0T-,1F-,1F-,-1FL,-1FL,0T-,-1FL,-1FL,1F-,1F-,1F-,1F-,-1FL,-1FL,1F-,1F-,1F-,1F-,0T-,1F-,1F-,1F-,1F-,1F-,-1FL,-1FL,-1FL,-1FL,-1FL,1F-,0T-,-1FL,0T-,1F-,-1FL,-1FL,1F-,1F-,1F-,-1FL,-1FL,-1FL,1F-,1F-,1F-,0T-,0T-,1F-,-1FL,-1FL,1F-,1F-,1F-,0T-,1F-,0T-,1F-,0T-,0T-,0T-,0T-,1F-,0T-,0T-,0T-,0T-,0T-,-1FL,0T-,-1FL,0T-,-1FL,-1FL,-1FL,-1FL,0T-,-1FL,-1FL,1F-,1F-,1F-,-1FL,-1FL,-1FL,1F-,1F-,1F-,1F-,0T-,1F-,0T-,0T-,1F-,1F-,1F-,-1FL,-1FL,-1FL,1F-,1F-,1F-,1F-,0T-,1F-,0T-,0T-\nbool(true)\nint(1)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n");
+}
+
+/// Assigning the integer 0 to an untyped property stores `int(0)` (it stored null), and a
+/// `foreach` over a generator, an Iterator or an IteratorAggregate releases the object it
+/// drives on every exit (normal end, `break`, `return`), so destructors run and no
+/// generator leaks per loop.
+#[test]
+fn test_untyped_property_zero_and_foreach_object_release() {
+    let out = compile_and_run(r#"<?php
+class B { private $i = 0; function r(): void { $this->i = 0; } function s(): void { $this->i = 3; } function g() { return $this->i; } function inc(): void { $this->i++; } }
+$b = new B(); var_dump($b->g()); $b->r(); var_dump($b->g()); $b->s(); var_dump($b->g()); $b->r(); var_dump($b->g()); $b->inc(); var_dump($b->g());
+function g() { for ($i = 0; $i < 5; $i++) yield $i => $i * 10; }
+class It implements Iterator { private $i = 0; function current(): mixed { return $this->i * 2; } function key(): mixed { return $this->i; } function next(): void { $this->i++; } function rewind(): void { $this->i = 0; } function valid(): bool { return $this->i < 3; } function __destruct() { echo "it-gone\n"; } }
+class Ag implements IteratorAggregate { function getIterator(): Iterator { return new It(); } }
+function f() { foreach (g() as $k => $v) { if ($v > 20) return $k; } return -1; }
+echo f(), "\n";
+for ($j = 0; $j < 2; $j++) { foreach (g() as $v) { if ($v == 10) break; } }
+foreach (new It() as $k => $v) { echo "$k=$v "; } echo "\n";
+foreach (new Ag() as $k => $v) { echo "$k=$v "; if ($k == 1) break; } echo "\n";
+$m = memory_get_usage(); for ($j = 0; $j < 50; $j++) { foreach (g() as $v) { } } echo memory_get_usage() === $m ? "no-leak" : "leak", "\n";
+"#);
+    assert_eq!(out, "int(0)\nint(0)\nint(3)\nint(0)\nint(1)\n3\n0=0 1=2 2=4 it-gone\n\n0=0 1=2 it-gone\n\nno-leak\n");
+}

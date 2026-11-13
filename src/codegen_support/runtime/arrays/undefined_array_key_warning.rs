@@ -20,6 +20,8 @@ const ARRAY_OFFSET_ON_NULL_LEN: usize = "Warning: Trying to access array offset 
 
 /// Emits `__rt_warn_undefined_array_key_int` for the active target.
 pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
+    emit_register_keeping_wrapper(emitter, "__rt_warn_undefined_array_key_int_keep", "__rt_warn_undefined_array_key_int");
+    emit_register_keeping_wrapper(emitter, "__rt_warn_array_offset_on_null_keep", "__rt_warn_array_offset_on_null");
     if emitter.target.arch == Arch::X86_64 {
         emit_undefined_array_key_warning_x86_64(emitter);
         emit_undefined_array_key_string_warning_x86_64(emitter);
@@ -213,4 +215,57 @@ fn emit_undefined_array_key_string_warning_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the runtime warning frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the array-miss caller
+}
+
+/// Emits `name`, which calls the warning helper `target` while preserving every caller-saved
+/// register the register allocator hands out (x12–x15 and d16–d30 on AArch64; rsi/rdi/r8/r9
+/// and xmm2–xmm14 on x86_64). Scalar indexed-array reads call it on their cold miss path, so
+/// their hot path needs no call-crossing spills around the read.
+fn emit_register_keeping_wrapper(emitter: &mut Emitter, name: &str, target: &str) {
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} ---", name));
+    emitter.label_global(name);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-176]!");                  // frame for the allocatable caller-saved registers
+            emitter.instruction("mov x29, sp");                                 // anchor the wrapper frame
+            emitter.instruction("stp x12, x13, [sp, #16]");                     // keep allocated integer registers
+            emitter.instruction("stp x14, x15, [sp, #32]");
+            for (index, pair) in [(16, 17), (18, 19), (20, 21), (22, 23), (24, 25), (26, 27), (28, 29)].iter().enumerate() {
+                emitter.instruction(&format!("stp d{}, d{}, [sp, #{}]", pair.0, pair.1, 48 + index * 16)); // keep allocated float registers
+            }
+            emitter.instruction("str d30, [sp, #160]");
+            emitter.instruction(&format!("bl {}", target));                     // emit the warning (arguments are untouched)
+            emitter.instruction("ldp x12, x13, [sp, #16]");                     // restore allocated integer registers
+            emitter.instruction("ldp x14, x15, [sp, #32]");
+            for (index, pair) in [(16, 17), (18, 19), (20, 21), (22, 23), (24, 25), (26, 27), (28, 29)].iter().enumerate() {
+                emitter.instruction(&format!("ldp d{}, d{}, [sp, #{}]", pair.0, pair.1, 48 + index * 16)); // restore allocated float registers
+            }
+            emitter.instruction("ldr d30, [sp, #160]");
+            emitter.instruction("ldp x29, x30, [sp], #176");                    // drop the wrapper frame
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // keep the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // anchor the wrapper frame (16-byte aligned)
+            emitter.instruction("sub rsp, 240");                                // slots for rsi/rdi/r8/r9 and xmm2–xmm14
+            emitter.instruction("mov QWORD PTR [rsp], rsi");                    // keep allocated integer registers
+            emitter.instruction("mov QWORD PTR [rsp + 8], rdi");
+            emitter.instruction("mov QWORD PTR [rsp + 16], r8");
+            emitter.instruction("mov QWORD PTR [rsp + 24], r9");
+            for reg in 2..=14 {
+                emitter.instruction(&format!("movdqu XMMWORD PTR [rsp + {}], xmm{}", 32 + (reg - 2) * 16, reg)); // keep allocated float registers
+            }
+            emitter.instruction(&format!("call {}", target));                   // emit the warning (arguments are untouched)
+            emitter.instruction("mov rsi, QWORD PTR [rsp]");                    // restore allocated integer registers
+            emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");
+            emitter.instruction("mov r8, QWORD PTR [rsp + 16]");
+            emitter.instruction("mov r9, QWORD PTR [rsp + 24]");
+            for reg in 2..=14 {
+                emitter.instruction(&format!("movdqu xmm{}, XMMWORD PTR [rsp + {}]", reg, 32 + (reg - 2) * 16)); // restore allocated float registers
+            }
+            emitter.instruction("leave");                                       // drop the wrapper frame
+            emitter.instruction("ret");
+        }
+    }
 }

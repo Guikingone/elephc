@@ -61,6 +61,8 @@ pub(crate) struct LoopFrame {
     pub cleanup: Option<LoopCleanup>,
     /// A second value released on early exits (the by-value foreach snapshot reference).
     pub snapshot_cleanup: Option<LoopCleanup>,
+    /// A foreach iterator ended (`iter_end`) on early exits, releasing what it holds.
+    pub iter_end: Option<(ValueId, Span)>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
@@ -199,6 +201,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// dynamically, e.g. through `compact()` or `eval`): a `foreach` key nobody reads is never
     /// materialized.
     pub(crate) body_variable_reads: Option<HashSet<String>>,
+    /// `loop_stack` depth at the start of each enclosing `try` body that has catch clauses: a
+    /// throw caught there resumes inside the loops below that depth, so it must not end them.
+    pub(crate) catch_loop_depths: Vec<usize>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -325,6 +330,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
             body_variable_reads: None,
+            catch_loop_depths: Vec::new(),
             return_type,
             return_php_type,
             by_ref_return: false,

@@ -316,6 +316,7 @@ pub(super) fn lower_array_get(
     require_array_get_result(&elem_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
     ctx.borrowed_read = inst.result_ownership == crate::ir::Ownership::Borrowed;
+    ctx.keep_registers_on_miss = crate::ir_passes::is_scalar_indexed_array_get(ctx.function, inst);
     let lowered = match ctx.emitter.target.arch {
         Arch::AArch64 => {
             lower_array_get_aarch64(ctx, inst, array, index, &elem_ty, &result_ty, warn_on_missing)
@@ -325,6 +326,7 @@ pub(super) fn lower_array_get(
         }
     };
     ctx.borrowed_read = false;
+    ctx.keep_registers_on_miss = false;
     lowered
 }
 
@@ -1054,7 +1056,9 @@ fn emit_mixed_array_get_deref_invoker_ref_cell(
     }
     abi::emit_load_from_address(ctx.emitter, tag_reg, mixed_reg, 0);
     emit_branch_if_invoker_ref_cell_tag(ctx, tag_reg, &ref_label);
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    if !ctx.borrowed_read {
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&ref_label);
@@ -1104,12 +1108,18 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
 
     ctx.emitter.label(&box_label);
     emit_box_runtime_payload_as_mixed(ctx.emitter, tag_reg, lo_reg, hi_reg);
+    if ctx.borrowed_read {
+        // A borrowed read has no release: park the fresh box until it is dead.
+        abi::emit_call_label(ctx.emitter, "__rt_borrow_ring_park");
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&mixed_cell_label);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, result_reg, lo_reg);
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    if !ctx.borrowed_read {
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    }
 
     ctx.emitter.label(&done_label);
 }
@@ -1134,12 +1144,22 @@ fn emit_branch_if_invoker_ref_cell_tag(
 
 /// Emits PHP's undefined integer array-key warning for the key in the result register.
 fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>) {
-    abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_int");
+    let helper = if ctx.keep_registers_on_miss {
+        "__rt_warn_undefined_array_key_int_keep"
+    } else {
+        "__rt_warn_undefined_array_key_int"
+    };
+    abi::emit_call_label(ctx.emitter, helper);
 }
 
 /// Emits PHP's warning for a direct array-offset read whose receiver is null.
 pub(super) fn emit_array_offset_on_null_warning(ctx: &mut FunctionContext<'_>) {
-    abi::emit_call_label(ctx.emitter, "__rt_warn_array_offset_on_null");
+    let helper = if ctx.keep_registers_on_miss {
+        "__rt_warn_array_offset_on_null_keep"
+    } else {
+        "__rt_warn_array_offset_on_null"
+    };
+    abi::emit_call_label(ctx.emitter, helper);
 }
 
 /// Emits the null/miss fallback in the result shape expected by the array element type.
@@ -1165,20 +1185,26 @@ pub(super) fn emit_array_get_null_fallback(ctx: &mut FunctionContext<'_>, elem_t
             );
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
         }
-        PhpType::Mixed => match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                abi::emit_load_int_immediate(ctx.emitter, "x0", 8);
-                abi::emit_load_int_immediate(ctx.emitter, "x1", 0);
-                abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        PhpType::Mixed => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x0", 8);
+                    abi::emit_load_int_immediate(ctx.emitter, "x1", 0);
+                    abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+                }
+                Arch::X86_64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "rax", 8);
+                    abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
+                    abi::emit_load_int_immediate(ctx.emitter, "rsi", 0);
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+                }
             }
-            Arch::X86_64 => {
-                abi::emit_load_int_immediate(ctx.emitter, "rax", 8);
-                abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
-                abi::emit_load_int_immediate(ctx.emitter, "rsi", 0);
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            if ctx.borrowed_read {
+                // A borrowed read has no release: park the fresh box until it is dead.
+                abi::emit_call_label(ctx.emitter, "__rt_borrow_ring_park");
             }
-        },
+        }
         _ => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

@@ -28,6 +28,7 @@ use super::branch_simplify::BranchSimplify;
 use super::concat_reset::ConcatResetElim;
 use super::const_fold::ConstFold;
 use super::cse::Cse;
+use super::dead_closure_local::DeadClosureLocal;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
 use super::identity_arith::IdentityArith;
@@ -90,6 +91,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(Licm),
         Box::new(DeadInst),
         Box::new(DeadStore),
+        Box::new(DeadClosureLocal),
         Box::new(BranchSimplify),
         Box::new(ConcatResetElim),
         Box::new(BorrowReads),

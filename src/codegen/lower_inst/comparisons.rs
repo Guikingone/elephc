@@ -74,6 +74,34 @@ fn emit_php_compare_sign(
 ) -> Result<()> {
     let lhs_repr = lhs_ty.codegen_repr();
     let rhs_repr = rhs_ty.codegen_repr();
+    // Int fast path: when both operands currently hold ints, the sign is a native compare.
+    let int_fast_path = super::arithmetic::int_probe_operand_type(&lhs_repr)
+        && super::arithmetic::int_probe_operand_type(&rhs_repr)
+        && (lhs_repr != PhpType::Int || rhs_repr != PhpType::Int);
+    let done = ctx.next_label("php_compare_done");
+    if int_fast_path {
+        let slow = ctx.next_label("php_compare_slow");
+        super::arithmetic::emit_int_operand_probe(ctx, lhs, rhs, &slow)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, x10");                         // compare the two ints
+                ctx.emitter.instruction("cset x9, gt");                         // 1 when left > right
+                ctx.emitter.instruction("cset x11, lt");                        // 1 when left < right
+                ctx.emitter.instruction("sub x0, x9, x11");                     // three-way sign
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor edx, edx");                        // clear the greater-than flag word
+                ctx.emitter.instruction("xor r11d, r11d");                      // clear the less-than flag word
+                ctx.emitter.instruction("cmp rax, rcx");                        // compare the two ints
+                ctx.emitter.instruction("setg dl");                             // 1 when left > right
+                ctx.emitter.instruction("setl r11b");                           // 1 when left < right
+                ctx.emitter.instruction("sub rdx, r11");                        // three-way sign
+                ctx.emitter.instruction("mov rax, rdx");                        // sign in the result register
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&slow);
+    }
     let left_box_temp = !is_mixed_like(&lhs_repr);
     let right_box_temp = !is_mixed_like(&rhs_repr);
     materialize_value_as_mixed(ctx, lhs, &lhs_repr)?;
@@ -101,6 +129,7 @@ fn emit_php_compare_sign(
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&done);
     Ok(())
 }
 
@@ -791,6 +820,16 @@ fn intish_or_null(ty: &PhpType) -> bool {
 
 /// Returns true for the scalar loose-equality subset that can normalize through integer slots.
 fn loose_intish_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
+    // A boxed operand only compares through int casts against a bool (both sides then fold
+    // to truthiness); against null, `int|null` or another box PHP 8 needs the full rules
+    // (`null == "0"` is false, `"abc" == "xyz"` is false), so those use `__rt_php_compare`.
+    let mixed = |ty: &PhpType| matches!(ty, PhpType::Mixed);
+    if (mixed(lhs_ty) || mixed(rhs_ty))
+        && *lhs_ty != PhpType::Bool
+        && *rhs_ty != PhpType::Bool
+    {
+        return false;
+    }
     if intish_or_null(lhs_ty) && intish_or_null(rhs_ty) {
         return true;
     }

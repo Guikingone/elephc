@@ -169,6 +169,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x12, __rt_json_decode_object_real_value_done");    // branch on the current JSON decoder condition
     emitter.instruction("b __rt_json_decode_object_real_value_advance");        // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_open");
+    crate::codegen_support::runtime::system::emit_json_scanner_jump(emitter, "x1", "x9", "x12", "__rt_json_decode_object_real_value_advance");
     emitter.instruction("add x12, x12, #1");                                    // update the JSON decoder cursor or counter
     emitter.instruction("b __rt_json_decode_object_real_value_advance");        // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_close_inner");
@@ -451,6 +452,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_decode_object_real_value_done_x");        // branch on the current JSON decoder condition
     emitter.instruction("jmp __rt_json_decode_object_real_value_advance_x");    // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_open_x");
+    crate::codegen_support::runtime::system::emit_json_scanner_jump(emitter, "rax", "rcx", "r10", "__rt_json_decode_object_real_value_advance_x");
     emitter.instruction("add r10, 1");                                          // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_object_real_value_advance_x");    // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_close_inner_x");

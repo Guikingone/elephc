@@ -209,11 +209,24 @@ fn collect_body_variable_reads(
     // Variables also appear outside `ExprKind::Variable` (`$k++`, `$k[] = ...`, list targets,
     // static/unset lists, ...). Over-approximate with every quoted identifier in the body's
     // debug rendering so a variable that is used in any form is never treated as unread.
-    let rendered = format!("{:?}", body);
+    // A foreach's own key binding (`key_var: Some("k")`) is a write, not a read, and a string
+    // literal never names a local (variable variables are rejected at parse time).
+    let mut rendered = format!("{:?}", body);
+    let marker = "key_var: Some(\"";
+    let mut search = 0;
+    while let Some(found) = rendered[search..].find(marker) {
+        let start = search + found;
+        let name_start = start + marker.len();
+        let Some(name_len) = rendered[name_start..].find('"') else {
+            break;
+        };
+        rendered.replace_range(start..name_start + name_len + 1, "");
+        search = start;
+    }
     let bytes = rendered.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'"' {
+        if bytes[i] == b'"' && !rendered[..i].ends_with("StringLiteral(") {
             let start = i + 1;
             let mut end = start;
             while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] >= 0x80) {

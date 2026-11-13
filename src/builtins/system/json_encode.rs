@@ -33,6 +33,9 @@ builtin! {
 const fn json_encode_semantics() -> BuiltinSemantics {
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::JsonEncode);
     semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    // The encoded string (or false) is a fresh box that never aliases the argument, so an
+    // owning temporary argument (`json_encode(json_decode($s))`) is released after the call.
+    semantics.result_ownership = crate::builtins::semantics::BuiltinResultOwnership::Independent;
     semantics
 }
 

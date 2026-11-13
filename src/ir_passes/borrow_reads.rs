@@ -13,6 +13,8 @@
 //! - Every use must be the receiver of another container read in the same block, plus exactly
 //!   one `release`; the instructions between the read and its release may only be pure reads
 //!   and arithmetic, so the parent cannot be written, released or freed in the meantime.
+//! - A boxed `mixed` element read may also be borrowed when it only feeds mixed `+`/`-`/`*`
+//!   (`$dist[$u] + $w`), which reads the box and allocates its own result.
 //! - The read's result is marked `Borrowed` (codegen then skips its incref) and the release is
 //!   neutralized.
 
@@ -60,12 +62,14 @@ impl IrPass for BorrowReads {
                 let Some(inst) = function.instruction(*inst_id) else {
                     continue;
                 };
+                let mixed_element = inst.result_type == IrType::Heap(IrHeapKind::Mixed);
                 if inst.op != Op::ArrayGet
                     || inst.result_ownership != Ownership::Owned
-                    || !matches!(
-                        inst.result_type,
-                        IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object)
-                    )
+                    || !(mixed_element
+                        || matches!(
+                            inst.result_type,
+                            IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object)
+                        ))
                 {
                     continue;
                 }
@@ -75,7 +79,8 @@ impl IrPass for BorrowReads {
                 if terminator_uses.contains(&result) {
                     continue;
                 }
-                let Some(release) = sole_release_after(function, &order, position, result, &uses)
+                let Some(release) =
+                    sole_release_after(function, &order, position, result, &uses, mixed_element)
                 else {
                     continue;
                 };
@@ -103,6 +108,7 @@ fn sole_release_after(
     position: usize,
     result: ValueId,
     uses: &HashMap<ValueId, Vec<(InstId, usize)>>,
+    mixed_element: bool,
 ) -> Option<InstId> {
     let all = uses.get(&result)?;
     let mut release = None;
@@ -118,6 +124,15 @@ fn sole_release_after(
             remaining -= 1;
             return (remaining == 0).then_some(release?);
         }
+        if uses_here > 0 && mixed_element {
+            // A boxed element may only feed mixed arithmetic, which reads the box and
+            // allocates a fresh result without running user code or retaining the operand.
+            if inst.op != Op::MixedNumericBinop {
+                return None;
+            }
+            remaining -= uses_here;
+            continue;
+        }
         if uses_here > 0 {
             let receiver_only = inst.operands.first() == Some(&result) && uses_here == 1;
             if !receiver_only
@@ -131,8 +146,20 @@ fn sole_release_after(
             remaining -= 1;
             continue;
         }
-        // Anything that could write, release or free the parent ends the window.
+        // Anything that could write, release or free the parent ends the window. Checked and
+        // mixed arithmetic only allocate their result, and scalar casts only read registers.
+        let scalar_cast = inst.op == Op::Cast
+            && inst.operands.iter().all(|operand| {
+                function.value(*operand).is_some_and(|value| {
+                    matches!(value.ir_type, IrType::I64 | IrType::F64 | IrType::TaggedScalar)
+                })
+            });
         let pure = op_is_volatile_safe(inst.op)
+            || scalar_cast
+            || matches!(
+                inst.op,
+                Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::MixedNumericBinop
+            )
             || matches!(
                 inst.op,
                 Op::ArrayGet

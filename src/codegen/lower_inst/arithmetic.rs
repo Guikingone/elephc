@@ -399,6 +399,305 @@ pub(super) fn lower_mixed_numeric_binop(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if !mixed_numeric_int_fast_path_applies(ctx, inst)? {
+        emit_mixed_numeric_generic(ctx, inst)?;
+        return store_if_result(ctx, inst);
+    }
+    let slow = ctx.next_label("mixed_num_slow");
+    let done = ctx.next_label("mixed_num_done");
+    emit_mixed_numeric_int_fast_path(ctx, inst, &slow)?;
+    // Box the native int result.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x9");                              // int payload for the boxing helper
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = int
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_box_scalar");
+            ctx.emitter.instruction(&format!("b {}", done));                    // boxed result ready
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // int payload for the boxing helper
+            ctx.emitter.instruction("mov rax, 0");                              // runtime tag 0 = int
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_box_scalar");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // boxed result ready
+        }
+    }
+    ctx.emitter.label(&slow);
+    emit_mixed_numeric_generic(ctx, inst)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a mixed `+`/`-`/`*` whose boxed result is only converted back to `int`: when both
+/// operands hold ints the native result is the answer (no box at all); otherwise the generic
+/// helper's box is converted with PHP `(int)` semantics and released.
+pub(super) fn lower_fused_mixed_numeric_to_int(
+    ctx: &mut FunctionContext<'_>,
+    binop: &Instruction,
+    cast: &Instruction,
+) -> Result<()> {
+    let slow = ctx.next_label("mixed_num_cast_slow");
+    let done = ctx.next_label("mixed_num_cast_done");
+    emit_mixed_numeric_int_fast_path(ctx, binop, &slow)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x9");                              // the native int result
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the generic path
+        }
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done)),       // the native int result is in rax
+    }
+    ctx.emitter.label(&slow);
+    emit_mixed_numeric_generic(ctx, binop)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the boxed result for its release
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // keep the converted int
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the box
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // restore the converted int
+            ctx.emitter.instruction("add sp, sp, #16");                         // release the temporary slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the box and the converted int
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the boxed result for its release
+            ctx.emitter.instruction("mov rdi, rax");                            // convert the box to int
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // keep the converted int
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the box
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // restore the converted int
+            ctx.emitter.instruction("add rsp, 16");                             // release the temporary slots
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, cast)
+}
+
+/// Lowers a checked int add/sub/mul whose boxed `int|float` result only feeds the mixed
+/// `+`/`-`/`*` `binop` (`$row[$j] += $a * $b`). The native operation runs first and, when it
+/// does not overflow, its raw int is kept in the checked value's home and the mixed operation
+/// is lowered with that operand typed `int`; on overflow the checked helper boxes the float
+/// result, the generic mixed operation consumes it and the box is released — what the
+/// unfused instructions do.
+pub(super) fn lower_fused_checked_into_mixed(
+    ctx: &mut FunctionContext<'_>,
+    checked: &Instruction,
+    binop: &Instruction,
+    helper: &str,
+) -> Result<()> {
+    let lhs = expect_operand(checked, 0)?;
+    let rhs = expect_operand(checked, 1)?;
+    let checked_value = checked
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("checked arithmetic without a result"))?;
+    let overflow = ctx.next_label("checked_mixed_overflow");
+    let done = ctx.next_label("checked_mixed_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, lhs, result_reg, checked)?;
+    load_integer_operand(ctx, rhs, rhs_reg, checked)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            match checked.op {
+                crate::ir::Op::ICheckedAdd => {
+                    ctx.emitter.instruction("adds x9, x0, x10");                // add and set the overflow flag
+                    ctx.emitter.instruction(&format!("b.vs {}", overflow));     // signed overflow: take the boxed path
+                }
+                crate::ir::Op::ICheckedSub => {
+                    ctx.emitter.instruction("subs x9, x0, x10");                // subtract and set the overflow flag
+                    ctx.emitter.instruction(&format!("b.vs {}", overflow));     // signed overflow: take the boxed path
+                }
+                _ => {
+                    ctx.emitter.instruction("mul x9, x0, x10");                 // low 64 bits of the product
+                    ctx.emitter.instruction("smulh x11, x0, x10");              // high 64 bits of the product
+                    ctx.emitter.instruction("cmp x11, x9, asr #63");            // does the high half only extend the sign?
+                    ctx.emitter.instruction(&format!("b.ne {}", overflow));     // no — the product overflowed
+                }
+            }
+            ctx.emitter.instruction("mov x0, x9");                              // the native int result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // keep the left operand for the overflow path
+            match checked.op {
+                crate::ir::Op::ICheckedAdd => ctx.emitter.instruction(&format!("add rax, {}", rhs_reg)), // native add
+                crate::ir::Op::ICheckedSub => ctx.emitter.instruction(&format!("sub rax, {}", rhs_reg)), // native subtract
+                _ => ctx.emitter.instruction(&format!("imul rax, {}", rhs_reg)), // native multiply
+            }
+            ctx.emitter.instruction(&format!("jo {}", overflow));               // signed overflow: take the boxed path
+        }
+    }
+    ctx.store_int_result_value(checked_value)?;
+    ctx.value_type_overrides.insert(checked_value, PhpType::Int);
+    let fast = lower_mixed_numeric_binop(ctx, binop);
+    ctx.value_type_overrides.remove(&checked_value);
+    fast?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&overflow);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x10");                             // second checked-helper argument (x0 still holds the first)
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rcx");                            // first checked-helper argument
+            ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // second checked-helper argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    ctx.store_int_result_value(checked_value)?;
+    emit_mixed_numeric_generic(ctx, binop)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    ctx.load_value_to_reg(checked_value, result_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");                      // release the overflow box the unfused release would free
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    store_if_result(ctx, binop)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns whether a mixed `+`/`-`/`*` has only `int`, `int|null` and `mixed` operands (at
+/// least one of them not a plain int), so both can be tested for an int payload and combined natively.
+pub(in crate::codegen) fn mixed_numeric_int_fast_path_applies(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_ty = ctx.value_php_type(lhs)?.codegen_repr();
+    let rhs_ty = ctx.value_php_type(rhs)?.codegen_repr();
+    Ok(int_probe_operand_type(&lhs_ty)
+        && int_probe_operand_type(&rhs_ty)
+        && (lhs_ty != PhpType::Int || rhs_ty != PhpType::Int))
+}
+
+/// Emits the int fast path of a mixed `+`/`-`/`*`: branches to `slow` unless every boxed
+/// operand holds an int payload and the native operation does not overflow. On fall-through
+/// the int result is in x9 (AArch64) / rax (x86_64).
+fn emit_mixed_numeric_int_fast_path(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    slow: &str,
+) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let op = expect_mixed_numeric_op(inst)?;
+    emit_int_operand_probe(ctx, lhs, rhs, slow)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => match op {
+            MixedNumericOp::Add => {
+                ctx.emitter.instruction("adds x9, x0, x10");                    // add and set the overflow flag
+                ctx.emitter.instruction(&format!("b.vs {}", slow));             // overflow: generic path (float result)
+            }
+            MixedNumericOp::Sub => {
+                ctx.emitter.instruction("subs x9, x0, x10");                    // subtract and set the overflow flag
+                ctx.emitter.instruction(&format!("b.vs {}", slow));             // overflow: generic path (float result)
+            }
+            MixedNumericOp::Mul => {
+                ctx.emitter.instruction("mul x9, x0, x10");                     // low 64 bits of the product
+                ctx.emitter.instruction("smulh x11, x0, x10");                  // high 64 bits of the product
+                ctx.emitter.instruction("cmp x11, x9, asr #63");                // does the high half only extend the sign?
+                ctx.emitter.instruction(&format!("b.ne {}", slow));             // overflow: generic path (float result)
+            }
+        },
+        Arch::X86_64 => {
+            match op {
+                MixedNumericOp::Add => ctx.emitter.instruction("add rax, rcx"), // native add
+                MixedNumericOp::Sub => ctx.emitter.instruction("sub rax, rcx"), // native subtract
+                MixedNumericOp::Mul => ctx.emitter.instruction("imul rax, rcx"), // native multiply
+            }
+            ctx.emitter.instruction(&format!("jo {}", slow));                   // overflow: generic path (float result)
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether a value's codegen type can be probed for an int payload at run time.
+pub(in crate::codegen) fn int_probe_operand_type(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Int | PhpType::Mixed | PhpType::TaggedScalar)
+}
+
+/// Loads two `int`/`mixed`/`int|null` operands as native ints, branching to `slow` unless every
+/// boxed or tagged operand currently holds an int. On fall-through the left int is in x0/rax
+/// and the right int in x10/rcx. Only result and scratch registers are touched.
+pub(in crate::codegen) fn emit_int_operand_probe(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    rhs: ValueId,
+    slow: &str,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let mut kinds = [PhpType::Int, PhpType::Int];
+    for (index, value) in [lhs, rhs].into_iter().enumerate() {
+        let ty = ctx.value_php_type(value)?.codegen_repr();
+        match ty {
+            PhpType::Mixed => {
+                ctx.load_value_to_reg(value, result_reg)?;
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction(&format!("cbz x0, {}", slow));  // no box: generic path
+                        ctx.emitter.instruction("ldr x9, [x0]");                // runtime tag of the box
+                        ctx.emitter.instruction(&format!("cbnz x9, {}", slow)); // not an int payload: generic path
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("test rax, rax");               // no box?
+                        ctx.emitter.instruction(&format!("jz {}", slow));       // generic path
+                        ctx.emitter.instruction("cmp QWORD PTR [rax], 0");      // runtime tag of the box
+                        ctx.emitter.instruction(&format!("jne {}", slow));      // not an int payload: generic path
+                    }
+                }
+            }
+            PhpType::TaggedScalar => {
+                ctx.load_value_to_result(value)?;
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction(&format!("cbnz x1, {}", slow)); // null tag: generic path
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("test rdx, rdx");               // int tag?
+                        ctx.emitter.instruction(&format!("jnz {}", slow));      // null tag: generic path
+                    }
+                }
+            }
+            _ => {}
+        }
+        kinds[index] = ty;
+    }
+    for (index, value) in [lhs, rhs].into_iter().enumerate() {
+        match kinds[index] {
+            PhpType::TaggedScalar => {
+                ctx.load_value_to_result(value)?;
+            }
+            PhpType::Mixed => {
+                ctx.load_value_to_reg(value, result_reg)?;
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0, #8]"), // the int payload
+                    Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]"), // the int payload
+                }
+            }
+            _ => {
+                ctx.load_value_to_reg(value, result_reg)?;
+            }
+        }
+        if index == 0 {
+            abi::emit_push_reg(ctx.emitter, result_reg);
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x10, x0");                             // right operand
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // right operand
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    Ok(())
+}
+
+/// Emits the generic mixed `+`/`-`/`*`: boxes concrete operands, calls the runtime helper and
+/// releases the temporary boxes, leaving the boxed result in the integer result register.
+fn emit_mixed_numeric_generic(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let op = expect_mixed_numeric_op(inst)?;
@@ -431,7 +730,7 @@ pub(super) fn lower_mixed_numeric_binop(
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers a runtime-polymorphic bitwise operator (`&`/`|`/`^`) on operands that

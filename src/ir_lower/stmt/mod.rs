@@ -1936,6 +1936,7 @@ fn lower_while(
         continue_block: header,
         cleanup: None,
         snapshot_cleanup: None,
+        iter_end: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -1970,6 +1971,7 @@ fn lower_do_while(
         continue_block: cond_block,
         cleanup: None,
         snapshot_cleanup: None,
+        iter_end: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -2048,6 +2050,7 @@ fn lower_for(
         continue_block: update_block,
         cleanup: None,
         snapshot_cleanup: None,
+        iter_end: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -3697,6 +3700,7 @@ fn lower_foreach(
             value,
             span: array.span,
         }),
+        iter_end: Some((iterator.value, array.span)),
     });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
@@ -3738,6 +3742,7 @@ fn lower_foreach(
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     merge_break_states(ctx, exit);
+    emit_iter_end(ctx, iterator.value, array.span);
     ctx.clear_static_callable_locals();
     // Release the source when it is a fresh owning temporary (e.g. `foreach
     // (explode(...) as $p)` or a literal array): the iterator borrows it for the
@@ -4003,6 +4008,7 @@ fn lower_switch_bodies(
         continue_block: exit,
         cleanup: None,
         snapshot_cleanup: None,
+        iter_end: None,
     });
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
@@ -4291,7 +4297,9 @@ fn lower_try_catch(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
+    ctx.catch_loop_depths.push(ctx.loop_stack.len());
     lower_block(ctx, try_body);
+    ctx.catch_loop_depths.pop();
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
@@ -4361,7 +4369,9 @@ fn lower_try_catch_finally(
         Some(span),
     );
     let depth = push_finally_frame(ctx, finally_body, false, Some((handler_token, span)));
+    ctx.catch_loop_depths.push(ctx.loop_stack.len());
     lower_block(ctx, try_body);
+    ctx.catch_loop_depths.pop();
     pop_finally_frame_if_active(ctx, depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
@@ -4960,7 +4970,9 @@ fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId)
         }
         return;
     }
-    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    // Loops enclosing the innermost try-with-catch keep running after the catch.
+    let floor = ctx.catch_loop_depths.last().copied().unwrap_or(0);
+    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len().saturating_sub(floor));
     ctx.builder.terminate(Terminator::Throw { value });
 }
 
@@ -5049,6 +5061,9 @@ fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, count: usize)
         .copied()
         .collect::<Vec<_>>();
     for frame in frames {
+        if let Some((iterator, span)) = frame.iter_end {
+            emit_iter_end(ctx, iterator, span);
+        }
         if let Some(cleanup) = frame.cleanup {
             crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
         }
@@ -7100,4 +7115,16 @@ fn body_writes_variable(body: &[Stmt], name: &str) -> bool {
         }
     });
     writes
+}
+
+/// Ends a foreach iteration: the backend releases what the iterator retained (the iterated
+/// object, or the iterator an `IteratorAggregate` returned).
+fn emit_iter_end(ctx: &mut LoweringContext<'_, '_>, iterator: crate::ir::ValueId, span: Span) {
+    ctx.emit_void(
+        Op::IterEnd,
+        vec![iterator],
+        None,
+        Op::IterEnd.default_effects(),
+        Some(span),
+    );
 }

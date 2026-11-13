@@ -214,6 +214,17 @@ pub(in crate::optimize) fn compare_numeric(
     right: &Expr,
     cmp: impl FnOnce(f64, f64) -> bool,
 ) -> Option<bool> {
+    if let (ExprKind::IntLiteral(l), ExprKind::IntLiteral(r)) = (&left.kind, &right.kind) {
+        // Two ints compare exactly; doubles would merge neighbours above 2^53.
+        let ordering = l.cmp(r);
+        let as_f64 = |o: std::cmp::Ordering| match o {
+            std::cmp::Ordering::Less => (0.0, 1.0),
+            std::cmp::Ordering::Equal => (0.0, 0.0),
+            std::cmp::Ordering::Greater => (1.0, 0.0),
+        };
+        let (l, r) = as_f64(ordering);
+        return Some(cmp(l, r));
+    }
     let left = numeric_literal(left)?;
     let right = numeric_literal(right)?;
     Some(cmp(left, right))
@@ -222,6 +233,9 @@ pub(in crate::optimize) fn compare_numeric(
 /// Returns the result of the spaceship operator (<=>) on two numeric literals as an i64 (-1, 0, or 1),
 /// or `None` if either operand is not a numeric literal.
 pub(in crate::optimize) fn spaceship_numeric(left: &Expr, right: &Expr) -> Option<i64> {
+    if let (ExprKind::IntLiteral(l), ExprKind::IntLiteral(r)) = (&left.kind, &right.kind) {
+        return Some(l.cmp(r) as i64);
+    }
     let left = numeric_literal(left)?;
     let right = numeric_literal(right)?;
     Some(if left.is_nan() || right.is_nan() {

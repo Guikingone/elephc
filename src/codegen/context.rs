@@ -77,9 +77,18 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) skipped_consts: HashSet<InstId>,
     /// Set while lowering a `Borrowed` container read: the element is not retained.
     pub(super) borrowed_read: bool,
+    /// Set while lowering a scalar indexed-array read, whose miss warnings must preserve the
+    /// allocatable caller-saved registers (see `crate::ir_passes::inst_is_volatile_safe`).
+    pub(super) keep_registers_on_miss: bool,
     /// Checked int add/sub/mul instructions lowered together with the cast to `int` that
     /// consumes their boxed result (checked instruction -> cast instruction).
     pub(super) fused_checked_casts: HashMap<InstId, InstId>,
+    /// Checked int add/sub/mul instructions lowered together with the mixed `+`/`-`/`*`
+    /// consuming their boxed result, keyed by the consuming instruction.
+    pub(super) fused_checked_mixed: HashMap<InstId, InstId>,
+    /// Temporary codegen types of values whose home holds a different representation
+    /// while a fused lowering runs (a checked result kept as a raw int).
+    pub(super) value_type_overrides: HashMap<ValueId, PhpType>,
     /// Values released, stored, returned or passed as branch arguments: their producers must hand
     /// out an owned result.
     pub(super) released_values: HashSet<ValueId>,
@@ -132,7 +141,10 @@ impl<'a> FunctionContext<'a> {
             const_ints: HashMap::new(),
             skipped_consts: HashSet::new(),
             borrowed_read: false,
+            keep_registers_on_miss: false,
             fused_checked_casts: HashMap::new(),
+            fused_checked_mixed: HashMap::new(),
+            value_type_overrides: HashMap::new(),
             released_values: HashSet::new(),
             epilogue_label,
             label_counter: 0,
@@ -266,6 +278,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns a function value or a structured backend error.
     pub(super) fn value_php_type(&self, value: ValueId) -> Result<PhpType> {
+        if let Some(ty) = self.value_type_overrides.get(&value) {
+            return Ok(ty.clone());
+        }
         self.function
             .value(value)
             .map(|metadata| metadata.php_type.codegen_repr())
