@@ -705,6 +705,24 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
         PhpType::Mixed | PhpType::Union(_) => {
             materialize_mixed_hash_key_aarch64(ctx, key)
         }
+        // `int|null`: an integer key, or the empty-string key for null (PHP normalization).
+        PhpType::TaggedScalar => {
+            let null_label = ctx.next_label("tagged_hash_key_null");
+            let done_label = ctx.next_label("tagged_hash_key_done");
+            ctx.load_value_to_result(key)?;
+            ctx.emitter.instruction(&format!(
+                "cmp x1, #{}",
+                crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+            ));                                                                 // is the tagged key PHP null?
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));           // null keys normalize to ""
+            ctx.emitter.instruction("mov x1, x0");                              // the integer key payload
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // integer key ready
+            ctx.emitter.label(&null_label);
+            emit_empty_string_hash_key_aarch64(ctx);
+            ctx.emitter.label(&done_label);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
             other
@@ -833,6 +851,24 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
         }
         PhpType::Mixed | PhpType::Union(_) => {
             materialize_mixed_hash_key_x86_64(ctx, key)
+        }
+        // `int|null`: an integer key, or the empty-string key for null (PHP normalization).
+        PhpType::TaggedScalar => {
+            let null_label = ctx.next_label("tagged_hash_key_null");
+            let done_label = ctx.next_label("tagged_hash_key_done");
+            ctx.load_value_to_result(key)?;
+            ctx.emitter.instruction(&format!(
+                "cmp rdx, {}",
+                crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
+            ));                                                                 // is the tagged key PHP null?
+            ctx.emitter.instruction(&format!("je {}", null_label));             // null keys normalize to ""
+            ctx.emitter.instruction("mov rsi, rax");                            // the integer key payload
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // integer key ready
+            ctx.emitter.label(&null_label);
+            emit_empty_string_hash_key_x86_64(ctx);
+            ctx.emitter.label(&done_label);
+            Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",

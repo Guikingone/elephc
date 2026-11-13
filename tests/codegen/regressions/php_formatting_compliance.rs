@@ -393,3 +393,38 @@ $rows = [["id" => 100, "n" => "a"], ["id" => 5, "n" => "b"]]; $byId = []; foreac
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "[0=3][1=1][2=2]303\n[0=3][1=1][2=2]303\n[p=5]101\n31 4 ca\nValueError: max(): Argument #1 ($value) must contain at least one element\n{\"a\":10,\"5\":30}\n{\"100\":\"a\",\"5\":\"b\"} b\n");
 }
+
+/// Review regressions: a string slice used as a hash key is copied (never taken for an
+/// interned literal key, which corrupted the source); a directly-called closure that builds a
+/// capturing closure keeps the runtime's callee-saved state; data-keyed hash promotion leaves
+/// by-reference, filled and in-place-rewritten arrays as lists; `int|null` keys; boxed rows
+/// stored in a promoted hash; `max([])` throws.
+#[test]
+fn test_review_regressions_interned_keys_closures_and_promotion() {
+    let out = compile_and_run(r#"<?php
+$s2 = "the quick brown fox jumps over the lazy dog again and again";
+$w = [];
+$w[strstr($s2, "lazy")] = 9; $w[strrchr($s2, "a")] = 8; $w[substr($s2, 20)] = 7;
+echo $s2, " ", count($w), "\n";
+$src = str_repeat("zzzz", 2) . "HPLE" . "thekey";
+$h = []; $h[substr($src, 12)] = 1; echo $src, " ", implode(",", array_keys($h)), "\n";
+$a = [1, 2, 3];
+print_r(array_map(fn(int $x): int => (fn(int $y): int => $y * $x)(2), $a));
+function f(array &$out, array $src): void { foreach ($src as $k => $v) { $out[$k] = $v; } }
+$o = [9, 9, 9, 9]; f($o, [1, 2]); echo implode(",", $o), "\n";
+function g(array &$out, array $src): void { foreach ($src as $v) { $out[$v] = "x"; } }
+$o2 = ["a", "b", "c"]; g($o2, [1]); echo implode(",", $o2), "\n";
+$b = [3, 1, 2];
+foreach ($b as $i => $v) { $t = $b[$i]; $b[$i] = $t; }
+echo implode(",", $b), "\n";
+function run(array $p) { $c = [0, 0, 0]; $c[$p[0]] = 5; return $c; }
+echo implode(",", run([1])), "\n";
+$out = []; foreach ([4, 5, 6] as $i => $v) { $out[$i] = $v * 2; } echo implode(",", array_slice($out, 1)), " ", implode(",", array_reverse($out)), "\n";
+$idx = [2, 0, 1]; $vals = ["a", "b", "c"]; $perm2 = [];
+for ($j = 0; $j < 3; $j++) { $perm2[$idx[$j]] = $vals[$j]; } echo json_encode($perm2), "\n";
+$rows = [["id" => 3, "n" => "c"], ["id" => 1, "n" => "a"]]; $by2 = [];
+foreach ($rows as $row) { $by2[$row["id"]] = $row; } echo json_encode($by2), "\n";
+try { max([]); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out, "the quick brown fox jumps over the lazy dog again and again 3\nzzzzzzzzHPLEthekey thekey\nArray\n(\n    [0] => 2\n    [1] => 4\n    [2] => 6\n)\n1,2,9,9\na,x,c\n3,1,2\n0,5,0\n10,12 12,10,8\n{\"2\":\"a\",\"0\":\"b\",\"1\":\"c\"}\n{\"3\":{\"id\":3,\"n\":\"c\"},\"1\":{\"id\":1,\"n\":\"a\"}}\nmax(): Argument #1 ($value) must contain at least one element\n");
+}

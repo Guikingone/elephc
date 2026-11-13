@@ -31,6 +31,16 @@ impl Checker {
         self.foreach_key_locals.contains(name)
     }
 
+    /// Snapshot of the locals and write sites that decide data-keyed hash promotion.
+    pub(crate) fn data_key_locals(&self) -> crate::types::checker::DataKeyLocals {
+        crate::types::checker::DataKeyLocals {
+            keys: self.foreach_key_locals.clone(),
+            values: self.foreach_value_locals.clone(),
+            refs: self.active_ref_params.iter().cloned().collect(),
+            unconditional: self.unconditional_foreach_key_writes.clone(),
+        }
+    }
+
     /// Validates assignment-like statements, dispatching to specialized checkers per variant.
     ///
     /// # Parameters

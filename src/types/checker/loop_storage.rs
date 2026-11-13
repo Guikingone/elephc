@@ -49,6 +49,13 @@ pub struct DataKeyLocals {
     pub keys: HashSet<String>,
     /// Locals bound as `foreach` values.
     pub values: HashSet<String>,
+    /// Reference-bound locals and by-reference parameters: their storage is shared with a
+    /// caller, so it is never re-typed here.
+    pub refs: HashSet<String>,
+    /// Index spans of `$dst[$k] = ...` writes that run on every iteration of the `foreach`
+    /// binding `$k` (no branch or jump before them): over a list they visit every position in
+    /// order, so the destination stays a list.
+    pub unconditional: HashSet<crate::span::Span>,
 }
 
 impl DataKeyLocals {
@@ -56,10 +63,24 @@ impl DataKeyLocals {
     /// use hash storage: a foreach key may skip positions or carry string keys, and a key
     /// read from data (a foreach value, an element, a call or a property) need not follow the
     /// packed `0..count` order. `count()`/`sizeof()` (the append idiom) stay positional.
-    pub fn forces_hash(&self, index: &Expr, key_type: Option<&PhpType>) -> bool {
+    ///
+    /// Only an array that is still empty (`[]`, being built) is promoted, and never one bound by
+    /// reference: re-typing a filled or shared array would disagree with its other uses.
+    pub fn forces_hash(
+        &self,
+        array: &str,
+        index: &Expr,
+        key_type: Option<&PhpType>,
+        destination_empty: bool,
+    ) -> bool {
+        if !destination_empty || self.refs.contains(array) {
+            return false;
+        }
         match &index.kind {
             ExprKind::Variable(name) if self.keys.contains(name) => {
                 matches!(key_type, Some(PhpType::Int | PhpType::Mixed))
+                    && !(matches!(key_type, Some(PhpType::Int))
+                        && self.unconditional.contains(&index.span))
             }
             ExprKind::Variable(name) => self.values.contains(name),
             ExprKind::FunctionCall { name, .. } => !matches!(
@@ -293,9 +314,13 @@ fn apply_array_write_evidence(
         // A key taken from data (a foreach key or value, an element, a call or a property)
         // can skip or reorder positions, which only a hash keeps (mirrors the checker's
         // statement rule so the loop-carried storage agrees with the body's writes).
+        let destination_empty = matches!(
+            &current,
+            PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never)
+        );
         let data_key = write.index.is_some_and(|index| {
             matches!(key_type.as_ref(), Some(PhpType::Int | PhpType::Mixed))
-                && data_keys.forces_hash(index, key_type.as_ref())
+                && data_keys.forces_hash(write.name, index, key_type.as_ref(), destination_empty)
         });
         let forces_hash =
             matches!(key_type.as_ref(), Some(PhpType::Str)) || dynamic_string_key || data_key;

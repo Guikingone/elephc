@@ -51,10 +51,13 @@ pub(super) fn printf_prelude_target(function_name: &str, args: &[Expr]) -> Optio
         && args.len() == 1
         && !matches!(args[0].kind, ExprKind::NamedArg { .. })
     {
-        return Some(PrintfRoute::Rename(if lower == "max" {
-            "__elephc_array_max"
-        } else {
-            "__elephc_array_min"
+        // A literal `[]` always throws; its `never` elements must not reach the comparison.
+        let empty_literal = matches!(&args[0].kind, ExprKind::ArrayLiteral(items) if items.is_empty());
+        return Some(PrintfRoute::Rename(match (lower == "max", empty_literal) {
+            (true, false) => "__elephc_array_max",
+            (false, false) => "__elephc_array_min",
+            (true, true) => "__elephc_array_max_empty",
+            (false, true) => "__elephc_array_min_empty",
         }));
     }
     let target = match lower.as_str() {

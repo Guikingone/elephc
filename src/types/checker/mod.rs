@@ -204,6 +204,8 @@ pub(crate) struct Checker {
     /// (`foreach ($ids as $id) { $m[$id] = ...; }`) uses data, not a position, as the key, so
     /// the destination must be a hash: a packed list would renumber or zero-fill the gaps.
     pub foreach_value_locals: HashSet<String>,
+    /// Index spans of foreach-key writes that run on every iteration (see `DataKeyLocals`).
+    pub unconditional_foreach_key_writes: HashSet<crate::span::Span>,
     /// Locals declared with an explicit type hint (`Type $x = ...`). Unlike inferred locals,
     /// which gradually widen to a `Union`/`Mixed` join on incompatible reassignment, a declared
     /// local enforces its hint: a later concrete-disjoint assignment is a real type error. Scoped

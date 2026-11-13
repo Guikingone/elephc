@@ -2263,9 +2263,13 @@ fn widen_hash_local_for_value(
     // Boxed `mixed`/union values (e.g. checked `int|float` arithmetic) keep the existing
     // store coercion; only a concrete type change needs wider slots. Reference-bound locals
     // keep their cell representation.
+    // A boxed value only has a store coercion into scalar slots; heap-typed slots (arrays,
+    // hashes, objects) take it after widening the table to `mixed` values.
+    let boxed_into_scalar_slots = matches!(incoming, PhpType::Mixed | PhpType::Union(_))
+        && !storage.is_refcounted();
     if matches!(storage, PhpType::Mixed | PhpType::Never | PhpType::Void)
         || storage == incoming
-        || matches!(incoming, PhpType::Mixed | PhpType::Union(_))
+        || boxed_into_scalar_slots
         || ctx.is_ref_bound_local(array)
     {
         return array_value;

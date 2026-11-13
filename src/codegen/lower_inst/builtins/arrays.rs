@@ -3586,6 +3586,7 @@ fn static_sort_callback_binding(
             visible_arg_types,
             owner,
         )?;
+        let label = emit_callee_saved_preserving_trampoline(ctx, &label);
         return Ok(StaticSortCallbackBinding {
             label,
             env_source,
@@ -3622,6 +3623,51 @@ fn static_sort_callback_binding(
         "{} '{}' is not a user function or supported first-class static method",
         owner, callback.name
     )))
+}
+
+/// Emits (next to the current function) a trampoline that preserves every callee-saved
+/// register around a direct call to `target`. The array callback runtimes keep their loop state
+/// in callee-saved registers across callback calls, while generated PHP function bodies use some
+/// of them (`r12`-`r15` on x86_64, `x19`/`x20` on AArch64) as scratch without saving them.
+fn emit_callee_saved_preserving_trampoline(ctx: &mut FunctionContext<'_>, target: &str) -> String {
+    let label = ctx.next_label("callback_preserving_trampoline");
+    let done = ctx.next_label("callback_preserving_trampoline_after");
+    abi::emit_jump(ctx.emitter, &done);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.raw(".align 2");
+            ctx.emitter.label(&label);
+            ctx.emitter.instruction("stp x29, x30, [sp, #-96]!");               // frame for the preserving call
+            ctx.emitter.instruction("mov x29, sp");                             // establish the frame pointer
+            ctx.emitter.instruction("stp x19, x20, [sp, #16]");                 // preserve the caller's callee-saved registers
+            ctx.emitter.instruction("stp x21, x22, [sp, #32]");                 // preserve the caller's callee-saved registers
+            ctx.emitter.instruction("stp x23, x24, [sp, #48]");                 // preserve the caller's callee-saved registers
+            ctx.emitter.instruction("stp x25, x26, [sp, #64]");                 // preserve the caller's callee-saved registers
+            ctx.emitter.instruction("stp x27, x28, [sp, #80]");                 // preserve the caller's callee-saved registers
+            ctx.emitter.instruction(&format!("bl {}", target));                 // run the PHP callback with its arguments untouched
+            ctx.emitter.instruction("ldp x19, x20, [sp, #16]");                 // restore the caller's callee-saved registers
+            ctx.emitter.instruction("ldp x21, x22, [sp, #32]");                 // restore the caller's callee-saved registers
+            ctx.emitter.instruction("ldp x23, x24, [sp, #48]");                 // restore the caller's callee-saved registers
+            ctx.emitter.instruction("ldp x25, x26, [sp, #64]");                 // restore the caller's callee-saved registers
+            ctx.emitter.instruction("ldp x27, x28, [sp, #80]");                 // restore the caller's callee-saved registers
+            ctx.emitter.instruction("ldp x29, x30, [sp], #96");                 // tear down the frame
+            ctx.emitter.instruction("ret");                                     // return the callback result unchanged
+        }
+        Arch::X86_64 => {
+            ctx.emitter.raw(".align 16");
+            ctx.emitter.label(&label);
+            for reg in ["rbx", "r12", "r13", "r14", "r15"] {
+                ctx.emitter.instruction(&format!("push {}", reg));              // preserve the caller's callee-saved register (5 pushes keep the call aligned)
+            }
+            ctx.emitter.instruction(&format!("call {}", target));               // run the PHP callback with its arguments untouched
+            for reg in ["r15", "r14", "r13", "r12", "rbx"] {
+                ctx.emitter.instruction(&format!("pop {}", reg));               // restore the caller's callee-saved register
+            }
+            ctx.emitter.instruction("ret");                                     // return the callback result unchanged
+        }
+    }
+    ctx.emitter.label(&done);
+    label
 }
 
 /// Adapts boxed runtime callback arguments to a direct callback's declared ABI types.

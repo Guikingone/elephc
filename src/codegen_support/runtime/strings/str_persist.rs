@@ -192,6 +192,18 @@ pub fn emit_str_persist_key(emitter: &mut Emitter) {
             crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", PERMANENT_KEY_REFCOUNT as i64);
             emitter.instruction("cmp w9, w10");                                 // marked permanent?
             emitter.instruction("b.lo __rt_str_persist");                       // an ordinary string is copied
+            // The refcount word is only a filter (a slice into another string can carry any
+            // bytes there): share the key only when it IS one of the interned literal copies.
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_hkey_head");
+            emitter.instruction("ldr x10, [x10]");                              // first interned-key slot
+            emitter.label("__rt_str_persist_key_scan");
+            emitter.instruction("cbz x10, __rt_str_persist");                   // not interned: copy it
+            emitter.instruction("ldr x11, [x10]");                              // this slot's interned key
+            emitter.instruction("cmp x11, x1");                                 // the same storage?
+            emitter.instruction("b.eq __rt_str_persist_key_share");             // yes: share it
+            emitter.instruction("ldr x10, [x10, #8]");                          // next slot
+            emitter.instruction("b __rt_str_persist_key_scan");                 // continue the scan
+            emitter.label("__rt_str_persist_key_share");
             emitter.instruction("add w9, w9, #1");                              // the table takes a reference, released when it frees the key
             emitter.instruction("str w9, [x1, #-12]");                          // store the shared key's refcount
             emitter.instruction("ret");                                         // interned key: share it
@@ -211,6 +223,17 @@ pub fn emit_str_persist_key(emitter: &mut Emitter) {
             emitter.instruction("jne __rt_str_persist");                        // foreign bytes: copy them
             emitter.instruction(&format!("cmp DWORD PTR [rax - 12], 0x{:x}", PERMANENT_KEY_REFCOUNT)); // marked permanent?
             emitter.instruction("jb __rt_str_persist");                         // an ordinary string is copied
+            // The header words are only a filter (a slice into another string can carry any
+            // bytes there): share the key only when it IS one of the interned literal copies.
+            emitter.instruction("mov r10, QWORD PTR [rip + _hkey_head]");       // first interned-key slot
+            emitter.label("__rt_str_persist_key_scan");
+            emitter.instruction("test r10, r10");                               // end of the interned keys?
+            emitter.instruction("jz __rt_str_persist");                         // not interned: copy it
+            emitter.instruction("cmp QWORD PTR [r10], rax");                    // the same storage?
+            emitter.instruction("je __rt_str_persist_key_share");               // yes: share it
+            emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                // next slot
+            emitter.instruction("jmp __rt_str_persist_key_scan");               // continue the scan
+            emitter.label("__rt_str_persist_key_share");
             emitter.instruction("add DWORD PTR [rax - 12], 1");                 // the table takes a reference, released when it frees the key
             emitter.instruction("ret");                                         // interned key: share it
         }

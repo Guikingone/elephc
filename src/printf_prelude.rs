@@ -39,6 +39,8 @@ pub const PRINTF_PRELUDE_FUNCTIONS: &[&str] = &[
     "__elephc_explode_limit",
     "__elephc_array_max",
     "__elephc_array_min",
+    "__elephc_array_max_empty",
+    "__elephc_array_min_empty",
 ];
 
 /// Prelude entry points that do not need the shared formatter helpers.
@@ -46,6 +48,8 @@ const STANDALONE_ENTRY_POINTS: &[&str] = &[
     "__elephc_explode_limit",
     "__elephc_array_max",
     "__elephc_array_min",
+    "__elephc_array_max_empty",
+    "__elephc_array_min_empty",
 ];
 
 /// The shared helpers of the elephc-PHP formatted-output prelude.
@@ -515,6 +519,18 @@ const PRINTF_ENTRY_POINTS: &[(&str, &str)] = &[
         }
     }
     return $best;
+}"#,
+    ),
+    (
+        "__elephc_array_max_empty",
+        r#"function __elephc_array_max_empty(array $value): mixed {
+    throw new ValueError("max(): Argument #1 (\$value) must contain at least one element");
+}"#,
+    ),
+    (
+        "__elephc_array_min_empty",
+        r#"function __elephc_array_min_empty(array $value): mixed {
+    throw new ValueError("min(): Argument #1 (\$value) must contain at least one element");
 }"#,
     ),
 ];

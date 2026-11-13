@@ -48,10 +48,7 @@ fn stabilize_loop_storage(
         return;
     }
     let snapshot = env.clone();
-    let data_keys = crate::types::checker::DataKeyLocals {
-        keys: checker.foreach_key_locals.clone(),
-        values: checker.foreach_value_locals.clone(),
-    };
+    let data_keys = checker.data_key_locals();
     let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
         std::collections::HashMap::new();
     let contracts = crate::types::checker::loop_carried_storage_types(
@@ -355,6 +352,23 @@ impl Checker {
                 // instead of promoting the destination to `AssocArray`.
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
+                    // Writes keyed by `$k` that run on every iteration (before any statement
+                    // that could branch or jump) visit a list's positions in order.
+                    for stmt in body.iter() {
+                        match &stmt.kind {
+                            StmtKind::ArrayAssign { index, .. } => {
+                                if matches!(&index.kind, ExprKind::Variable(name) if name == k) {
+                                    self.unconditional_foreach_key_writes.insert(index.span);
+                                }
+                            }
+                            StmtKind::Assign { .. }
+                            | StmtKind::TypedAssign { .. }
+                            | StmtKind::Echo(_)
+                            | StmtKind::ExprStmt(_)
+                            | StmtKind::ArrayPush { .. } => {}
+                            _ => break,
+                        }
+                    }
                 }
                 self.foreach_value_locals.insert(value_var.clone());
                 if *value_by_ref && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable) {

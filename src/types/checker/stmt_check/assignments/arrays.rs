@@ -107,12 +107,14 @@ pub(super) fn check_array_assign(
         // which a packed list cannot hold (it would zero-fill or renumber): use a hash.
         // A foreach key over a list is an `int` that the loop body may skip (filtering), so
         // it too can leave gaps: a packed destination would fill them with nulls.
-        let data_keys = crate::types::checker::DataKeyLocals {
-            keys: checker.foreach_key_locals.clone(),
-            values: checker.foreach_value_locals.clone(),
-        };
+        let data_keys = checker.data_key_locals();
         let data_sourced_int_key = matches!(normalized_idx_ty, PhpType::Int | PhpType::Mixed)
-            && data_keys.forces_hash(index, Some(&normalized_idx_ty));
+            && data_keys.forces_hash(
+                array,
+                index,
+                Some(&normalized_idx_ty),
+                matches!(elem_ty.as_ref(), PhpType::Never),
+            );
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || data_sourced_int_key
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
