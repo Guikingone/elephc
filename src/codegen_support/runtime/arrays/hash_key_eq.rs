@@ -34,6 +34,12 @@ pub fn emit_hash_key_eq(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_key_eq_left_int");                      // integer keys compare by signed payload
     emitter.instruction("cmn x4, #1");                                          // check whether the right key is an integer key
     emitter.instruction("b.eq __rt_hash_key_eq_false");                         // string and integer keys are never equal after normalization
+    emitter.instruction("cmp x1, x3");                                          // the same key storage (interned literal keys)?
+    emitter.instruction("ccmp x2, x4, #0, eq");                                 // ... with the same length
+    emitter.instruction("b.ne __rt_hash_key_eq_bytes");                         // otherwise compare the bytes
+    emitter.instruction("mov x0, #1");                                          // identical storage: equal keys
+    emitter.instruction("ret");                                                 // return true without scanning the bytes
+    emitter.label("__rt_hash_key_eq_bytes");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the caller frame before delegating to string equality
     emitter.instruction("mov x29, sp");                                         // establish a minimal frame for the nested call
     emitter.instruction("bl __rt_str_eq");                                      // compare two normalized string keys byte-for-byte
@@ -69,6 +75,13 @@ fn emit_hash_key_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_key_eq_left_int");                        // integer keys compare by signed payload
     emitter.instruction("cmp rcx, -1");                                         // check whether the right key is an integer key
     emitter.instruction("je __rt_hash_key_eq_false");                           // string and integer keys are never equal after normalization
+    emitter.instruction("cmp rdi, rdx");                                        // the same key storage (interned literal keys)?
+    emitter.instruction("jne __rt_hash_key_eq_bytes");                          // different storage: compare the bytes
+    emitter.instruction("cmp rsi, rcx");                                        // ... with the same length?
+    emitter.instruction("jne __rt_hash_key_eq_bytes");                          // compare the bytes
+    emitter.instruction("mov eax, 1");                                          // identical storage: equal keys
+    emitter.instruction("ret");                                                 // return true without scanning the bytes
+    emitter.label("__rt_hash_key_eq_bytes");
     emitter.instruction("call __rt_str_eq");                                    // compare two normalized string keys byte-for-byte
     emitter.instruction("ret");                                                 // return the string-key equality result
 

@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Hash key comparison returns early when both keys share the same storage (interned literal keys), skipping the byte scan (assoc_small −5 % instructions).
 - String-literal hash keys (`['id' => $i, 'weight' => ...]`, `$m['k'] = ...`) are normalized at compile time and interned once per literal: inserting one shares the interned heap copy instead of copying the key for every new table, and integer-like literals (`'5'`) become integer keys directly (alloc_churn −16 % instructions, 3 M fewer allocations). Interned keys are released at exit once no table holds them.
 - Fixed: a write keyed by a `foreach` key (`foreach ($src as $k => $v) { if (...) $dst[$k] = $v; }`) filled skipped positions with nulls, and a source with mixed int/string keys produced garbage; the destination is now a hash with the source's keys.
 - Fixed (use-after-free): passing a local list to an `array` parameter widened to a hash (the function is also called with an associative array) released the caller's reference on every call; the conversion now retains it. The same consuming conversion is balanced for spreads of a borrowed list into a hash.
