@@ -325,3 +325,31 @@ echo json_encode(explode(",", "a,b,c,d", 2)), json_encode(explode(",", "a,b,c,d"
     assert_eq!(out.stdout, "2:[\"a\",\"b,c,d\"][\"x\",\"y||z\"][\"\"]\n1:[\"a,b,c,d\"][\"x||y||z\"][\"\"]\n0:[\"a,b,c,d\"][\"x||y||z\"][\"\"]\n-1:[\"a\",\"b\",\"c\"][\"x\",\"y\"][]\n-2:[\"a\",\"b\"][\"x\"][]\n5:[\"a\",\"b\",\"c\",\"d\"][\"x\",\"y\",\"z\"][\"\"]\n-5:[][][]\n3:[\"a\",\"b\",\"c,d\"][\"x\",\"y\",\"z\"][\"\"]\nkey|val=ue\n[\"1\",\"2-3\"]\nkeyval\na[1,2]3.5\nxy\nmn[\"z\",\"n\"]\na1b2\nk|v=w\n4\n[\"p\",\"q\",\"r\"][\"p\",\"q\"]\n[\"a\",\"b,c,d\"][\"a\",\"b\",\"c\"]\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// An array write keyed by data instead of a position (`foreach` value, array element, call
+/// or property result) builds a hash, like PHP: a packed list renumbered such keys or
+/// zero-filled the gaps (`$m[$id] = ...` with ids 100, 5, 42 printed 101 entries).
+#[test]
+fn test_data_keyed_array_writes_build_hashes() {
+    let out = compile_and_run(r#"<?php
+class U { public function __construct(public int $id, public string $n) {} public function key(): int { return $this->id * 10; } }
+$us = [new U(7, "x"), new U(3, "y"), new U(7, "z")];
+$byId = []; foreach ($us as $u) { $byId[$u->id] = $u->n; } var_dump($byId);
+$byKey = []; foreach ($us as $u) { $byKey[$u->key()] = $u->id; } echo json_encode($byKey), "\n";
+$cnt = []; foreach ([5, 3, 5, 9, 3, 5] as $v) { $cnt[$v] = ($cnt[$v] ?? 0) + 1; } print_r($cnt); ksort($cnt); echo json_encode($cnt), "\n";
+$sq = []; foreach ([4, 2] as $v) { $sq[intval($v * $v)] = true; } var_dump($sq, isset($sq[16]), isset($sq[0]));
+$list = []; for ($i = 0; $i < 5; $i++) { $list[$i] = $i * $i; } echo json_encode($list), "\n";
+$app = []; foreach (["a", "b"] as $v) { $app[count($app)] = $v; } echo json_encode($app), "\n";
+$inv = []; $src = ["p" => 2, "q" => 0]; foreach ($src as $k => $v) { $inv[$v] = $k; } print_r($inv);
+$rows = [[1, "one"], [0, "zero"]]; $m = []; foreach ($rows as $r) { $m[$r[0]] = $r[1]; } echo json_encode($m), " ", count($m), "\n";
+$total = 0; foreach ($cnt as $k => $c) { $total += $k * $c; } echo $total, "\n";
+$rows = [["id" => 100, "n" => "a"], ["id" => 5, "n" => "b"], ["id" => 42, "n" => "c"]];
+$byId = [];
+foreach ($rows as $r) { $byId[$r["id"]] = $r["n"]; }
+print_r($byId); echo count($byId), "\n";
+$ids = [100, 5, 42]; $m = [];
+foreach ($ids as $id) { $m[$id] = $id * 2; }
+echo count($m), " ", json_encode($m), "\n";
+"#);
+    assert_eq!(out, "array(2) {\n  [7]=>\n  string(1) \"z\"\n  [3]=>\n  string(1) \"y\"\n}\n{\"70\":7,\"30\":3}\nArray\n(\n    [5] => 3\n    [3] => 2\n    [9] => 1\n)\n{\"3\":2,\"5\":3,\"9\":1}\narray(2) {\n  [16]=>\n  bool(true)\n  [4]=>\n  bool(true)\n}\nbool(true)\nbool(false)\n[0,1,4,9,16]\n[\"a\",\"b\"]\nArray\n(\n    [2] => p\n    [0] => q\n)\n{\"1\":\"one\",\"0\":\"zero\"} 2\n30\nArray\n(\n    [100] => a\n    [5] => b\n    [42] => c\n)\n3\n3 {\"100\":200,\"5\":10,\"42\":84}\n");
+}

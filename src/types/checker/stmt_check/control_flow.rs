@@ -351,6 +351,7 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
+                self.foreach_value_locals.insert(value_var.clone());
                 if *value_by_ref && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable) {
                     return Err(CompileError::new(
                         stmt.span,

@@ -148,6 +148,7 @@ pub(super) fn check_assign(
     // disagree with the lowering (it routes on the index's runtime IR type) and
     // produce a spurious `AssocArray -> Array(Mixed)` backend error.
     checker.foreach_key_locals.remove(name);
+    checker.foreach_value_locals.remove(name);
 
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The parser

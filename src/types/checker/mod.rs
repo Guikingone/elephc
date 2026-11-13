@@ -200,6 +200,10 @@ pub(crate) struct Checker {
     /// promoting to `AssocArray` like a statically-known string key would. Mirrors
     /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
     pub foreach_key_locals: HashSet<String>,
+    /// Locals currently bound as a `foreach` value variable. A packed-array write keyed by one
+    /// (`foreach ($ids as $id) { $m[$id] = ...; }`) uses data, not a position, as the key, so
+    /// the destination must be a hash: a packed list would renumber or zero-fill the gaps.
+    pub foreach_value_locals: HashSet<String>,
     /// Locals declared with an explicit type hint (`Type $x = ...`). Unlike inferred locals,
     /// which gradually widen to a `Union`/`Mixed` join on incompatible reassignment, a declared
     /// local enforces its hint: a later concrete-disjoint assignment is a real type error. Scoped

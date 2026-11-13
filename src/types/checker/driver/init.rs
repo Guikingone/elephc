@@ -227,6 +227,7 @@ impl Checker {
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
+            foreach_value_locals: HashSet::new(),
             declared_typed_locals: HashSet::new(),
             conditional_assignment_depth: 0,
             eval_barrier_active: false,
