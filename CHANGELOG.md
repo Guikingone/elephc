@@ -4,6 +4,9 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed: `&`, `|` and `^` between two runtime `mixed` integers computed with zeros on x86_64 (the helper passed each operand to the int cast in the wrong register).
+- Fixed (register coalescing): two parameters of one block could share a register, so a never-read loop variable's edge copy overwrote a live one; and a call-save reload could restore a dead value over a coalesced partner (a `(int)($a + $b)` result was lost). Call saves now skip reloading values that are dead after the call.
+- Mixed `is_null()`/kind checks and method calls on a `mixed` receiver unbox the value inline instead of calling `__rt_mixed_unbox` (oop −9 % instructions).
 - `$this->prop` reads of declared `int`/`float`/`bool` properties skip the null-receiver check (`$this` is never null in an instance method) and no longer force caller-saved registers to be spilled around them.
 - Register allocation coalesces moves: a loop-carried value shares one register with the block parameter it flows into (precise, hole-aware liveness proves the two are never live together), and an integer op computes into its dying left operand's register; a loop header that only compares and branches is re-tested at the back edge, saving a jump per iteration (loop −50 % instructions, fib −16 %, spectralnorm −14 %).
 - Code generation: three-operand `imul` with an immediate on x86_64, AArch64 bitmask immediates for `&`, `|`, `^`, and an add whose overflow is checked branches on the flags of the add itself instead of recomputing it.

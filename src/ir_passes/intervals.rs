@@ -164,10 +164,22 @@ pub fn build_intervals(
 
     clobbers.sort_unstable();
 
+    // Block parameters of one block are all written by the same parallel edge copy, so they
+    // must never share a register: keep each one live past the block entry, even when it is
+    // never read, so a sibling parameter allocated at the same position cannot take it.
+    let block_params: std::collections::HashSet<ValueId> = func
+        .blocks
+        .iter()
+        .flat_map(|block| block.params.iter().copied())
+        .collect();
+
     let mut intervals: Vec<LiveInterval> = starts
         .into_iter()
         .map(|(value, start)| {
-            let end = ends[&value].max(start);
+            let mut end = ends[&value].max(start);
+            if block_params.contains(&value) {
+                end = end.max(start + 1);
+            }
             LiveInterval {
                 value,
                 ir_type: func.value(value).expect("value exists").ir_type,
@@ -244,9 +256,16 @@ pub struct PreciseLiveness {
     /// Per block parameter, the predecessor terminator positions that write it and the
     /// argument value each one copies in.
     edge_writes: HashMap<ValueId, Vec<(u32, ValueId)>>,
+    /// Block parameter -> the block that defines it.
+    param_blocks: HashMap<ValueId, BlockId>,
 }
 
 impl PreciseLiveness {
+    /// Maps every block parameter to its block.
+    pub fn param_blocks(&self) -> &HashMap<ValueId, BlockId> {
+        &self.param_blocks
+    }
+
     /// Returns true when `value` is live at some position in the closed range `[lo, hi]`.
     pub fn live_within(&self, value: ValueId, lo: u32, hi: u32) -> bool {
         self.ranges
@@ -343,5 +362,14 @@ pub fn precise_liveness(func: &Function, liveness: &LivenessInfo) -> PreciseLive
         }
     }
 
-    PreciseLiveness { ranges, edge_writes }
+    let param_blocks = func
+        .blocks
+        .iter()
+        .flat_map(|block| block.params.iter().map(move |param| (*param, block.id)))
+        .collect();
+    PreciseLiveness {
+        ranges,
+        edge_writes,
+        param_blocks,
+    }
 }

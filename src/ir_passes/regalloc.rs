@@ -65,7 +65,14 @@ pub fn allocate_registers_with_safe(
     let hints = coalesce_partners(func);
     let precise = precise_liveness(func, &liveness);
     let mut allocation = scan(&eligible, target, &hints, &precise);
-    allocation.set_call_saves(plan_call_saves(func, &eligible, &allocation, target, extra_safe));
+    allocation.set_call_saves(plan_call_saves(
+        func,
+        &eligible,
+        &allocation,
+        target,
+        extra_safe,
+        &precise,
+    ));
     allocation
 }
 
@@ -76,6 +83,7 @@ fn plan_call_saves(
     allocation: &Allocation,
     target: Target,
     extra_safe: &HashSet<crate::ir::InstId>,
+    precise: &PreciseLiveness,
 ) -> HashMap<crate::ir::InstId, Vec<CallSave>> {
     let mut saves: HashMap<crate::ir::InstId, Vec<CallSave>> = HashMap::new();
     let caller_saved: HashSet<&'static str> = caller_int_pool(target)
@@ -103,7 +111,9 @@ fn plan_call_saves(
                 value: iv.value,
                 reg,
                 store_before: iv.start < *pos,
-                reload_after: iv.end > *pos,
+                // Only reload a value that is really live after the clobber: a register shared
+                // with a coalescing partner may hold the partner's (newer) value by then.
+                reload_after: iv.end > *pos && precise.live_within(iv.value, *pos + 1, *pos + 1),
             });
         }
     }
@@ -298,6 +308,7 @@ fn scan(
     hints: &HashMap<ValueId, Vec<ValueId>>,
     precise: &PreciseLiveness,
 ) -> Allocation {
+    let param_blocks: HashMap<ValueId, crate::ir::BlockId> = precise.param_blocks().clone();
     let mut free = FreePools::new(target);
     let mut active: Vec<ActiveInterval> = Vec::new();
     let mut assignments: HashMap<ValueId, &'static str> = HashMap::new();
@@ -307,7 +318,7 @@ fn scan(
         expire_old_intervals(&mut active, iv.start, &mut free);
 
         let pools = candidate_pools(iv);
-        if let Some(index) = shareable_partner(iv, pools, hints, &active, precise) {
+        if let Some(index) = shareable_partner(iv, pools, hints, &active, precise, &param_blocks) {
             let entry = &mut active[index];
             entry.end = entry.end.max(iv.end);
             entry.weight = entry.weight.max(iv.weight);
@@ -421,16 +432,23 @@ fn shareable_partner(
     hints: &HashMap<ValueId, Vec<ValueId>>,
     active: &[ActiveInterval],
     precise: &PreciseLiveness,
+    param_blocks: &HashMap<ValueId, crate::ir::BlockId>,
 ) -> Option<usize> {
     let partners = partner_closure(iv.value, hints);
     if partners.is_empty() {
         return None;
     }
+    let own_block = param_blocks.get(&iv.value);
     let lo = iv.start + 1;
     let hi = iv.end.max(lo);
     active.iter().position(|entry| {
         pools.contains(&entry.pool)
             && entry.members.iter().any(|member| partners.contains(member))
+            // Two parameters of one block are written by one parallel copy: never share.
+            && !entry
+                .members
+                .iter()
+                .any(|member| own_block.is_some() && param_blocks.get(member) == own_block)
             && entry.members.iter().all(|member| {
                 !precise.live_within(*member, lo, hi)
                     && precise

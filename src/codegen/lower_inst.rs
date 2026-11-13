@@ -3705,6 +3705,64 @@ fn guard_static_method_receiver(
     Ok(())
 }
 
+/// Inline `__rt_mixed_unbox`: same contract (box pointer in the int result register; tag,
+/// low and high payload words out in `x0`/`x1`/`x2` or `rax`/`rdi`/`rdx`; clobbers the
+/// scratch registers the helper does) without the call for the common one-level box. Only a
+/// nested Mixed box (tag 7) still calls the runtime helper to peel it.
+pub(super) fn emit_mixed_unbox_inline(ctx: &mut FunctionContext<'_>) {
+    let null_label = ctx.next_label("mixed_unbox_null");
+    let slow_label = ctx.next_label("mixed_unbox_nested");
+    let done_label = ctx.next_label("mixed_unbox_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", null_label));        // a null box pointer reads as PHP null
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the box's runtime tag
+            ctx.emitter.instruction("cmp x9, #7");                              // a nested Mixed box?
+            ctx.emitter.instruction(&format!("b.eq {}", slow_label));           // nested boxes are peeled by the runtime helper
+            ctx.emitter.instruction("ldr x1, [x0, #8]");                        // payload low word
+            ctx.emitter.instruction("ldr x2, [x0, #16]");                       // payload high word
+            ctx.emitter.instruction("mov x0, x9");                              // concrete runtime tag
+            ctx.emitter.instruction("cmp x0, #4");                              // only container tags (4..6) can carry a null payload
+            ctx.emitter.instruction(&format!("b.lt {}", done_label));           // scalar payload: done
+            ctx.emitter.instruction("cmp x0, #6");                              // past the container tags?
+            ctx.emitter.instruction(&format!("b.gt {}", done_label));           // other tags: done
+            crate::codegen::sentinels::emit_branch_if_null_container(ctx.emitter, "x1", "x9", &null_label);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // live container payload
+            ctx.emitter.label(&slow_label);
+            ctx.emitter.instruction("bl __rt_mixed_unbox");                     // peel nested Mixed boxes in the runtime
+            ctx.emitter.instruction(&format!("b {}", done_label));              // unboxed
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = null
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a null box pointer reads as PHP null
+            ctx.emitter.instruction(&format!("jz {}", null_label));             // normalize to the null triple
+            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // the box's runtime tag
+            ctx.emitter.instruction("cmp r11, 7");                              // a nested Mixed box?
+            ctx.emitter.instruction(&format!("je {}", slow_label));             // nested boxes are peeled by the runtime helper
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // payload low word
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rax + 16]");           // payload high word
+            ctx.emitter.instruction("mov rax, r11");                            // concrete runtime tag
+            ctx.emitter.instruction("cmp rax, 4");                              // only container tags (4..6) can carry a null payload
+            ctx.emitter.instruction(&format!("jl {}", done_label));             // scalar payload: done
+            ctx.emitter.instruction("cmp rax, 6");                              // past the container tags?
+            ctx.emitter.instruction(&format!("jg {}", done_label));             // other tags: done
+            crate::codegen::sentinels::emit_branch_if_null_container(ctx.emitter, "rdi", "r11", &null_label);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // live container payload
+            ctx.emitter.label(&slow_label);
+            ctx.emitter.instruction("call __rt_mixed_unbox");                   // peel nested Mixed boxes in the runtime
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // unboxed
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("mov eax, 8");                              // runtime tag 8 = null
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor edx, edx");                            // null has no high payload word
+        }
+    }
+    ctx.emitter.label(&done_label);
+}
+
 /// Lowers an instance-method call whose receiver is boxed as `Mixed`.
 fn lower_mixed_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -3736,7 +3794,7 @@ fn lower_mixed_method_call(
         .collect::<Vec<_>>();
 
     ctx.load_value_to_result(object)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_unbox_inline(ctx);
     emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
     emit_mixed_method_class_dispatch(
         ctx,

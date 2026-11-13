@@ -235,7 +235,7 @@ pub(super) fn emit_mixed_tag_eq(
             ty
         )));
     }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_mixed_unbox_inline(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed runtime tag against the expected tag
@@ -267,7 +267,7 @@ pub(super) fn emit_mixed_tag_membership(
     }
     let true_label = ctx.next_label("mixed_kind_true");
     let done_label = ctx.next_label("mixed_kind_done");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_mixed_unbox_inline(ctx);
     for &tag in true_tags {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {

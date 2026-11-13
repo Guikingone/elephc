@@ -185,10 +185,10 @@ fn emit_mixed_bitwise_linux_x86_64(emitter: &mut Emitter) {
 
     // -- integer path: coerce both operands to int, then box the integer result --
     emitter.label("__rt_mixed_bitwise_int_linux_x86_64");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed left operand for the int cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed left operand for the int cast (rax is the helper input)
     emitter.instruction("call __rt_mixed_cast_int");                            // coerce the left operand to int via PHP rules
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // reuse the left string slot to save the left int
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the boxed right operand for the int cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed right operand for the int cast (rax is the helper input)
     emitter.instruction("call __rt_mixed_cast_int");                            // coerce the right operand to int via PHP rules
     emitter.instruction("mov rcx, rax");                                        // keep the right int operand in rcx
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the left int operand into rax
@@ -336,7 +336,7 @@ fn emit_mixed_bitwise_not_linux_x86_64(emitter: &mut Emitter) {
 
     // -- integer path: coerce to int, complement, then box the integer result --
     emitter.label("__rt_mixed_bitwise_not_int_linux_x86_64");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed operand for the int cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed operand for the int cast (rax is the helper input)
     emitter.instruction("call __rt_mixed_cast_int");                            // coerce the operand to int via PHP rules
     emitter.instruction("not rax");                                             // ~i (two's-complement bitwise NOT)
     emitter.instruction("mov rdi, rax");                                        // move the integer result into the from_value low payload register

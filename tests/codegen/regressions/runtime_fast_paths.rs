@@ -395,3 +395,72 @@ TypeError
 65322
 ");
 }
+
+/// Register coalescing never lets two parameters of one block share a register (a dead
+/// parameter's edge copy overwrote a live one), and a call-save reload never restores a
+/// precisely dead value over a coalesced partner (a fused checked cast lost its result).
+#[test]
+fn test_coalescing_dead_block_params_and_dead_reloads() {
+    let out = compile_and_run(r#"<?php
+function f(int $p): int {
+    $c = 1;
+    $i = 6;
+    while ($i > 0) {
+        $i--;
+        $c = 256 | (($c - $c) & 0xFFFFFF);
+    }
+    return $p;
+}
+echo f(3), "\n";
+function g(int $n, int $x, int $a1, int $a2, int $a3, int $a4, int $a5, int $a6): int {
+    $b1 = $a1 ^ 1; $b2 = $a2 ^ 2; $b3 = $a3 ^ 3;
+    $s = 1; $i = 0;
+    while ($i < $n) {
+        $x = ($x ^ $s ^ ($s >> 3) ^ ($s << 2) ^ ($s >> 5)) | 1;
+        $c = (int)($s + $x);
+        $s = ($c & 0xFFFF) ^ ((($c >> 20) & 0xFF) | (($c >> 7) & 0xF0F) | (($c >> 9) & 0x3F));
+        $i++;
+    }
+    return $s ^ $x ^ $a1 ^ $a2 ^ $a3 ^ $a4 ^ $a5 ^ $a6 ^ $b1 ^ $b2 ^ $b3;
+}
+echo g(10, 12345, 1, 2, 3, 4, 5, 6), "\n";
+echo g(1000, -99, 11, 22, 33, 44, 55, 66), "\n";
+function hc(int $a, int $b): int { if ($a > 1000000) { return hc($a >> 3, $b) ^ 5; } return (($a * 31) ^ ($b + 7)) & 0xFFFFFF; }
+function f0(int $p, int $q, int $n): int {
+    $a = 499;
+    $b = 1;
+    $c = $n;
+    $t = 0;
+    $i1 = 1;
+    do {
+        $i1--;
+        for ($i2 = 2; $i2 < $n; $i2 += 3) {
+            $t = $a; $a = $c; $c = $t;
+            echo $b, ",";
+            $c = hc($b & 0xFFFF, $b & 0xFF);
+            for ($i3 = 1; $i3 < $n; $i3 += 2) {
+                $c = (($q * 7) & 0xFFFFFF);
+                $a &= (1 % 7);
+                $c = $n;
+            }
+        }
+        $a = hc($c & 0xFFFF, $b & 0xFF);
+    } while ($i1 > 2);
+    return ($a ^ $b ^ $c) & 0xFFFFFFFFFFFF;
+}
+echo f0(669, -2, 5), "\n";
+"#);
+    assert_eq!(out, "3\n199005\n-98509\n1,151\n");
+}
+
+/// Bitwise operators on two runtime `mixed` integers coerce both operands (the x86_64 helper
+/// passed the box to the int cast in the wrong register and computed with zeros).
+#[test]
+fn test_mixed_bitwise_operands_on_integers() {
+    let out = compile_and_run(r#"<?php
+function m(int $k): mixed { return $k > 100 ? "s" : $k; }
+$a = m(3); $b = m(0); $t = m(3); $s = m(200);
+echo $a ^ $b, " ", ($a ^ $b) ^ 77, " ", (($a ^ $b ^ 77) ^ 1) ^ $t, " ", $a | $b, " ", $a & $t, " ", ~$a, " ", $s | "ab", "\n";
+"#);
+    assert_eq!(out, "3 78 76 3 3 -4 sb\n");
+}
