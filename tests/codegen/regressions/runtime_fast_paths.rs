@@ -206,3 +206,19 @@ $copy = $g[3]; $copy[0] = -1; echo $g[3][0], " ", $copy[0], "\n";
     assert_eq!(out.stdout, "100 5 16\nNULL\n2\n99 2\n0 -1\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A loop counter passed to a variable that only ever holds closure literals stays a native
+/// int (no closure takes a by-reference parameter), while a closure that does bind by
+/// reference still makes the counter overflow to float like PHP.
+#[test]
+fn test_closure_call_arguments_keep_loop_counters_native_unless_by_ref() {
+    let out = compile_and_run(r#"<?php
+$f = function (&$x) { $x += 1000000000000000000; };
+for ($i = 9000000000000000000; $i < PHP_INT_MAX; $i++) { $f($i); var_dump($i); break; }
+$g = fn(int $x): int => $x * 2;
+$t = 0;
+for ($j = 0; $j < 5; $j++) { $t += $g($j); }
+echo $t, "\n";
+"#);
+    assert_eq!(out, "float(1.0E+19)\n20\n");
+}

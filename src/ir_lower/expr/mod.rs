@@ -2692,7 +2692,10 @@ fn emit_builtin_call_value(
             // A result that may be a slice of an owning temporary argument (`trim(str_replace(..))`)
             // would keep that temporary alive forever: take an owned copy of the result so the
             // temporary can be released like any other argument.
-            let aliases_owning_temporary = !matches!(return_alias, ReturnArgAlias::None)
+            // Only builtins that declare which argument they slice (`Aliases`) qualify: a
+            // conservative `MayAliasArguments` result may be a fresh heap string, which the
+            // copy would leak.
+            let aliases_owning_temporary = matches!(return_alias, ReturnArgAlias::Parameters(_))
                 && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(call.value))
                 && operands.iter().enumerate().any(|(index, value)| {
                     let lowered = LoweredValue {

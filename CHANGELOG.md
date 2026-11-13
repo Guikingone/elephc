@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- The integer-range analysis no longer assumes that calling a variable which only ever holds closure literals (`$add = fn(...) => ...; $add($i)`) can modify its arguments by reference, unless some closure, first-class callable or string-named callable binds a parameter by reference; loop counters passed to such calls stay native ints again (`closures` benchmark 0.45 s → 0.13 s).
+- Fixed a leak introduced by the previous aliasing fix: only builtins that declare which argument their result slices get their result copied.
 - Fixed (use-after-free): `$s[$i]` on a temporary string (`ord($arr[$i][0])`) returned a slice of a string released before it was read; the selected byte is now copied into concat scratch.
 - By-value `foreach` iterates a snapshot when its body writes the iterated variable (PHP semantics): appending to or rewriting the array inside the loop no longer extends the iteration or crashes. The `array_clone_shallow`/`hash_clone_shallow` IR ops are now lowered.
 - Fixed: returning a by-reference string parameter released the caller's string (values read through a reference cell are retained before `return`).

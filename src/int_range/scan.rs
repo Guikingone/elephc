@@ -90,6 +90,17 @@ pub(crate) struct ProgramInfo {
     pub(crate) dynamic_calls: bool,
     /// Top-level variables that a function can reach through `global` or `$GLOBALS[...]`.
     pub(crate) top_level_pinned: HashSet<String>,
+    /// `true` when a call through a closure value or callable expression can bind an argument
+    /// by reference: some closure declares a by-reference parameter, a first-class callable
+    /// or `Closure` construction exists, or a string literal names a function, builtin or
+    /// method with a by-reference parameter. Otherwise such calls cannot write their
+    /// bare-variable arguments.
+    pub(crate) by_ref_callables: bool,
+    /// Every string literal in the program (candidate callable names).
+    all_string_literals: HashSet<String>,
+    /// Variables that only ever hold closure literals (every write assigns one, and the name
+    /// is never a parameter): calling them runs a closure whose by-ref shape is known.
+    pub(crate) closure_only_vars: HashSet<String>,
 }
 
 impl ProgramInfo {
@@ -97,10 +108,21 @@ impl ProgramInfo {
     pub(crate) fn collect(program: &[Stmt]) -> Self {
         let mut info = ProgramInfo::default();
         let mut names = HashSet::new();
+        let mut closure_assigned = HashSet::new();
+        let mut other_writes = HashSet::new();
         walk_stmts(program, true, &mut |node| match node {
             Node::Stmt(stmt) => {
                 info.observe_stmt(stmt);
                 stmt_writes(stmt, &mut names);
+                match &stmt.kind {
+                    StmtKind::Assign { name, value } if matches!(value.kind, ExprKind::Closure { .. }) => {
+                        closure_assigned.insert(name.clone());
+                    }
+                    StmtKind::FunctionDecl { params, .. } => {
+                        other_writes.extend(params.iter().map(|param| param.0.clone()));
+                    }
+                    _ => stmt_writes(stmt, &mut other_writes),
+                }
             }
             Node::Expr(expr) => {
                 expr_writes(expr, &mut names);
@@ -108,8 +130,40 @@ impl ProgramInfo {
                     names.insert(name.clone());
                 }
                 info.observe_call_shape(expr);
+                expr_writes(expr, &mut other_writes);
+                if let ExprKind::Closure { params, .. } = &expr.kind {
+                    other_writes.extend(params.iter().map(|param| param.0.clone()));
+                }
+                match &expr.kind {
+                    ExprKind::Closure { params, variadic_by_ref, .. }
+                        if *variadic_by_ref || params.iter().any(|param| param.3) =>
+                    {
+                        info.by_ref_callables = true;
+                    }
+                    ExprKind::FirstClassCallable(_) => info.by_ref_callables = true,
+                    ExprKind::StringLiteral(text) => {
+                        info.all_string_literals.insert(text.clone());
+                    }
+                    _ => {}
+                }
             }
         });
+        let all_literals = std::mem::take(&mut info.all_string_literals);
+        for literal in &all_literals {
+            let key = symbol_key(literal.trim_start_matches('\\'));
+            let user_by_ref = info.functions.get(&key).is_some_and(RefShape::binds_any)
+                || info.methods.get(&key).is_some_and(RefShape::binds_any)
+                || key.contains("::");
+            let builtin_by_ref = crate::types::builtin_call_sig(&key)
+                .is_some_and(|sig| sig.ref_params.iter().any(|by_ref| *by_ref));
+            if user_by_ref || builtin_by_ref {
+                info.by_ref_callables = true;
+            }
+        }
+        info.closure_only_vars = closure_assigned
+            .difference(&other_writes)
+            .cloned()
+            .collect();
         let literals = std::mem::take(&mut info.string_literals);
         for literal in literals {
             let key = symbol_key(&literal);
@@ -139,6 +193,7 @@ impl ProgramInfo {
                     || symbol_key(class_name.as_str()) == "closure" =>
             {
                 self.dynamic_calls = true;
+                self.by_ref_callables = true;
             }
             ExprKind::NewDynamic { .. } | ExprKind::NewDynamicObject { .. } => {}
             ExprKind::FunctionCall { name, args } => {
@@ -386,6 +441,10 @@ fn scan_expr(expr: &Expr, info: &ProgramInfo, scan: &mut BodyScan) {
         ExprKind::NewObject { class_name, args } => {
             pin_by_ref_args(args, info.constructor_shape(class_name.as_str()).as_ref(), scan);
         }
+        // A call through a variable that only holds closure literals binds by reference only
+        // if some closure declares a by-reference parameter.
+        ExprKind::ClosureCall { var, .. }
+            if !info.by_ref_callables && info.closure_only_vars.contains(var) => {}
         ExprKind::ClosureCall { args, .. }
         | ExprKind::ExprCall { args, .. }
         | ExprKind::NewDynamic { args, .. }
