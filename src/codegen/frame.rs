@@ -330,6 +330,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     // Like PHP's shutdown GC: collect cyclic garbage that lazy `unset()` safe points left
     // behind, running its destructors before the process exits.
     abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    // Interned literal hash keys outlive every table; release them once nothing uses them
+    // (after the cycle collection, which may free the last tables holding them).
+    abi::emit_call_label(ctx.emitter, "__rt_free_interned_keys");
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {

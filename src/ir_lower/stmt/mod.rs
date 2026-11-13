@@ -2228,6 +2228,18 @@ fn lower_array_assign(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+    // A boxed `mixed` key (`$m[$row["id"]] = ...`) is only read by the write, which copies the
+    // normalized key into the table: release an owned key box afterwards.
+    if op == Op::HashSet
+        && matches!(
+            ctx.builder.value_php_type(index_value.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+        && ctx.value_is_owning_temporary(index_value)
+        && ctx.builder.value_defining_op(index_value.value) != Some(Op::LoadLocal)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(span));
+    }
 }
 
 /// Widens an associative-array local to `mixed` values before storing a value of another type.

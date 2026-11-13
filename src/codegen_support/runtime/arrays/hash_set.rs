@@ -194,7 +194,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload inserted key_len
     emitter.instruction("cmn x2, #1");                                          // check whether the inserted key is an integer key
     emitter.instruction("b.eq __rt_hash_set_key_ready");                        // integer keys are stored inline and do not need persistence
-    emitter.instruction("bl __rt_str_persist");                                 // persist inserted string key into heap storage
+    emitter.instruction("bl __rt_str_persist_key");                             // persist inserted string key into heap storage (interned literal keys are shared)
     emitter.instruction("str x1, [sp, #8]");                                    // save persistent key pointer for slot write
     emitter.instruction("str x2, [sp, #16]");                                   // save persistent key length for slot write
     emitter.label("__rt_hash_set_key_ready");
@@ -448,7 +448,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_set_key_ready");                          // integer keys are stored inline and do not need persistence
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the inserted key pointer into the x86_64 string helper input register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // move the inserted key length into the paired x86_64 string helper register
-    emitter.instruction("call __rt_str_persist");                               // duplicate the inserted key so hash-table storage does not alias transient concat-buffer bytes
+    emitter.instruction("call __rt_str_persist_key");                           // duplicate the inserted key so hash-table storage does not alias transient concat-buffer bytes (interned literal keys are shared)
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the owned key pointer for the selected hash entry
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the owned key length for the selected hash entry
     emitter.label("__rt_hash_set_key_ready");

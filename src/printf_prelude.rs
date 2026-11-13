@@ -37,10 +37,16 @@ pub const PRINTF_PRELUDE_FUNCTIONS: &[&str] = &[
     "__elephc_printf_all",
     "__elephc_fprintf_all",
     "__elephc_explode_limit",
+    "__elephc_array_max",
+    "__elephc_array_min",
 ];
 
 /// Prelude entry points that do not need the shared formatter helpers.
-const STANDALONE_ENTRY_POINTS: &[&str] = &["__elephc_explode_limit"];
+const STANDALONE_ENTRY_POINTS: &[&str] = &[
+    "__elephc_explode_limit",
+    "__elephc_array_max",
+    "__elephc_array_min",
+];
 
 /// The shared helpers of the elephc-PHP formatted-output prelude.
 pub const PRINTF_PRELUDE_SRC: &str = r#"<?php
@@ -475,6 +481,40 @@ const PRINTF_ENTRY_POINTS: &[(&str, &str)] = &[
         $out[] = $parts[$i];
     }
     return $out;
+}"#,
+    ),
+    (
+        "__elephc_array_max",
+        r#"function __elephc_array_max(array $value): mixed {
+    if (count($value) === 0) {
+        throw new ValueError("max(): Argument #1 (\$value) must contain at least one element");
+    }
+    $first = true;
+    $best = null;
+    foreach ($value as $item) {
+        if ($first || $item > $best) {
+            $best = $item;
+            $first = false;
+        }
+    }
+    return $best;
+}"#,
+    ),
+    (
+        "__elephc_array_min",
+        r#"function __elephc_array_min(array $value): mixed {
+    if (count($value) === 0) {
+        throw new ValueError("min(): Argument #1 (\$value) must contain at least one element");
+    }
+    $first = true;
+    $best = null;
+    foreach ($value as $item) {
+        if ($first || $item < $best) {
+            $best = $item;
+            $first = false;
+        }
+    }
+    return $best;
 }"#,
     ),
 ];

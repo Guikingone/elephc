@@ -100,6 +100,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                 variadic,
                 by_ref_return,
                 body,
+                return_type,
                 ..
             } => {
                 summaries.functions.insert(
@@ -108,6 +109,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                         params.iter().map(|(name, _, _, _)| name.as_str()),
                         variadic.as_deref(),
                         *by_ref_return,
+                        return_type.as_ref(),
                         body,
                     ),
                 );
@@ -138,6 +140,7 @@ fn collect_method_summaries(
                 method.params.iter().map(|(name, _, _, _)| name.as_str()),
                 method.variadic.as_deref(),
                 method.by_ref_return,
+                method.return_type.as_ref(),
                 &method.body,
             )
         } else {
@@ -158,11 +161,27 @@ fn summarize_callable<'a>(
     params: impl Iterator<Item = &'a str>,
     variadic: Option<&str>,
     by_ref_return: bool,
+    return_type: Option<&crate::parser::ast::TypeExpr>,
     body: &[Stmt],
 ) -> ReturnArgAlias {
+    use crate::parser::ast::TypeExpr;
     if by_ref_return {
         return ReturnArgAlias::Unknown;
     }
+    // A non-heap scalar result can never share storage with an argument.
+    if matches!(
+        return_type,
+        Some(TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::False | TypeExpr::Void | TypeExpr::Never)
+    ) {
+        return ReturnArgAlias::None;
+    }
+    // A `mixed` result is a fresh box (or a retained one) built at the return: an element
+    // read (`return $values[0];`) holds its own reference, independent of the container.
+    let mixed_return = matches!(
+        return_type,
+        Some(TypeExpr::Named(name)) if name.as_str().eq_ignore_ascii_case("mixed")
+    );
+    ELEMENT_READS_INDEPENDENT.with(|flag| flag.set(mixed_return));
     let mut state = HashMap::new();
     for (index, name) in params.enumerate() {
         state.insert(name.to_string(), ReturnArgAlias::parameter(index));
@@ -173,7 +192,14 @@ fn summarize_callable<'a>(
     }
     let mut returned = ReturnArgAlias::None;
     analyze_body(body, &mut state, &mut returned);
+    ELEMENT_READS_INDEPENDENT.with(|flag| flag.set(false));
     returned
+}
+
+thread_local! {
+    /// Set while summarizing a callable whose declared result is `mixed`: there an element read
+    /// returned by value is boxed or retained at the return, so it does not alias the container.
+    static ELEMENT_READS_INDEPENDENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Applies statement provenance effects and accumulates every reachable return path.
@@ -277,8 +303,8 @@ fn analyze_stmt(
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
-            ..
         } => {
             apply_expr_effects(array, state);
             let mut iteration = state.clone();
@@ -286,8 +312,14 @@ fn analyze_stmt(
                 iteration.insert(key.clone(), ReturnArgAlias::None);
             }
             // A by-value element can still borrow nested refcounted storage from
-            // the iterated parameter, so only the container itself is known fresh.
-            iteration.insert(value_var.clone(), ReturnArgAlias::Unknown);
+            // the iterated parameter, so only the container itself is known fresh —
+            // except under a `mixed` result, which boxes or retains it at the return.
+            let value_alias = if !*value_by_ref && ELEMENT_READS_INDEPENDENT.with(std::cell::Cell::get) {
+                ReturnArgAlias::None
+            } else {
+                ReturnArgAlias::Unknown
+            };
+            iteration.insert(value_var.clone(), value_alias);
             analyze_body(body, &mut iteration, returned);
             *state = merge_states(vec![state.clone(), iteration]);
         }
@@ -518,6 +550,9 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
             alias
         }
         ExprKind::Assignment { value, .. } => expr_alias(value, state),
+        ExprKind::ArrayAccess { .. } if ELEMENT_READS_INDEPENDENT.with(std::cell::Cell::get) => {
+            ReturnArgAlias::None
+        }
         ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
         | ExprKind::Closure { .. }

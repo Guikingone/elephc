@@ -41,6 +41,43 @@ struct ArrayWrite<'a> {
     value: &'a Expr,
 }
 
+/// The `foreach` key and value locals in scope, used to recognize array writes keyed by data
+/// rather than by a position counter.
+#[derive(Default, Clone)]
+pub struct DataKeyLocals {
+    /// Locals bound as `foreach` keys.
+    pub keys: HashSet<String>,
+    /// Locals bound as `foreach` values.
+    pub values: HashSet<String>,
+}
+
+impl DataKeyLocals {
+    /// Returns true when writing at `index` (whose normalized key type is `key_type`) must
+    /// use hash storage: a foreach key may skip positions or carry string keys, and a key
+    /// read from data (a foreach value, an element, a call or a property) need not follow the
+    /// packed `0..count` order. `count()`/`sizeof()` (the append idiom) stay positional.
+    pub fn forces_hash(&self, index: &Expr, key_type: Option<&PhpType>) -> bool {
+        match &index.kind {
+            ExprKind::Variable(name) if self.keys.contains(name) => {
+                matches!(key_type, Some(PhpType::Int | PhpType::Mixed))
+            }
+            ExprKind::Variable(name) => self.values.contains(name),
+            ExprKind::FunctionCall { name, .. } => !matches!(
+                crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')).as_str(),
+                "count" | "sizeof"
+            ),
+            ExprKind::ArrayAccess { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::NullsafeMethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::NullsafePropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 /// Computes stable storage types for array locals already present at loop entry.
 ///
 /// `infer_value` receives the evolving fixed-point environment, so a promotion can cascade
@@ -52,6 +89,7 @@ pub fn loop_carried_storage_types(
     update: Option<&Stmt>,
     entry: &TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    data_keys: &DataKeyLocals,
 ) -> Vec<(String, PhpType)> {
     let mut assignments = Vec::new();
     collect_value_assignments(body, &mut assignments);
@@ -84,7 +122,7 @@ pub fn loop_carried_storage_types(
             &mut whole_mixed_sources,
             defer_empty_array_reads,
         );
-        apply_array_write_evidence(&writes, &mut fixed, infer_value);
+        apply_array_write_evidence(&writes, &mut fixed, infer_value, data_keys);
         // `unset($a[$k])` turns an indexed array into a hash (keys are no longer dense), so a
         // loop-carried indexed local needs hash storage before the loop.
         for name in &unset_targets {
@@ -220,6 +258,7 @@ fn apply_array_write_evidence(
     writes: &[ArrayWrite<'_>],
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    data_keys: &DataKeyLocals,
 ) {
     for write in writes {
         let incoming = infer_storage_value_type(write.value, env, infer_value)
@@ -251,7 +290,15 @@ fn apply_array_write_evidence(
             !matches!(index.kind, ExprKind::StringLiteral(_))
                 && matches!(raw_key_type.as_ref(), Some(PhpType::Str))
         });
-        let forces_hash = matches!(key_type.as_ref(), Some(PhpType::Str)) || dynamic_string_key;
+        // A key taken from data (a foreach key or value, an element, a call or a property)
+        // can skip or reorder positions, which only a hash keeps (mirrors the checker's
+        // statement rule so the loop-carried storage agrees with the body's writes).
+        let data_key = write.index.is_some_and(|index| {
+            matches!(key_type.as_ref(), Some(PhpType::Int | PhpType::Mixed))
+                && data_keys.forces_hash(index, key_type.as_ref())
+        });
+        let forces_hash =
+            matches!(key_type.as_ref(), Some(PhpType::Str)) || dynamic_string_key || data_key;
         let updated = match current {
             PhpType::Array(element) if forces_hash => {
                 let was_empty = matches!(element.as_ref(), PhpType::Never);

@@ -6105,8 +6105,38 @@ fn lower_builtin_call_args(
             };
             vec![mixed]
         }
+        // `implode()` and `array_product()` only read the values: an associative array
+        // argument goes through `array_values()` first so the list-only backend paths apply.
+        "implode" | "join" | "array_product"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg) =>
+        {
+            let mut operands = lower_args_with_signature(ctx, sig, args);
+            for (index, operand) in operands.iter_mut().enumerate() {
+                if let Some(arg) = args.get(index) {
+                    *operand = values_of_assoc_operand(ctx, *operand, arg.span);
+                }
+            }
+            operands
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Replaces an associative-array operand by `array_values()` of it (an owned list); any other
+/// operand is returned unchanged.
+fn values_of_assoc_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+    span: Span,
+) -> crate::ir::ValueId {
+    let PhpType::AssocArray { value: element, .. } = ctx.builder.value_php_type(value).codegen_repr()
+    else {
+        return value;
+    };
+    // The builtin call emission already releases an owning-temporary argument.
+    emit_builtin_call_value(ctx, "array_values", vec![value], PhpType::Array(element), span, None)
+        .value
 }
 
 /// Lowers `count()` arguments, dropping a statically-default mode argument.
@@ -6822,25 +6852,21 @@ fn convert_container_arg_to_param(
     }
     for (op, ty) in steps {
         let source = LoweredValue { value: current, ir_type: ctx.builder.value_type(current) };
-        let owned = ctx.value_is_owning_temporary(source);
-        let converted = if matches!(op, Op::ArrayToMixed | Op::HashToMixed) {
-            // In-place conversions take over their input (after a copy-on-write split), so a
-            // borrowed argument (e.g. a local) is retained first and never stolen.
-            let input = if owned {
-                source
-            } else {
-                crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, None)
-            };
-            ctx.emit_value(op, vec![input.value], None, ty.clone(), op.default_effects(), None)
+        // A local load still belongs to its slot even when the local is an owning temporary:
+        // consuming it would steal the slot's reference.
+        let owned = ctx.value_is_owning_temporary(source)
+            && ctx.builder.value_defining_op(current) != Some(Op::LoadLocal);
+        // Every conversion takes over its input: the in-place ones after a copy-on-write
+        // split, and `ArrayToHash` releases the source list once copied (or hands an
+        // already-promoted hash straight through). A borrowed argument (e.g. a local) is
+        // therefore retained first, and an owned one is not released a second time.
+        let input = if owned {
+            source
         } else {
-            // `ArrayToHash` copies: an owned input is released once converted.
-            let converted =
-                ctx.emit_value(op, vec![current], None, ty.clone(), op.default_effects(), None);
-            if owned {
-                crate::ir_lower::ownership::release_if_owned(ctx, source, None);
-            }
-            converted
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, None)
         };
+        let converted =
+            ctx.emit_value(op, vec![input.value], None, ty.clone(), op.default_effects(), None);
         current = converted.value;
         current_ty = ty;
     }
@@ -9597,9 +9623,18 @@ fn lower_hash_spread_into_hash_from_value(
     let spread_source = if source_is_hash {
         source
     } else {
+        // `ArrayToHash` consumes its input (the source list is released once copied), so a
+        // borrowed source is retained first and released through the promoted hash below.
+        let input = if ctx.value_is_owning_temporary(source)
+            && ctx.builder.value_defining_op(source.value) != Some(Op::LoadLocal)
+        {
+            source
+        } else {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
+        };
         let promoted = ctx.emit_value(
             Op::ArrayToHash,
-            vec![source.value],
+            vec![input.value],
             None,
             PhpType::AssocArray {
                 key: Box::new(PhpType::Int),

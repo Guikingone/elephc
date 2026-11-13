@@ -165,3 +165,113 @@ mod tests {
         assert!(asm.contains("mov QWORD PTR [rax - 8], r10\n"));
     }
 }
+
+/// Refcount marking an interned literal hash key (mirrors the codegen constant): such a key is
+/// shared by every table instead of copied, and never freed.
+const PERMANENT_KEY_REFCOUNT: u32 = 0x4000_0000;
+
+/// Emits `__rt_str_persist_key`: the hash-key flavour of `__rt_str_persist`. A key that is
+/// already an elephc heap string marked permanent (an interned literal key) is returned as is
+/// (it outlives every table); anything else is copied by `__rt_str_persist`. Same registers as
+/// `__rt_str_persist` (AArch64 x1/x2, x86_64 rax/rdx).
+pub fn emit_str_persist_key(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: str_persist_key ---");
+    emitter.label_global("__rt_str_persist_key");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+            emitter.instruction("cmp x1, x9");                                  // below the heap: not an interned key
+            emitter.instruction("b.lo __rt_str_persist");                       // copy it
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
+            emitter.instruction("ldr x10, [x10]");                              // current heap extent
+            emitter.instruction("add x10, x9, x10");                            // heap end
+            emitter.instruction("cmp x1, x10");                                 // past the heap: not an interned key
+            emitter.instruction("b.hs __rt_str_persist");                       // copy it
+            emitter.instruction("ldr w9, [x1, #-12]");                          // heap refcount of the key string
+            crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", PERMANENT_KEY_REFCOUNT as i64);
+            emitter.instruction("cmp w9, w10");                                 // marked permanent?
+            emitter.instruction("b.lo __rt_str_persist");                       // an ordinary string is copied
+            emitter.instruction("add w9, w9, #1");                              // the table takes a reference, released when it frees the key
+            emitter.instruction("str w9, [x1, #-12]");                          // store the shared key's refcount
+            emitter.instruction("ret");                                         // interned key: share it
+        }
+        Arch::X86_64 => {
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+            emitter.instruction("cmp rax, r10");                                // below the heap: not an interned key
+            emitter.instruction("jb __rt_str_persist");                         // copy it
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
+            emitter.instruction("mov r11, QWORD PTR [r11]");                    // current heap extent
+            emitter.instruction("add r11, r10");                                // heap end
+            emitter.instruction("cmp rax, r11");                                // past the heap: not an interned key
+            emitter.instruction("jae __rt_str_persist");                        // copy it
+            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // heap kind word
+            emitter.instruction("shr r10, 32");                                 // heap marker half
+            emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // an elephc heap block?
+            emitter.instruction("jne __rt_str_persist");                        // foreign bytes: copy them
+            emitter.instruction(&format!("cmp DWORD PTR [rax - 12], 0x{:x}", PERMANENT_KEY_REFCOUNT)); // marked permanent?
+            emitter.instruction("jb __rt_str_persist");                         // an ordinary string is copied
+            emitter.instruction("add DWORD PTR [rax - 12], 1");                 // the table takes a reference, released when it frees the key
+            emitter.instruction("ret");                                         // interned key: share it
+        }
+    }
+}
+
+/// Emits `__rt_free_interned_keys`: walks the `_hkey_head` chain of interned literal hash keys
+/// at process exit and frees every key no table still references (its refcount is back to the
+/// permanent mark), clearing the slot so heap-debug leak accounting stays exact.
+pub fn emit_free_interned_keys(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: free_interned_keys ---");
+    emitter.label_global("__rt_free_interned_keys");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // frame for the heap-free calls
+            emitter.instruction("mov x29, sp");                                 // establish the frame pointer
+            emitter.instruction("str x19, [sp, #16]");                          // preserve the chain cursor register
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_hkey_head");
+            emitter.instruction("ldr x19, [x9]");                               // first interned-key slot
+            emitter.instruction("str xzr, [x9]");                               // the chain is consumed
+            emitter.label("__rt_free_interned_keys_loop");
+            emitter.instruction("cbz x19, __rt_free_interned_keys_done");       // end of the chain
+            emitter.instruction("ldr x0, [x19]");                               // interned key pointer
+            emitter.instruction("str xzr, [x19]");                              // forget it
+            emitter.instruction("cbz x0, __rt_free_interned_keys_next");        // empty slot
+            emitter.instruction("ldr w9, [x0, #-12]");                          // its refcount
+            crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", PERMANENT_KEY_REFCOUNT as i64);
+            emitter.instruction("cmp w9, w10");                                 // no table still holds it?
+            emitter.instruction("b.ne __rt_free_interned_keys_next");           // a live table keeps it
+            emitter.instruction("str wzr, [x0, #-12]");                         // last reference
+            emitter.instruction("bl __rt_heap_free");                           // free the interned key
+            emitter.label("__rt_free_interned_keys_next");
+            emitter.instruction("ldr x19, [x19, #8]");                          // next slot
+            emitter.instruction("b __rt_free_interned_keys_loop");              // continue
+            emitter.label("__rt_free_interned_keys_done");
+            emitter.instruction("ldr x19, [sp, #16]");                          // restore the cursor register
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // tear down the frame
+            emitter.instruction("ret");                                         // done
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbx");                                    // preserve the chain cursor register (also aligns the stack)
+            emitter.instruction("mov rbx, QWORD PTR [rip + _hkey_head]");       // first interned-key slot
+            emitter.instruction("mov QWORD PTR [rip + _hkey_head], 0");         // the chain is consumed
+            emitter.label("__rt_free_interned_keys_loop");
+            emitter.instruction("test rbx, rbx");                               // end of the chain?
+            emitter.instruction("jz __rt_free_interned_keys_done");             // yes
+            emitter.instruction("mov rax, QWORD PTR [rbx]");                    // interned key pointer
+            emitter.instruction("mov QWORD PTR [rbx], 0");                      // forget it
+            emitter.instruction("test rax, rax");                               // empty slot?
+            emitter.instruction("jz __rt_free_interned_keys_next");             // skip it
+            emitter.instruction(&format!("cmp DWORD PTR [rax - 12], 0x{:x}", PERMANENT_KEY_REFCOUNT)); // no table still holds it?
+            emitter.instruction("jne __rt_free_interned_keys_next");            // a live table keeps it
+            emitter.instruction("mov DWORD PTR [rax - 12], 0");                 // last reference
+            emitter.instruction("call __rt_heap_free");                         // free the interned key
+            emitter.label("__rt_free_interned_keys_next");
+            emitter.instruction("mov rbx, QWORD PTR [rbx + 8]");                // next slot
+            emitter.instruction("jmp __rt_free_interned_keys_loop");            // continue
+            emitter.label("__rt_free_interned_keys_done");
+            emitter.instruction("pop rbx");                                     // restore the cursor register
+            emitter.instruction("ret");                                         // done
+        }
+    }
+}

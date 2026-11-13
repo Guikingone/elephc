@@ -130,7 +130,7 @@ pub use atoi::emit_atoi;
 /// Emit ASCII-to-integer conversion.
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
-pub use str_persist::emit_str_persist;
+pub use str_persist::{emit_free_interned_keys, emit_str_persist, emit_str_persist_key};
 pub use str_append::emit_str_append;
 /// Emit string persistence helper.
 pub use strtolower::emit_strtolower;

@@ -534,6 +534,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _gc_peak, 8, 3\n");
     out.push_str(".comm _borrow_ring, 32, 3\n");
     out.push_str(".comm _borrow_ring_idx, 8, 3\n");
+    out.push_str(".comm _hkey_head, 8, 3\n");
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");

@@ -353,3 +353,43 @@ echo count($m), " ", json_encode($m), "\n";
 "#);
     assert_eq!(out, "array(2) {\n  [7]=>\n  string(1) \"z\"\n  [3]=>\n  string(1) \"y\"\n}\n{\"70\":7,\"30\":3}\nArray\n(\n    [5] => 3\n    [3] => 2\n    [9] => 1\n)\n{\"3\":2,\"5\":3,\"9\":1}\narray(2) {\n  [16]=>\n  bool(true)\n  [4]=>\n  bool(true)\n}\nbool(true)\nbool(false)\n[0,1,4,9,16]\n[\"a\",\"b\"]\nArray\n(\n    [2] => p\n    [0] => q\n)\n{\"1\":\"one\",\"0\":\"zero\"} 2\n30\nArray\n(\n    [100] => a\n    [5] => b\n    [42] => c\n)\n3\n3 {\"100\":200,\"5\":10,\"42\":84}\n");
 }
+
+/// A write keyed by a `foreach` key of a list may skip indices (filtering), so the
+/// destination is a hash: the packed list filled the gaps with nulls. `implode()`/`join()`
+/// and `array_product()` accept associative arrays (through `array_values()`).
+#[test]
+fn test_foreach_key_filter_writes_keep_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$src = [3, 1, 4, 1, 5, 9];
+$r = []; foreach ($src as $k => $v) { if ($v % 2) { $r[$k] = $v; } }
+echo count($r), " ", json_encode($r), " ", implode(",", $r), " ", array_product($r), " ", array_sum($r), "\n";
+print_r($r); var_dump(isset($r[2]), $r[5]);
+foreach ($r as $k => $v) { echo "$k=$v "; } echo "\n";
+$all = []; foreach ($src as $k => $v) { $all[$k] = $v * 2; } echo json_encode($all), " ", implode("-", $all), "\n";
+echo implode(",", ["x" => "a", "y" => "b"]), " ", join("/", ["p" => 1.5, "q" => 2]), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5 {\"0\":3,\"1\":1,\"3\":1,\"4\":5,\"5\":9} 3,1,1,5,9 135 19\nArray\n(\n    [0] => 3\n    [1] => 1\n    [3] => 1\n    [4] => 5\n    [5] => 9\n)\nbool(false)\nint(9)\n0=3 1=1 3=1 4=5 5=9 \n[6,2,8,2,10,18] 6-2-8-2-10-18\na,b 1.5/2\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// A list passed twice to an `array` parameter widened to a hash is converted per call
+/// without stealing the caller's reference (it was freed after the first call); `max()` /
+/// `min()` of an array use PHP comparison (first of equals, `ValueError` when empty);
+/// rebuilding a mixed-key hash through `foreach` keeps its keys; an owned `mixed` key is
+/// released after the write.
+#[test]
+fn test_array_param_conversion_max_min_and_mixed_key_rebuilds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(array $v): int { $n = 0; foreach ($v as $k => $x) { echo "[$k=$x]"; $n++; } return count($v) * 100 + $n; }
+$a = [3, 1, 2]; echo f($a), "\n"; echo f($a), "\n"; echo f(["p" => 5]), "\n";
+echo max([3, 1, 2]), min([3, 1, 2]), " ";
+$b = [3, 1, 2]; echo max($b) + min($b), " ";
+$s = ["b", "a", "c"]; echo max($s), min($s), "\n";
+try { max([]); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$h = ["a" => 1, "b" => 2, 5 => 3]; $r2 = []; foreach ($h as $k => $v) { if ($v != 2) { $r2[$k] = $v * 10; } } echo json_encode($r2), "\n";
+$rows = [["id" => 100, "n" => "a"], ["id" => 5, "n" => "b"]]; $byId = []; foreach ($rows as $r) { $byId[$r["id"]] = $r["n"]; } echo json_encode($byId), " ", max($byId), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[0=3][1=1][2=2]303\n[0=3][1=1][2=2]303\n[p=5]101\n31 4 ca\nValueError: max(): Argument #1 ($value) must contain at least one element\n{\"a\":10,\"5\":30}\n{\"100\":\"a\",\"5\":\"b\"} b\n");
+}

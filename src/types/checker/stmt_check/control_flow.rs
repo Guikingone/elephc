@@ -48,6 +48,10 @@ fn stabilize_loop_storage(
         return;
     }
     let snapshot = env.clone();
+    let data_keys = crate::types::checker::DataKeyLocals {
+        keys: checker.foreach_key_locals.clone(),
+        values: checker.foreach_value_locals.clone(),
+    };
     let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
         std::collections::HashMap::new();
     let contracts = crate::types::checker::loop_carried_storage_types(
@@ -74,6 +78,7 @@ fn stabilize_loop_storage(
             }
             Some(inferred)
         },
+        &data_keys,
     );
     let recorded = checker.loop_storage_types.entry(key).or_default();
     for (name, storage_type) in contracts {

@@ -44,6 +44,19 @@ pub(super) fn printf_prelude_target(function_name: &str, args: &[Expr]) -> Optio
     {
         return Some(PrintfRoute::Rename("__elephc_explode_limit"));
     }
+    // `max($array)` / `min($array)`: the native helpers only compare scalar arguments, so the
+    // one-argument (array) form is the prelude's elephc-PHP scan with PHP's comparison rules
+    // (the first of equal values wins, an empty array is a `ValueError`).
+    if (lower == "max" || lower == "min")
+        && args.len() == 1
+        && !matches!(args[0].kind, ExprKind::NamedArg { .. })
+    {
+        return Some(PrintfRoute::Rename(if lower == "max" {
+            "__elephc_array_max"
+        } else {
+            "__elephc_array_min"
+        }));
+    }
     let target = match lower.as_str() {
         "sprintf" => "__elephc_sprintf",
         "printf" => "__elephc_printf",

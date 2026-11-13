@@ -105,9 +105,14 @@ pub(super) fn check_array_assign(
         // A key taken from data rather than a position (a foreach value, an array element, a
         // call or property result: `$byId[$row["id"]] = ...`) can skip or reorder indices,
         // which a packed list cannot hold (it would zero-fill or renumber): use a hash.
-        let data_sourced_int_key = !index_is_foreach_key
-            && matches!(normalized_idx_ty, PhpType::Int | PhpType::Mixed)
-            && index_is_data_sourced(checker, index);
+        // A foreach key over a list is an `int` that the loop body may skip (filtering), so
+        // it too can leave gaps: a packed destination would fill them with nulls.
+        let data_keys = crate::types::checker::DataKeyLocals {
+            keys: checker.foreach_key_locals.clone(),
+            values: checker.foreach_value_locals.clone(),
+        };
+        let data_sourced_int_key = matches!(normalized_idx_ty, PhpType::Int | PhpType::Mixed)
+            && data_keys.forces_hash(index, Some(&normalized_idx_ty));
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || data_sourced_int_key
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
@@ -198,28 +203,6 @@ pub(super) fn check_array_assign(
         }
     }
     Ok(())
-}
-
-/// Returns true when an array-write key comes from data (a `foreach` value variable, an array
-/// element, a function/method call or a property) rather than from a position counter. Such a
-/// key does not follow the packed list's `0..count` order. `count(...)` (the append idiom) and
-/// plain counter variables stay positional.
-fn index_is_data_sourced(checker: &Checker, index: &Expr) -> bool {
-    match &index.kind {
-        ExprKind::Variable(name) => checker.foreach_value_locals.contains(name),
-        ExprKind::FunctionCall { name, .. } => !matches!(
-            crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')).as_str(),
-            "count" | "sizeof"
-        ),
-        ExprKind::ArrayAccess { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::NullsafeMethodCall { .. }
-        | ExprKind::StaticMethodCall { .. }
-        | ExprKind::PropertyAccess { .. }
-        | ExprKind::NullsafePropertyAccess { .. }
-        | ExprKind::StaticPropertyAccess { .. } => true,
-        _ => false,
-    }
 }
 
 /// Returns whether a buffer element accepts an assignment value after runtime coercion.

@@ -676,6 +676,9 @@ fn emit_hash_append_key_scan_x86_64(ctx: &mut FunctionContext<'_>) {
 
 /// Materializes an EIR value as a normalized hash key for AArch64.
 pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    if emit_literal_hash_key(ctx, key, "x1", "x2")? {
+        return Ok(());
+    }
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
@@ -709,8 +712,101 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
     }
 }
 
+/// Refcount stamped on an interned literal hash key: it never drops to zero (no table frees
+/// it) and never reads as uniquely owned (no in-place string mutation applies to it).
+pub(crate) const PERMANENT_KEY_REFCOUNT: u32 = 0x4000_0000;
+
+/// Materializes a string-literal hash key normalized at compile time into the hash ABI
+/// registers (`lo_reg` = pointer or integer, `hi_reg` = length or -1). An integer-like literal
+/// (`"5"`) becomes its integer key; any other non-empty literal is passed as one interned heap
+/// copy per literal (created on first use and kept alive forever), which `__rt_hash_set`
+/// shares instead of copying for every insertion. Returns false when `key` is no such literal.
+fn emit_literal_hash_key(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+    lo_reg: &str,
+    hi_reg: &str,
+) -> Result<bool> {
+    let Some(ValueDef::Instruction { inst, .. }) = ctx.function.value(key).map(|v| v.def.clone()) else {
+        return Ok(false);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Ok(false);
+    };
+    let (Op::ConstStr, Some(Immediate::Data(data))) = (inst_ref.op, inst_ref.immediate.as_ref()) else {
+        return Ok(false);
+    };
+    let data = *data;
+    let Some(text) = ctx.module.data.strings.get(data.as_raw() as usize).cloned() else {
+        return Ok(false);
+    };
+    let bytes = crate::string_bytes::literal_bytes(&text);
+    if bytes.is_empty() {
+        return Ok(false);
+    }
+    if let Ok(as_text) = std::str::from_utf8(&bytes) {
+        if crate::types::is_php_integer_array_key(as_text) {
+            if let Ok(value) = as_text.parse::<i64>() {
+                abi::emit_load_int_immediate(ctx.emitter, lo_reg, value);
+                abi::emit_load_int_immediate(ctx.emitter, hi_reg, -1);
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+    }
+    let (label, len) = ctx.intern_string_data(data)?;
+    // Slot layout: [interned key pointer, next slot in the `_hkey_head` exit-cleanup chain].
+    let cache = ctx.data.add_comm(format!("_hkey{}", label), 16);
+    let have = ctx.next_label("hash_literal_key_ready");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.adrp("x9", &cache);
+            ctx.emitter.add_lo12("x9", "x9", &cache);
+            ctx.emitter.instruction(&format!("ldr {}, [x9]", lo_reg));          // the interned heap copy of this literal key, if already created
+            ctx.emitter.instruction(&format!("cbnz {}, {}", lo_reg, have));     // reuse it for every insertion and lookup
+            ctx.emitter.adrp("x1", &label);
+            ctx.emitter.add_lo12("x1", "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");             // first use: copy the literal into the heap once
+            abi::emit_load_int_immediate(ctx.emitter, "x10", PERMANENT_KEY_REFCOUNT as i64);
+            ctx.emitter.instruction("stur w10, [x1, #-12]");                    // mark the copy permanent: shared by every table, never freed
+            ctx.emitter.adrp("x9", &cache);
+            ctx.emitter.add_lo12("x9", "x9", &cache);
+            ctx.emitter.instruction("str x1, [x9]");                            // publish the interned key
+            abi::emit_symbol_address(ctx.emitter, "x10", "_hkey_head");
+            ctx.emitter.instruction("ldr x11, [x10]");                          // current head of the interned-key chain
+            ctx.emitter.instruction("str x11, [x9, #8]");                       // link this slot in front of it
+            ctx.emitter.instruction("str x9, [x10]");                           // so process exit can release every interned key
+            if lo_reg != "x1" {
+                ctx.emitter.instruction(&format!("mov {}, x1", lo_reg));        // interned key pointer into the key register
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [rip + {}]", lo_reg, cache)); // the interned heap copy of this literal key, if already created
+            ctx.emitter.instruction(&format!("test {}, {}", lo_reg, lo_reg));   // created yet?
+            ctx.emitter.instruction(&format!("jnz {}", have));                  // reuse it for every insertion and lookup
+            abi::emit_symbol_address(ctx.emitter, "rax", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");             // first use: copy the literal into the heap once
+            ctx.emitter.instruction(&format!("mov DWORD PTR [rax - 12], 0x{:x}", PERMANENT_KEY_REFCOUNT)); // mark the copy permanent: shared by every table, never freed
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rip + {}], rax", cache)); // publish the interned key
+            ctx.emitter.instruction("mov r10, QWORD PTR [rip + _hkey_head]");   // current head of the interned-key chain
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rip + {} + 8], r10", cache)); // link this slot in front of it
+            ctx.emitter.instruction(&format!("lea r10, [rip + {}]", cache));    // this slot's address
+            ctx.emitter.instruction("mov QWORD PTR [rip + _hkey_head], r10");   // so process exit can release every interned key
+            ctx.emitter.instruction(&format!("mov {}, rax", lo_reg));           // interned key pointer into the key register
+        }
+    }
+    ctx.emitter.label(&have);
+    abi::emit_load_int_immediate(ctx.emitter, hi_reg, len as i64);
+    Ok(true)
+}
+
 /// Materializes an EIR value as a normalized hash key for x86_64.
 pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+    if emit_literal_hash_key(ctx, key, "rsi", "rdx")? {
+        return Ok(());
+    }
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "rax", "rdx")?;
