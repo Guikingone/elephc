@@ -71,7 +71,16 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) next_block_id: Option<crate::ir::BlockId>,
     /// Branch conditions `((a ^ r) & (b ^ r)) < 0` of an add `r = a + b`, lowered as the add's
     /// overflow flag: condition value -> (a, b).
-    pub(super) fused_add_overflow: HashMap<ValueId, (ValueId, ValueId)>,
+    pub(super) fused_add_overflow: HashMap<ValueId, (ValueId, ValueId, ValueId)>,
+    /// Sums of `IAdd`s whose overflow is tested by a fused compare: they lower with a
+    /// flag-setting add so the compare can branch on the flags directly.
+    pub(super) overflow_sums: std::collections::HashSet<ValueId>,
+    /// The `IAdd` result whose signed-overflow flag is still live in the condition flags
+    /// (cleared before any other instruction is lowered).
+    pub(super) add_flags_for: Option<ValueId>,
+    /// `$this->scalar` reads lowered as plain guarded slot loads (see
+    /// `lower_inst::objects::this_scalar_prop_gets`); the allocator treats them as call-free.
+    pub(super) this_scalar_prop_gets: std::collections::HashSet<InstId>,
     /// Predicate left in the CPU flags by the fused `icmp`, consumed by the `cond_br`.
     pub(super) fused_compare_predicate: Option<CmpPredicate>,
     /// Raw branch condition left in the flags by a fused float compare (`a`/`ae`, `gt`/`ls`…).
@@ -143,6 +152,9 @@ impl<'a> FunctionContext<'a> {
             fused_compare_value: None,
             next_block_id: None,
             fused_add_overflow: HashMap::new(),
+            overflow_sums: std::collections::HashSet::new(),
+            add_flags_for: None,
+            this_scalar_prop_gets: layout.this_scalar_prop_gets,
             fused_compare_predicate: None,
             fused_branch_condition: None,
             const_ints: HashMap::new(),
@@ -358,6 +370,11 @@ impl<'a> FunctionContext<'a> {
     }
 
     /// Selects the EIR instruction whose CFG-local representation facts codegen must use.
+    /// Returns the instruction currently being lowered, if any.
+    pub(super) fn current_inst(&self) -> Option<InstId> {
+        self.current_inst
+    }
+
     pub(super) fn begin_instruction(&mut self, inst: InstId) {
         self.current_inst = Some(inst);
         self.current_inst_promoted_ref_cells.clear();

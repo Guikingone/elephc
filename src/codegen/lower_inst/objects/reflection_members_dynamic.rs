@@ -541,7 +541,7 @@ fn emit_member_dynamic_dispatch(
     let label = kind.dispatch_label();
     let target = emitter.target;
     let synthetic = Function::new(format!("{}_impl", label), IrType::Void, PhpType::Void);
-    let layout = frame::layout_for_function(&synthetic, target, false);
+    let layout = frame::layout_for_function(module, &synthetic, target, false);
     let mut ctx = FunctionContext::new(
         module, &synthetic, emitter, data, shared, layout, false, false, false, None,
     );

@@ -96,7 +96,11 @@ fn number_positions(func: &Function) -> LinearNumbering {
 /// use positions (instruction operands and terminator uses) and the terminator
 /// position of every block where the value is live-out, so values that stay
 /// live across edges and loop back-edges span the intervening positions.
-pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInterval> {
+pub fn build_intervals(
+    func: &Function,
+    liveness: &LivenessInfo,
+    extra_safe: &std::collections::HashSet<InstId>,
+) -> Vec<LiveInterval> {
     let numbering = number_positions(func);
 
     let mut starts: HashMap<ValueId, u32> = HashMap::new();
@@ -138,7 +142,7 @@ pub fn build_intervals(func: &Function, liveness: &LivenessInfo) -> Vec<LiveInte
                 extend(*operand, position, &mut ends);
                 *weights.entry(*operand).or_insert(0) += 1;
             }
-            if !inst_is_volatile_safe(func, inst, &ref_slots) {
+            if !inst_is_volatile_safe(func, inst, &ref_slots) && !extra_safe.contains(inst_id) {
                 clobbers.push(position);
             }
         }
@@ -190,7 +194,10 @@ fn clobbers_within(clobbers: &[u32], start: u32, end: u32) -> u32 {
 ///
 /// Uses the same numbering as `build_intervals`, so a position can be compared against
 /// interval bounds.
-pub fn clobber_instructions(func: &Function) -> Vec<(u32, InstId)> {
+pub fn clobber_instructions(
+    func: &Function,
+    extra_safe: &std::collections::HashSet<InstId>,
+) -> Vec<(u32, InstId)> {
     let numbering = number_positions(func);
     let ref_slots = ref_cell_slots(func);
     let mut out = Vec::new();
@@ -198,7 +205,7 @@ pub fn clobber_instructions(func: &Function) -> Vec<(u32, InstId)> {
         let block = func.block(block_id).expect("ordered block exists");
         for inst_id in &block.instructions {
             let inst = func.instruction(*inst_id).expect("valid instruction");
-            if !inst_is_volatile_safe(func, inst, &ref_slots) {
+            if !inst_is_volatile_safe(func, inst, &ref_slots) && !extra_safe.contains(inst_id) {
                 out.push((numbering.inst_pos[inst_id], *inst_id));
             }
         }
@@ -224,4 +231,117 @@ fn is_call_free(clobbers: &[u32], start: u32, end: u32) -> bool {
     // First clobber with position > end.
     let hi = clobbers.partition_point(|&pos| pos <= end);
     lo >= hi
+}
+
+/// Precise (hole-aware) liveness on the same linear axis as `build_intervals`.
+///
+/// Used by the allocator's move coalescing: two values may share a register when one is
+/// dead across the other's whole contiguous interval, which the contiguous intervals alone
+/// cannot show (a loop-carried value used after the loop spans the whole loop body).
+pub struct PreciseLiveness {
+    /// Per value, the inclusive position ranges where it is live, one per block at most.
+    ranges: HashMap<ValueId, Vec<(u32, u32)>>,
+    /// Per block parameter, the predecessor terminator positions that write it and the
+    /// argument value each one copies in.
+    edge_writes: HashMap<ValueId, Vec<(u32, ValueId)>>,
+}
+
+impl PreciseLiveness {
+    /// Returns true when `value` is live at some position in the closed range `[lo, hi]`.
+    pub fn live_within(&self, value: ValueId, lo: u32, hi: u32) -> bool {
+        self.ranges
+            .get(&value)
+            .map(|ranges| ranges.iter().any(|&(a, b)| b >= lo && a <= hi))
+            .unwrap_or(true)
+    }
+
+    /// Returns the edge copies that write block parameter `value`, as
+    /// `(predecessor terminator position, argument)` pairs.
+    pub fn edge_writes(&self, value: ValueId) -> &[(u32, ValueId)] {
+        self.edge_writes.get(&value).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// Builds hole-aware live ranges for every value, from per-block liveness.
+pub fn precise_liveness(func: &Function, liveness: &LivenessInfo) -> PreciseLiveness {
+    let numbering = number_positions(func);
+    let mut ranges: HashMap<ValueId, Vec<(u32, u32)>> = HashMap::new();
+    let mut edge_writes: HashMap<ValueId, Vec<(u32, ValueId)>> = HashMap::new();
+
+    for &block_id in &numbering.order {
+        let block = func.block(block_id).expect("ordered block exists");
+        let block_start = numbering.block_start[&block_id];
+        let block_end = numbering.block_end[&block_id];
+        // value -> (first live position in this block, last live position in this block)
+        let mut local: HashMap<ValueId, (u32, u32)> = HashMap::new();
+        let touch = |local: &mut HashMap<ValueId, (u32, u32)>, value: ValueId, pos: u32| {
+            let entry = local.entry(value).or_insert((pos, pos));
+            entry.0 = entry.0.min(pos);
+            entry.1 = entry.1.max(pos);
+        };
+        for value in liveness.live_in_of(block_id) {
+            touch(&mut local, *value, block_start);
+        }
+        for param in &block.params {
+            touch(&mut local, *param, block_start);
+        }
+        for inst_id in &block.instructions {
+            let position = numbering.inst_pos[inst_id];
+            let inst = func.instruction(*inst_id).expect("valid instruction");
+            for operand in &inst.operands {
+                touch(&mut local, *operand, position);
+            }
+            if let Some(result) = inst.result {
+                touch(&mut local, result, position);
+            }
+        }
+        if let Some(term) = &block.terminator {
+            for value in terminator_uses(term) {
+                touch(&mut local, value, block_end);
+            }
+            let mut record = |target: BlockId, args: &[ValueId]| {
+                if let Some(target_block) = func.block(target) {
+                    for (param, arg) in target_block.params.iter().zip(args) {
+                        edge_writes.entry(*param).or_default().push((block_end, *arg));
+                    }
+                }
+            };
+            match term {
+                crate::ir::Terminator::Br { target, args } => record(*target, args),
+                crate::ir::Terminator::CondBr {
+                    then_target,
+                    then_args,
+                    else_target,
+                    else_args,
+                    ..
+                } => {
+                    record(*then_target, then_args);
+                    record(*else_target, else_args);
+                }
+                crate::ir::Terminator::Switch {
+                    cases,
+                    default,
+                    default_args,
+                    ..
+                } => {
+                    for case in cases {
+                        record(case.target, &case.args);
+                    }
+                    record(*default, default_args);
+                }
+                crate::ir::Terminator::GeneratorSuspend {
+                    resume, resume_args, ..
+                } => record(*resume, resume_args),
+                _ => {}
+            }
+        }
+        for value in liveness.live_out_of(block_id) {
+            touch(&mut local, *value, block_end);
+        }
+        for (value, range) in local {
+            ranges.entry(value).or_default().push(range);
+        }
+    }
+
+    PreciseLiveness { ranges, edge_writes }
 }

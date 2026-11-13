@@ -2604,10 +2604,120 @@ fn emit_constructor_call(
 pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
-    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+    if ctx.current_inst().is_some_and(|id| ctx.this_scalar_prop_gets.contains(&id)) {
+        // `$this->declared_scalar`: the receiver is never null and the slot is a plain declared
+        // scalar, so the read is a guarded load whose only cold path never returns (the
+        // register allocator relies on this to keep caller-saved values live across it).
+        let slot = resolve_property_slot(ctx, object, &property, inst)?;
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        if slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
+        }
+        emit_property_load(ctx, &slot, base_reg)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
+        && !receiver_is_method_this(ctx.function, object)
+    {
         return lower_object_prop_get_with_null_guard(ctx, inst, object, &property);
     }
     lower_prop_get_nonnull(ctx, inst, object, &property)
+}
+
+/// Returns true when `object` is `$this` inside an instance method: a load of the `this` local,
+/// which is never reassigned and is never null there.
+pub(in crate::codegen) fn receiver_is_method_this(
+    function: &crate::ir::Function,
+    object: ValueId,
+) -> bool {
+    if !function.flags.is_method || function.flags.is_static || function.flags.is_closure {
+        return false;
+    }
+    let Some(value) = function.value(object) else {
+        return false;
+    };
+    let ValueDef::Instruction { inst, .. } = value.def else {
+        return false;
+    };
+    let Some(load) = function.instruction(inst) else {
+        return false;
+    };
+    let (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) = (load.op, load.immediate.as_ref()) else {
+        return false;
+    };
+    let named_this = function
+        .locals
+        .get(slot.as_raw() as usize)
+        .and_then(|local| local.name.as_deref())
+        == Some("this");
+    named_this
+        && !function.instructions.iter().any(|other| {
+            other.op != Op::LoadLocal
+                && matches!(
+                    other.immediate.as_ref(),
+                    Some(Immediate::LocalSlot(s)) if s == slot
+                )
+                || matches!(
+                    other.immediate.as_ref(),
+                    Some(Immediate::LocalSlotPair { first, second }) if first == slot || second == slot
+                )
+        })
+}
+
+/// Collects the `$this->prop` reads of `function` that lower to a plain declared-slot load of
+/// a scalar (`int`/`float`/`bool`) property: no null receiver, no magic `__get`, no dynamic,
+/// packed or reference slot, and no result conversion. Their lowering touches only scratch
+/// registers and its only cold path (uninitialized typed property) never returns.
+pub(in crate::codegen) fn this_scalar_prop_gets(
+    module: &crate::ir::Module,
+    function: &crate::ir::Function,
+) -> HashSet<crate::ir::InstId> {
+    let mut safe = HashSet::new();
+    if !function.flags.is_method || function.flags.is_static || function.flags.is_closure {
+        return safe;
+    }
+    for (index, inst) in function.instructions.iter().enumerate() {
+        if inst.op != Op::PropGet {
+            continue;
+        }
+        let Some(object) = inst.operands.first().copied() else {
+            continue;
+        };
+        let Some(Immediate::Data(name_id)) = inst.immediate.as_ref() else {
+            continue;
+        };
+        let Some(property) = module.data.strings.get(name_id.as_raw() as usize) else {
+            continue;
+        };
+        let property = property.as_str();
+        let Some(PhpType::Object(class_name)) = function.value(object).map(|v| v.php_type.codegen_repr()) else {
+            continue;
+        };
+        let normalized = class_name.trim_start_matches('\\');
+        if normalized.is_empty() || is_builtin_stdclass(normalized) {
+            continue;
+        }
+        let Some(info) = module.class_infos.get(normalized) else {
+            continue;
+        };
+        let Some((slot_index, (_, prop_ty))) = info.visible_property(property) else {
+            continue;
+        };
+        let scalar = matches!(prop_ty.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool);
+        if !scalar
+            || prop_ty.codegen_repr() != inst.result_php_type.codegen_repr()
+            || !info.property_slot_is_declared(slot_index, property)
+            || info.property_slot_is_reference(slot_index, property)
+            || info.reference_properties.contains(property)
+            || info.abstract_properties.contains(property)
+            || !receiver_is_method_this(function, object)
+        {
+            continue;
+        }
+        safe.insert(crate::ir::InstId::from_raw(index as u32));
+    }
+    safe
 }
 
 /// Guards statically typed object receivers before selecting declared, dynamic,

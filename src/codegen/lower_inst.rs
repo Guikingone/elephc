@@ -37,6 +37,7 @@ use super::{CodegenIrError, Result};
 
 mod arithmetic;
 pub(super) use arithmetic::mixed_numeric_int_fast_path_applies;
+pub(super) use objects::this_scalar_prop_gets;
 mod arrays;
 mod buffers;
 mod runtime_functions;
@@ -7912,8 +7913,17 @@ pub(super) fn lower_fused_checked_mixed(
 fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if let Some(result) = inst.result {
         if ctx.fused_compare_value == Some(result) {
-            if let Some((lhs, rhs)) = ctx.fused_add_overflow.get(&result).copied() {
+            if let Some((lhs, rhs, sum)) = ctx.fused_add_overflow.get(&result).copied() {
                 // `((a ^ r) & (b ^ r)) < 0` for `r = a + b` is the signed-overflow flag of the add.
+                if ctx.add_flags_for == Some(sum) {
+                    // The add itself just ran with a flag-setting instruction and nothing has
+                    // touched the flags since: branch on its overflow flag directly.
+                    ctx.fused_branch_condition = Some(match ctx.emitter.target.arch {
+                        Arch::AArch64 => "vs",
+                        Arch::X86_64 => "o",
+                    });
+                    return Ok(());
+                }
                 let (lhs_reg, rhs_reg) = match ctx.emitter.target.arch {
                     Arch::AArch64 => ("x9", "x10"),
                     Arch::X86_64 => ("r10", "r11"),

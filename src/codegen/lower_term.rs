@@ -205,9 +205,97 @@ fn lower_branch(
     if ctx.next_block_id == Some(target) {
         return Ok(()); // the target block is emitted next: fall through
     }
+    if let Some((compare, branch)) = rotatable_loop_header(ctx, target) {
+        // Back edge to a header that only compares and branches: test the loop condition here
+        // instead of jumping to the header to do it (one jump fewer per iteration).
+        ctx.fused_compare_value = branch_condition(&branch);
+        ctx.fused_compare_predicate = None;
+        ctx.fused_branch_condition = None;
+        lower_inst::lower_instruction(ctx, compare)?;
+        return lower_terminator(ctx, &branch);
+    }
     let label = ctx.block_label_for_id(target)?;
     abi::emit_jump(ctx.emitter, &label);
     Ok(())
+}
+
+/// Returns the condition value of a conditional branch.
+fn branch_condition(term: &Terminator) -> Option<ValueId> {
+    match term {
+        Terminator::CondBr { cond, .. } => Some(*cond),
+        _ => None,
+    }
+}
+
+/// Recognizes a back edge to an already-emitted loop header whose whole body is one fused
+/// integer compare feeding an argument-free conditional branch, and returns that compare and
+/// branch so the latch can duplicate them.
+fn rotatable_loop_header(
+    ctx: &FunctionContext<'_>,
+    target: BlockId,
+) -> Option<(crate::ir::InstId, Terminator)> {
+    let blocks = &ctx.function.blocks;
+    let target_index = blocks.iter().position(|block| block.id == target)?;
+    let current_index = match ctx.next_block_id {
+        Some(next) => blocks.iter().position(|block| block.id == next)?.checked_sub(1)?,
+        None => blocks.len().checked_sub(1)?,
+    };
+    if target_index >= current_index {
+        return None;
+    }
+    let header = &blocks[target_index];
+    let branch = header.terminator.as_ref()?;
+    let Terminator::CondBr {
+        cond,
+        then_args,
+        else_args,
+        ..
+    } = branch
+    else {
+        return None;
+    };
+    if !then_args.is_empty() || !else_args.is_empty() || ctx.fused_add_overflow.contains_key(cond) {
+        return None;
+    }
+    let mut live = header.instructions.iter().copied().filter(|id| {
+        !ctx.skipped_consts.contains(id)
+            && ctx
+                .function
+                .instruction(*id)
+                .is_some_and(|inst| inst.op != crate::ir::Op::Nop)
+    });
+    let compare_id = live.next()?;
+    if live.next().is_some() {
+        return None;
+    }
+    let compare = ctx.function.instruction(compare_id)?;
+    if compare.op != crate::ir::Op::ICmp || compare.result != Some(*cond) {
+        return None;
+    }
+    if !ctx.allocation.call_saves(compare_id).is_empty() {
+        return None;
+    }
+    // The condition must feed only the branch, so skipping its materialization is sound.
+    let uses = ctx
+        .function
+        .instructions
+        .iter()
+        .filter(|inst| inst.operands.contains(cond))
+        .count();
+    let terminator_uses: usize = blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .map(|term| {
+            crate::ir_passes::terminator_uses(term)
+                .into_iter()
+                .filter(|value| value == cond)
+                .count()
+        })
+        .sum();
+    if uses != 0 || terminator_uses != 1 {
+        return None;
+    }
+    Some((compare_id, branch.clone()))
 }
 
 /// Emits a target-native trap for a block that should never execute.

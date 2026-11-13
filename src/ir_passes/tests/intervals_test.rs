@@ -49,7 +49,7 @@ fn straight_line_add_intervals_overlap_and_order() {
     let v1 = ValueId::from_raw(1);
     let v2 = ValueId::from_raw(2);
     let liveness = compute_liveness(&function);
-    let intervals = build_intervals(&function, &liveness);
+    let intervals = build_intervals(&function, &liveness, &std::collections::HashSet::new());
 
     assert_eq!(intervals.len(), 3, "one interval per defined value");
 
@@ -112,7 +112,7 @@ fn loop_invariant_interval_spans_the_loop_body() {
     let invariant = ValueId::from_raw(0);
     let step = ValueId::from_raw(1);
     let liveness = compute_liveness(&function);
-    let intervals = build_intervals(&function, &liveness);
+    let intervals = build_intervals(&function, &liveness, &std::collections::HashSet::new());
 
     let iv_invariant = interval_for(&intervals, invariant);
     let iv_step = interval_for(&intervals, step);

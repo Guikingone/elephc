@@ -730,11 +730,10 @@ fn inliner_skips_object_return_callee() {
     assert!(c.instructions.iter().any(|i| i.op == Op::Call));
 }
 
-/// A small string helper (destructor-free refcounted boundary) IS inlined: the string
-/// param slot is directly returned, so it is transplanted as a cleanup-excluded slot and
-/// the result flows through the continuation parameter. Validates IR stays well-formed.
+/// A small string helper that returns its refcounted parameter stays a call: the call's
+/// return path retains the borrowed argument for the caller, which a spliced body would skip.
 #[test]
-fn inliner_inlines_destructor_free_string_helper() {
+fn inliner_keeps_string_param_passthrough_call() {
     let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
 
     // `id(string $s): string { return $s; }` — param in slot[0], returned directly.
@@ -789,12 +788,15 @@ fn inliner_inlines_destructor_free_string_helper() {
     }
     module.add_function(caller);
 
+    // Returning a refcounted parameter is not inline-safe: the real call's return path retains
+    // the borrowed argument for the caller, which the spliced body would skip, so the caller's
+    // release of the result would free the argument under its owner.
     let changed = inline_small_functions(&mut module);
-    assert!(changed, "destructor-free string helper must be inlined");
+    assert!(!changed, "a string parameter passthrough must keep its call");
     let c = module.functions.iter().find(|f| f.name == "c_idstr").unwrap();
     assert!(
-        !c.instructions.iter().any(|i| i.op == Op::Call),
-        "string helper call must be gone after inlining"
+        c.instructions.iter().any(|i| i.op == Op::Call),
+        "string passthrough call must remain"
     );
     assert!(validate_module(&module).is_ok());
 }

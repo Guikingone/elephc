@@ -4,6 +4,9 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- `$this->prop` reads of declared `int`/`float`/`bool` properties skip the null-receiver check (`$this` is never null in an instance method) and no longer force caller-saved registers to be spilled around them.
+- Register allocation coalesces moves: a loop-carried value shares one register with the block parameter it flows into (precise, hole-aware liveness proves the two are never live together), and an integer op computes into its dying left operand's register; a loop header that only compares and branches is re-tested at the back edge, saving a jump per iteration (loop −50 % instructions, fib −16 %, spectralnorm −14 %).
+- Code generation: three-operand `imul` with an immediate on x86_64, AArch64 bitmask immediates for `&`, `|`, `^`, and an add whose overflow is checked branches on the flags of the add itself instead of recomputing it.
 - Branches to the block emitted next fall through (conditional branches invert their integer condition), removing a jump from most loop iterations, and a commutative integer operation whose destination already holds its right operand folds the left one into it (loop −19 % instructions).
 - `explode()` accepts its `$limit` argument (positive, zero and negative limits, through an elephc-PHP prelude wrapper), and splits on one-byte delimiters with `memchr`.
 - Fixed leaks: list destructuring of a temporary array (`[$k, $v] = explode(...)`), and returning a local array widened to `array<mixed>` (the forced copy kept the original alive).

@@ -353,3 +353,45 @@ $h = []; for ($i = 0; $i < 40; $i++) { $h["k$i"] = $i; } unset($h["k3"]); echo c
     assert_eq!(out.stdout, "2\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n3939\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// Register coalescing of loop-carried values (shared registers across block parameters and
+/// two-address ops), rotated loop headers with `continue` and nested loops, AArch64 logical
+/// immediates, and the add overflow flag reused by a checked int return.
+#[test]
+fn test_coalesced_loop_registers_and_overflow_flags() {
+    let out = compile_and_run(r#"<?php
+function f(int $n): int {
+    $acc = $n; $odd = 0;
+    for ($i = 0; $i < 100; $i++) {
+        if ($i % 7 == 3) { continue; }
+        $t = ($acc * 3 + ($i & 7)) & 0x3FFFFFFF;
+        if ($t % 5 == 0) { $odd += $t & 0xFF; }
+        $acc = $t;
+    }
+    return $acc + $odd;
+}
+function g(int $n): int {
+    $s = 0; $j = 0;
+    while ($j < $n) {
+        $k = $j;
+        do { $s = ($s ^ ($k << 3)) | ($k & 0x0F0F); $k--; } while ($k > $j - 4);
+        $j += 2;
+    }
+    return $s - $j;
+}
+function h(int $a, int $b): int { return $a + $b; }
+echo f(1), " ", f(-5), "\n";
+echo g(30), " ", g(1), "\n";
+echo h(PHP_INT_MAX - 1, 1), " ", var_export(h(1, -3), true), "\n";
+try { echo h(PHP_INT_MAX, 1), "\n"; } catch (TypeError $e) { echo get_class($e), "\n"; }
+$x = 0; for ($i = 0; $i < 10; $i++) { $x = $x + $i; $y = $x - $i; } echo $x, " ", $y, "\n";
+$m = 0; for ($i = 1; $i <= 64; $i++) { $m |= (0x5555555555555555 & $i) ^ (0xFF00 | $i); } echo $m, "\n";
+"#);
+    assert_eq!(out, "608857413 448388278
+3857 -19
+9223372036854775807 -2
+TypeError
+45 36
+65322
+");
+}

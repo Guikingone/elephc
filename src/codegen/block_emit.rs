@@ -201,7 +201,7 @@ fn emit_user_function(
         emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
-    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
+    let layout = frame::layout_for_function(module, function, emitter.target, regalloc_linear);
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
         module,
@@ -232,7 +232,7 @@ pub(super) fn emit_synthetic_function_with_label(
     shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
-    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
+    let layout = frame::layout_for_function(module, function, emitter.target, regalloc_linear);
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
         module,
@@ -297,7 +297,7 @@ fn emit_class_method(
         emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
-    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
+    let layout = frame::layout_for_function(module, function, emitter.target, regalloc_linear);
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
         module,
@@ -578,7 +578,7 @@ fn emit_generator_body(
     shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
-    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
+    let layout = frame::layout_for_function(module, function, emitter.target, regalloc_linear);
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
         module,
@@ -796,7 +796,7 @@ fn emit_main_function(
         emitter.entry_symbol()
     };
     emit_fn_marker(emitter, &function.name, entry_symbol, false);
-    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
+    let layout = frame::layout_for_function(module, function, emitter.target, regalloc_linear);
     let mut ctx = FunctionContext::new(
         module, function, emitter, data, shared, layout, true, gc_stats, heap_debug, None,
     );
@@ -1384,16 +1384,24 @@ fn emit_block(
         .label(&ctx.block_label(&block.name, block.id.as_raw()));
     ctx.fused_compare_value = fusible_compare(ctx.function, block, use_counts);
     if let Some(cond) = ctx.fused_compare_value {
-        if let Some((lhs, rhs, skipped)) = add_overflow_pattern(ctx.function, cond, use_counts) {
-            ctx.fused_add_overflow.insert(cond, (lhs, rhs));
+        if let Some((lhs, rhs, sum, skipped)) = add_overflow_pattern(ctx.function, cond, use_counts) {
+            ctx.fused_add_overflow.insert(cond, (lhs, rhs, sum));
+            ctx.overflow_sums.insert(sum);
             ctx.skipped_consts.extend(skipped);
         }
     }
     ctx.fused_compare_predicate = None;
     ctx.fused_branch_condition = None;
+    ctx.add_flags_for = None;
     for inst_id in &block.instructions {
         if ctx.skipped_consts.contains(inst_id) {
             continue;
+        }
+        let keeps_add_flags = ctx.fused_compare_value.is_some()
+            && ctx.function.instruction(*inst_id).and_then(|inst| inst.result) == ctx.fused_compare_value;
+        if !keeps_add_flags {
+            // Only the fused overflow compare may consume flags an earlier add left behind.
+            ctx.add_flags_for = None;
         }
         emit_instruction_source_marker(ctx, *inst_id)?;
         let saves = ctx.allocation.call_saves(*inst_id).to_vec();
@@ -1477,7 +1485,7 @@ fn add_overflow_pattern(
     function: &Function,
     cond: ValueId,
     use_counts: &std::collections::HashMap<ValueId, usize>,
-) -> Option<(ValueId, ValueId, Vec<InstId>)> {
+) -> Option<(ValueId, ValueId, ValueId, Vec<InstId>)> {
     let def = |value: ValueId| -> Option<(InstId, &crate::ir::Instruction)> {
         let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
             return None;
@@ -1518,5 +1526,5 @@ fn add_overflow_pattern(
     if !((pa == a && qa == b) || (pa == b && qa == a)) {
         return None;
     }
-    Some((a, b, vec![p_id, q_id, and_id]))
+    Some((a, b, sum, vec![p_id, q_id, and_id]))
 }

@@ -34,14 +34,51 @@ pub(super) fn lower_int_binop(
     let lhs_op = int_operand(ctx, lhs, inst)?;
     let rhs_op = int_operand(ctx, rhs, inst)?;
     let dst_reg = inst.result.and_then(|result| ctx.allocation.register_of(result));
+    // An add whose overflow a fused compare tests leaves its flags for that compare (x86_64
+    // `add` always sets OF; AArch64 needs the flag-setting `adds`).
+    let flags_for = (inst.op == crate::ir::Op::IAdd)
+        .then_some(inst.result)
+        .flatten()
+        .filter(|result| ctx.overflow_sums.contains(result));
+    let aarch64_mnemonic = if flags_for.is_some() && aarch64_mnemonic == "add" {
+        "adds"
+    } else {
+        aarch64_mnemonic
+    };
+    let result = lower_int_binop_inner(ctx, inst, lhs, rhs, lhs_op, rhs_op, dst_reg, aarch64_mnemonic, x86_64_mnemonic);
+    if flags_for.is_some() && result.is_ok() {
+        ctx.add_flags_for = flags_for;
+    }
+    result
+}
+
+/// Emits a two-operand integer op once its operands are classified (see `lower_int_binop`).
+#[allow(clippy::too_many_arguments)]
+fn lower_int_binop_inner(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    lhs: ValueId,
+    rhs: ValueId,
+    lhs_op: IntOperand,
+    rhs_op: IntOperand,
+    dst_reg: Option<&'static str>,
+    aarch64_mnemonic: &str,
+    x86_64_mnemonic: &str,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let lhs_reg = aarch64_int_reg(ctx, lhs_op, "x0");
             let rhs_text = match rhs_op {
                 IntOperand::Imm(value)
-                    if matches!(aarch64_mnemonic, "add" | "sub") && (0..=4095).contains(&value) =>
+                    if matches!(aarch64_mnemonic, "add" | "adds" | "sub") && (0..=4095).contains(&value) =>
                 {
                     format!("#{}", value)
+                }
+                IntOperand::Imm(value)
+                    if matches!(aarch64_mnemonic, "and" | "orr" | "eor")
+                        && is_aarch64_logical_immediate(value as u64) =>
+                {
+                    format!("#0x{:x}", value as u64)
                 }
                 other => aarch64_int_reg(ctx, other, "x10").to_string(),
             };
@@ -84,17 +121,22 @@ pub(super) fn lower_int_binop(
                 }
                 _ => rhs_text,
             };
-            match lhs_op {
-                IntOperand::Reg(reg) if reg == acc => {}
-                IntOperand::Imm(value) => abi::emit_load_int_immediate(ctx.emitter, acc, value),
-                other => {
-                    ctx.emitter.instruction(&format!("mov {}, {}", acc, x86_int_operand_text(other))); // load the left integer operand into the accumulator
-                }
-            }
-            if x86_64_mnemonic == "imul" && rhs_is_imm32 {
-                ctx.emitter.instruction(&format!("imul {}, {}, {}", acc, acc, rhs_text)); // multiply the accumulator by the immediate
+            if x86_64_mnemonic == "imul" && rhs_is_imm32 && !matches!(lhs_op, IntOperand::Imm(_)) {
+                // The three-operand form reads the left operand in place (register or frame slot).
+                ctx.emitter.instruction(&format!("imul {}, {}, {}", acc, x86_int_operand_text(lhs_op), rhs_text)); // multiply the left operand by the immediate straight into the accumulator
             } else {
-                ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, acc, rhs_text)); // apply the integer arithmetic with the right operand
+                match lhs_op {
+                    IntOperand::Reg(reg) if reg == acc => {}
+                    IntOperand::Imm(value) => abi::emit_load_int_immediate(ctx.emitter, acc, value),
+                    other => {
+                        ctx.emitter.instruction(&format!("mov {}, {}", acc, x86_int_operand_text(other))); // load the left integer operand into the accumulator
+                    }
+                }
+                if x86_64_mnemonic == "imul" && rhs_is_imm32 {
+                    ctx.emitter.instruction(&format!("imul {}, {}, {}", acc, acc, rhs_text)); // multiply the accumulator by the immediate
+                } else {
+                    ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, acc, rhs_text)); // apply the integer arithmetic with the right operand
+                }
             }
             match dst_reg {
                 Some(reg) if reg == acc => return Ok(()),
@@ -111,6 +153,40 @@ pub(super) fn lower_int_binop(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns true when `value` is encodable as an AArch64 64-bit logical (bitmask) immediate:
+/// a rotated run of ones replicated across an element size of 2..=64 bits. All-zeros and
+/// all-ones are not encodable.
+pub(super) fn is_aarch64_logical_immediate(value: u64) -> bool {
+    if value == 0 || value == u64::MAX {
+        return false;
+    }
+    let mut size = 64u32;
+    // Shrink to the smallest element size whose replication reproduces the value.
+    while size > 2 {
+        let half = size / 2;
+        let mask = (1u64 << half) - 1;
+        if (value & mask) != ((value >> half) & mask) {
+            break;
+        }
+        size = half;
+    }
+    let mask = if size == 64 { u64::MAX } else { (1u64 << size) - 1 };
+    let element = value & mask;
+    // The element must be a rotation of a contiguous run of ones: rotate so the run starts
+    // at bit 0, then it must look like 0b0..01..1.
+    let rotate_right = |v: u64, r: u32| -> u64 {
+        if r == 0 {
+            v
+        } else {
+            ((v >> r) | (v << (size - r))) & mask
+        }
+    };
+    (0..size).any(|r| {
+        let rotated = rotate_right(element, r);
+        rotated != 0 && rotated != mask && (rotated & (rotated + 1)) == 0
+    })
 }
 
 /// Where an integer operand can be read from without first copying it.
@@ -907,5 +983,21 @@ fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
         MixedNumericOp::Add => "__rt_mixed_numeric_add",
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
+    }
+}
+
+#[cfg(test)]
+mod logical_immediate_tests {
+    use super::is_aarch64_logical_immediate;
+
+    /// Checks the AArch64 bitmask-immediate encoder against known encodable and rejected values.
+    #[test]
+    fn test_aarch64_logical_immediate_classification() {
+        for value in [7u64, 0x3fff_ffff, 0xff, 0xff00, 0x5555_5555_5555_5555, 1 << 63, 0xffff_fffe, 0x0f0f_0f0f_0f0f_0f0f, u64::MAX - 1] {
+            assert!(is_aarch64_logical_immediate(value), "{value:#x} should be encodable");
+        }
+        for value in [0u64, u64::MAX, 5, 0x1234, 0xff00_ff01, 13] {
+            assert!(!is_aarch64_logical_immediate(value), "{value:#x} should be rejected");
+        }
     }
 }

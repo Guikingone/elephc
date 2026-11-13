@@ -26,7 +26,9 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::{Arch, Target};
 use crate::ir::{Function, IrType, Op, Ownership, Terminator, ValueId};
 use crate::ir_passes::allocation::{Allocation, CallSave};
-use crate::ir_passes::intervals::{build_intervals, clobber_instructions, LiveInterval};
+use crate::ir_passes::intervals::{
+    build_intervals, clobber_instructions, precise_liveness, LiveInterval, PreciseLiveness,
+};
 use crate::ir_passes::liveness::compute_liveness;
 
 /// Computes a register allocation for `func` on `target`.
@@ -36,12 +38,23 @@ use crate::ir_passes::liveness::compute_liveness;
 /// interval when a pool is exhausted. Generators and functions containing
 /// exception handlers conservatively fall back to all-spilled.
 pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
+    allocate_registers_with_safe(func, target, &HashSet::new())
+}
+
+/// Like `allocate_registers`, with extra instructions the backend vouches are volatile-safe
+/// (their lowering, known only with module context, touches no allocatable caller-saved
+/// register on any path that returns).
+pub fn allocate_registers_with_safe(
+    func: &Function,
+    target: Target,
+    extra_safe: &HashSet<crate::ir::InstId>,
+) -> Allocation {
     if func.flags.is_generator || has_exception_handlers(func) {
         return Allocation::all_spilled();
     }
 
     let liveness = compute_liveness(func);
-    let intervals = build_intervals(func, &liveness);
+    let intervals = build_intervals(func, &liveness, extra_safe);
     let ineligible = ineligible_values(func);
 
     let eligible: Vec<LiveInterval> = intervals
@@ -49,8 +62,10 @@ pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
         .filter(|iv| is_eligible(func, iv, &ineligible))
         .collect();
 
-    let mut allocation = scan(&eligible, target);
-    allocation.set_call_saves(plan_call_saves(func, &eligible, &allocation, target));
+    let hints = coalesce_partners(func);
+    let precise = precise_liveness(func, &liveness);
+    let mut allocation = scan(&eligible, target, &hints, &precise);
+    allocation.set_call_saves(plan_call_saves(func, &eligible, &allocation, target, extra_safe));
     allocation
 }
 
@@ -60,6 +75,7 @@ fn plan_call_saves(
     intervals: &[LiveInterval],
     allocation: &Allocation,
     target: Target,
+    extra_safe: &HashSet<crate::ir::InstId>,
 ) -> HashMap<crate::ir::InstId, Vec<CallSave>> {
     let mut saves: HashMap<crate::ir::InstId, Vec<CallSave>> = HashMap::new();
     let caller_saved: HashSet<&'static str> = caller_int_pool(target)
@@ -67,7 +83,7 @@ fn plan_call_saves(
         .chain(caller_float_pool(target))
         .copied()
         .collect();
-    let clobbers = clobber_instructions(func);
+    let clobbers = clobber_instructions(func, extra_safe);
     if clobbers.is_empty() {
         return saves;
     }
@@ -208,8 +224,9 @@ struct ActiveInterval {
     end: u32,
     /// Register the interval occupies.
     reg: &'static str,
-    /// Value the interval describes.
-    value: ValueId,
+    /// Values sharing the register over this (merged) interval: one value, or coalesced
+    /// edge partners that are never live at the same time.
+    members: Vec<ValueId>,
     /// Use count, used to choose the cheapest interval to spill.
     weight: u32,
     /// Pool the register came from, so it returns to the right free list.
@@ -275,7 +292,12 @@ fn candidate_pools(iv: &LiveInterval) -> &'static [PoolKind] {
 /// set. Each interval is assigned from its preferred pool; on exhaustion it
 /// spills using a use-weighted heuristic that keeps frequently-used values in
 /// registers.
-fn scan(eligible: &[LiveInterval], target: Target) -> Allocation {
+fn scan(
+    eligible: &[LiveInterval],
+    target: Target,
+    hints: &HashMap<ValueId, Vec<ValueId>>,
+    precise: &PreciseLiveness,
+) -> Allocation {
     let mut free = FreePools::new(target);
     let mut active: Vec<ActiveInterval> = Vec::new();
     let mut assignments: HashMap<ValueId, &'static str> = HashMap::new();
@@ -285,8 +307,24 @@ fn scan(eligible: &[LiveInterval], target: Target) -> Allocation {
         expire_old_intervals(&mut active, iv.start, &mut free);
 
         let pools = candidate_pools(iv);
-        if let Some(pool) = pools.iter().copied().find(|&p| !free.list_mut(p).is_empty()) {
-            let reg = free.list_mut(pool).pop().expect("pool checked non-empty");
+        if let Some(index) = shareable_partner(iv, pools, hints, &active, precise) {
+            let entry = &mut active[index];
+            entry.end = entry.end.max(iv.end);
+            entry.weight = entry.weight.max(iv.weight);
+            entry.members.push(iv.value);
+            assignments.insert(iv.value, entry.reg);
+            continue;
+        }
+        let hinted = take_hinted_register(iv.value, pools, hints, &assignments, &mut free);
+        let chosen = match hinted {
+            Some(choice) => Some(choice),
+            None => pools
+                .iter()
+                .copied()
+                .find(|&p| !free.list_mut(p).is_empty())
+                .map(|pool| (pool, free.list_mut(pool).pop().expect("pool checked non-empty"))),
+        };
+        if let Some((pool, reg)) = chosen {
             if pool.is_callee_saved() {
                 used.push(reg);
             }
@@ -294,7 +332,7 @@ fn scan(eligible: &[LiveInterval], target: Target) -> Allocation {
             active.push(ActiveInterval {
                 end: iv.end,
                 reg,
-                value: iv.value,
+                members: vec![iv.value],
                 weight: iv.weight,
                 pool,
             });
@@ -304,6 +342,153 @@ fn scan(eligible: &[LiveInterval], target: Target) -> Allocation {
     }
 
     Allocation::from_assignments(assignments, used)
+}
+
+/// Maps each block parameter to the values passed for it on incoming edges, and each such
+/// argument back to the parameter. Giving both ends the same register turns the edge copy
+/// into a no-op (classic move coalescing on SSA block arguments).
+fn coalesce_partners(func: &Function) -> HashMap<ValueId, Vec<ValueId>> {
+    let mut partners: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
+    let mut link = |param: ValueId, arg: ValueId| {
+        if param == arg {
+            return;
+        }
+        partners.entry(param).or_default().push(arg);
+        partners.entry(arg).or_default().push(param);
+    };
+    // Two-address integer ops compute into a copy of their left operand on x86_64; giving the
+    // result the operand's register (when the operand dies there) drops that copy.
+    for inst in &func.instructions {
+        if matches!(
+            inst.op,
+            Op::IAdd | Op::ISub | Op::IMul | Op::IBitAnd | Op::IBitOr | Op::IBitXor
+        ) {
+            if let (Some(result), Some(lhs)) = (inst.result, inst.operands.first()) {
+                link(result, *lhs);
+            }
+        }
+    }
+    for block in &func.blocks {
+        let Some(term) = &block.terminator else {
+            continue;
+        };
+        let mut edge = |target: crate::ir::BlockId, args: &[ValueId]| {
+            if let Some(target_block) = func.block(target) {
+                for (param, arg) in target_block.params.iter().zip(args) {
+                    link(*param, *arg);
+                }
+            }
+        };
+        match term {
+            Terminator::Br { target, args } => edge(*target, args),
+            Terminator::CondBr {
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+                ..
+            } => {
+                edge(*then_target, then_args);
+                edge(*else_target, else_args);
+            }
+            Terminator::Switch {
+                cases,
+                default,
+                default_args,
+                ..
+            } => {
+                for case in cases {
+                    edge(case.target, &case.args);
+                }
+                edge(*default, default_args);
+            }
+            _ => {}
+        }
+    }
+    partners
+}
+
+/// Finds an active register whose holders include a coalescing partner of `iv` and are all
+/// dead across `iv`'s whole interval, so `iv` can share that register.
+///
+/// Sharing is sound when, at every position where `iv` may be live (its contiguous interval,
+/// from just after its definition), no other holder is live, and no edge copy into a holder
+/// (a block-parameter write) lands inside the interval with a different value. The defining
+/// instruction may still read a holder: operands are read before the result is written.
+fn shareable_partner(
+    iv: &LiveInterval,
+    pools: &[PoolKind],
+    hints: &HashMap<ValueId, Vec<ValueId>>,
+    active: &[ActiveInterval],
+    precise: &PreciseLiveness,
+) -> Option<usize> {
+    let partners = partner_closure(iv.value, hints);
+    if partners.is_empty() {
+        return None;
+    }
+    let lo = iv.start + 1;
+    let hi = iv.end.max(lo);
+    active.iter().position(|entry| {
+        pools.contains(&entry.pool)
+            && entry.members.iter().any(|member| partners.contains(member))
+            && entry.members.iter().all(|member| {
+                !precise.live_within(*member, lo, hi)
+                    && precise
+                        .edge_writes(*member)
+                        .iter()
+                        .all(|&(pos, arg)| arg == iv.value || pos < iv.start || pos > hi)
+            })
+    })
+}
+
+/// Collects the values reachable from `value` through coalescing links (a few hops), nearest
+/// first, so a chain such as `t = a & 7; s = t + b; p = s & m` -> block parameter can steer
+/// every link toward the parameter's register.
+fn partner_closure(value: ValueId, hints: &HashMap<ValueId, Vec<ValueId>>) -> Vec<ValueId> {
+    const MAX_HOPS: usize = 4;
+    let mut seen: Vec<ValueId> = vec![value];
+    let mut frontier: Vec<ValueId> = vec![value];
+    for _ in 0..MAX_HOPS {
+        let mut next = Vec::new();
+        for current in &frontier {
+            for partner in hints.get(current).map(Vec::as_slice).unwrap_or(&[]) {
+                if !seen.contains(partner) {
+                    seen.push(*partner);
+                    next.push(*partner);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    seen.remove(0);
+    seen
+}
+
+/// Takes the register already assigned to one of `value`'s coalescing partners when it is
+/// free in one of the interval's allowed pools, so the edge copy between them vanishes.
+fn take_hinted_register(
+    value: ValueId,
+    pools: &[PoolKind],
+    hints: &HashMap<ValueId, Vec<ValueId>>,
+    assignments: &HashMap<ValueId, &'static str>,
+    free: &mut FreePools,
+) -> Option<(PoolKind, &'static str)> {
+    for partner in &partner_closure(value, hints) {
+        let Some(&reg) = assignments.get(partner) else {
+            continue;
+        };
+        for &pool in pools {
+            let list = free.list_mut(pool);
+            if let Some(index) = list.iter().position(|r| *r == reg) {
+                list.remove(index);
+                return Some((pool, reg));
+            }
+        }
+    }
+    None
 }
 
 /// Frees registers held by intervals that end at or before `position`, so the
@@ -355,7 +540,9 @@ fn spill_at_interval(
 
     let reg = a.reg;
     let pool = a.pool;
-    assignments.remove(&a.value);
+    for member in &a.members {
+        assignments.remove(member);
+    }
     active.remove(index);
     if pool.is_callee_saved() {
         // The register was already clobbered when first assigned; ensure it is
@@ -366,7 +553,7 @@ fn spill_at_interval(
     active.push(ActiveInterval {
         end: current.end,
         reg,
-        value: current.value,
+        members: vec![current.value],
         weight: current.weight,
         pool,
     });

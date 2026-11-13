@@ -524,7 +524,7 @@ fn emit_reflection_class_dynamic_dispatch(
         IrType::Void,
         PhpType::Void,
     );
-    let layout = frame::layout_for_function(&synthetic, target, false);
+    let layout = frame::layout_for_function(module, &synthetic, target, false);
     let mut ctx = FunctionContext::new(
         module, &synthetic, emitter, data, shared, layout, false, false, false, None,
     );

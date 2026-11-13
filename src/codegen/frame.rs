@@ -21,7 +21,7 @@ use crate::codegen::{
 };
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
-use crate::ir_passes::{allocate_registers, Allocation};
+use crate::ir_passes::{allocate_registers_with_safe, Allocation};
 use crate::names::ir_global_symbol;
 use crate::types::PhpType;
 
@@ -51,6 +51,7 @@ pub(super) struct FrameLayout {
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     pub(super) local_analysis: LocalSlotAnalysis,
+    pub(super) this_scalar_prop_gets: std::collections::HashSet<crate::ir::InstId>,
 }
 
 /// Computes the register allocation and fixed stack slots for a function.
@@ -61,12 +62,14 @@ pub(super) struct FrameLayout {
 /// `regalloc_linear` is false the allocation is all-spilled, reproducing the
 /// original stack-only behavior.
 pub(super) fn layout_for_function(
+    module: &crate::ir::Module,
     function: &Function,
     target: Target,
     regalloc_linear: bool,
 ) -> FrameLayout {
+    let this_scalar_prop_gets = super::lower_inst::this_scalar_prop_gets(module, function);
     let allocation = if regalloc_linear {
-        allocate_registers(function, target)
+        allocate_registers_with_safe(function, target, &this_scalar_prop_gets)
     } else {
         Allocation::all_spilled()
     };
@@ -137,6 +140,7 @@ pub(super) fn layout_for_function(
         allocation,
         callee_saved_offsets,
         local_analysis,
+        this_scalar_prop_gets,
     }
 }
 
