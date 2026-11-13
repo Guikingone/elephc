@@ -21,7 +21,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, InstId, Module, Op, Terminator, ValueId};
+use crate::ir::{BasicBlock, Function, InstId, Module, Op, Terminator, ValueDef, ValueId};
 use crate::names::{
     enum_case_symbol, function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -1160,9 +1160,11 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let blocks = ctx.function.blocks.clone();
     let use_counts = value_use_counts(ctx.function);
     collect_rematerialized_consts(ctx);
-    for block in blocks {
-        emit_block(ctx, &block, &use_counts)?;
+    for (index, block) in blocks.iter().enumerate() {
+        ctx.next_block_id = blocks.get(index + 1).map(|next| next.id);
+        emit_block(ctx, block, &use_counts)?;
     }
+    ctx.next_block_id = None;
     Ok(())
 }
 
@@ -1381,6 +1383,12 @@ fn emit_block(
     ctx.emitter
         .label(&ctx.block_label(&block.name, block.id.as_raw()));
     ctx.fused_compare_value = fusible_compare(ctx.function, block, use_counts);
+    if let Some(cond) = ctx.fused_compare_value {
+        if let Some((lhs, rhs, skipped)) = add_overflow_pattern(ctx.function, cond, use_counts) {
+            ctx.fused_add_overflow.insert(cond, (lhs, rhs));
+            ctx.skipped_consts.extend(skipped);
+        }
+    }
     ctx.fused_compare_predicate = None;
     ctx.fused_branch_condition = None;
     for inst_id in &block.instructions {
@@ -1460,4 +1468,55 @@ fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bo
 /// `emit_fn_marker()`.
 fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
     emitter.comment(&format!("@endfn name={}", name));
+}
+
+/// Recognizes the overflow test `((a ^ r) & (b ^ r)) < 0` of `r = a + b` feeding a branch, with
+/// the xor/and intermediates used only there. Returns `a`, `b` and the intermediates the fused
+/// lowering makes dead.
+fn add_overflow_pattern(
+    function: &Function,
+    cond: ValueId,
+    use_counts: &std::collections::HashMap<ValueId, usize>,
+) -> Option<(ValueId, ValueId, Vec<InstId>)> {
+    let def = |value: ValueId| -> Option<(InstId, &crate::ir::Instruction)> {
+        let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
+            return None;
+        };
+        Some((inst, function.instruction(inst)?))
+    };
+    let single = |value: ValueId| use_counts.get(&value).copied() == Some(1);
+    let (_, cmp) = def(cond)?;
+    if cmp.op != Op::ICmp
+        || cmp.immediate != Some(crate::ir::Immediate::CmpPredicate(crate::ir::CmpPredicate::Slt))
+        || cmp.operands.len() != 2
+    {
+        return None;
+    }
+    let (_, zero) = def(cmp.operands[1])?;
+    if zero.op != Op::ConstI64 || zero.immediate != Some(crate::ir::Immediate::I64(0)) {
+        return None;
+    }
+    let masked = cmp.operands[0];
+    let (and_id, and) = def(masked)?;
+    if and.op != Op::IBitAnd || and.operands.len() != 2 || !single(masked) {
+        return None;
+    }
+    let (p_id, p) = def(and.operands[0])?;
+    let (q_id, q) = def(and.operands[1])?;
+    if p.op != Op::IBitXor || q.op != Op::IBitXor || !single(and.operands[0]) || !single(and.operands[1]) {
+        return None;
+    }
+    // Both xors share the sum operand; their other operands are the two addends.
+    let sum = p.operands.iter().copied().find(|value| q.operands.contains(value))?;
+    let (_, add) = def(sum)?;
+    if add.op != Op::IAdd || add.operands.len() != 2 {
+        return None;
+    }
+    let other = |inst: &crate::ir::Instruction| inst.operands.iter().copied().find(|value| *value != sum);
+    let (pa, qa) = (other(p)?, other(q)?);
+    let (a, b) = (add.operands[0], add.operands[1]);
+    if !((pa == a && qa == b) || (pa == b && qa == a)) {
+        return None;
+    }
+    Some((a, b, vec![p_id, q_id, and_id]))
 }

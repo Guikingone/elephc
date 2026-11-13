@@ -168,11 +168,28 @@ fn array_to_mixed_result_replaces_source(
     let Some(source_slot) = source_slot else {
         return false;
     };
-    ctx.function.instructions.iter().any(|inst| {
+    if ctx.function.instructions.iter().any(|inst| {
         inst.op == Op::StoreLocal
             && inst.operands.first() == Some(&result)
             && inst.immediate == Some(Immediate::LocalSlot(source_slot))
-    })
+    }) {
+        return true;
+    }
+    // `return $local` hands the frame's own (non-parameter) array to the caller: the slot is
+    // not released afterwards, so converting it in place is the move the return performs.
+    // Only when the conversion is the last instruction before that `return` in the same
+    // block: a `finally` body inlined in between still reads the local as typed storage.
+    !crate::codegen::frame::local_slot_is_parameter(ctx.function, source_slot)
+        && ctx.function.blocks.iter().any(|block| {
+            matches!(&block.terminator, Some(crate::ir::Terminator::Return { value: Some(value) }) if *value == result)
+                && block
+                    .instructions
+                    .iter()
+                    .rev()
+                    .filter_map(|id| ctx.function.instruction(*id))
+                    .find(|inst| inst.op != Op::Nop)
+                    .is_some_and(|inst| inst.result == Some(result))
+        })
 }
 
 /// Lowers indexed-array promotion to associative hash storage.

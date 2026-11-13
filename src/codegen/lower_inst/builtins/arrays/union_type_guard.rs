@@ -205,7 +205,7 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_throw_static_type_error(
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                     // park the owned message across the allocation call
             ctx.emitter.instruction("mov rax, 32");                             // request Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");                   // allocate the TypeError object payload
-            ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap-kind word: object magic + kind 6
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x6)));             // x86_64 heap-kind word: object magic + kind 6
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0); // load TypeError's runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at the object header

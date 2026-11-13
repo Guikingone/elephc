@@ -36,6 +36,14 @@ pub(super) fn printf_prelude_target(function_name: &str, args: &[Expr]) -> Optio
             _ => None,
         };
     }
+    // `explode($separator, $string, $limit)`: the native splitter takes no limit, so the
+    // limited form is the prelude's elephc-PHP wrapper around it.
+    if lower == "explode"
+        && args.len() == 3
+        && !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+    {
+        return Some(PrintfRoute::Rename("__elephc_explode_limit"));
+    }
     let target = match lower.as_str() {
         "sprintf" => "__elephc_sprintf",
         "printf" => "__elephc_printf",

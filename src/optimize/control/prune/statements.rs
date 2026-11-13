@@ -322,7 +322,10 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::ExprStmt(expr) => {
             let expr = prune_expr(expr);
-            if expr_has_side_effects(&expr) {
+            // A discarded value still has to be computed when computing it can throw.
+            if expr_has_side_effects(&expr)
+                || crate::optimize::effects::expr_effect(&expr).may_throw
+            {
                 vec![Stmt {
                     kind: StmtKind::ExprStmt(expr),
                     span,

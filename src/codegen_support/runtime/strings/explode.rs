@@ -46,6 +46,33 @@ pub fn emit_explode(emitter: &mut Emitter) {
     emitter.instruction("mov x13, #0");                                         // current scan position = 0
     emitter.instruction("str x13, [sp, #40]");                                  // save current scan position
     emitter.instruction("str x13, [sp, #48]");                                  // segment start = 0
+    // -- one-byte delimiter: find each occurrence with libc memchr instead of byte compares --
+    emitter.instruction("ldr x2, [sp, #8]");                                    // delimiter length
+    emitter.instruction("cmp x2, #1");
+    emitter.instruction("b.ne __rt_explode_loop");                              // longer delimiters use the generic scan
+    emitter.label("__rt_explode_fast");
+    emitter.instruction("ldp x3, x4, [sp, #16]");                               // subject ptr and length
+    emitter.instruction("ldr x13, [sp, #48]");                                  // current segment start
+    emitter.instruction("subs x2, x4, x13");                                    // bytes left to search
+    emitter.instruction("b.eq __rt_explode_last");                              // nothing left: push the (empty) tail
+    emitter.instruction("add x0, x3, x13");                                     // search from the segment start
+    emitter.instruction("ldr x1, [sp]");                                        // delimiter pointer
+    emitter.instruction("ldrb w1, [x1]");                                       // the delimiter byte
+    emitter.bl_c("memchr");
+    emitter.instruction("cbz x0, __rt_explode_last");                           // no more delimiters: push the tail
+    emitter.instruction("ldp x3, x4, [sp, #16]");                               // subject ptr and length
+    emitter.instruction("sub x13, x0, x3");                                     // delimiter offset
+    emitter.instruction("str x13, [sp, #40]");                                  // remember it across the push
+    emitter.instruction("ldr x16, [sp, #48]");                                  // segment start
+    emitter.instruction("add x1, x3, x16");                                     // segment ptr
+    emitter.instruction("sub x2, x13, x16");                                    // segment length
+    emitter.instruction("ldr x0, [sp, #32]");                                   // result array
+    emitter.instruction("bl __rt_array_push_str");                              // append the segment
+    emitter.instruction("str x0, [sp, #32]");                                   // the array may have moved
+    emitter.instruction("ldr x13, [sp, #40]");                                  // delimiter offset
+    emitter.instruction("add x13, x13, #1");                                    // next segment starts after it
+    emitter.instruction("str x13, [sp, #48]");
+    emitter.instruction("b __rt_explode_fast");
 
     // -- main loop: scan for delimiter occurrences --
     emitter.label("__rt_explode_loop");
@@ -141,6 +168,35 @@ fn emit_explode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the indexed-array pointer because every push helper may reallocate it
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the scan position to the start of the subject string
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the current segment start position to the start of the subject string
+    // -- one-byte delimiter: find each occurrence with libc memchr instead of byte compares --
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 1");                         // one-byte delimiter?
+    emitter.instruction("jne __rt_explode_loop_linux_x86_64");                  // longer delimiters use the generic scan
+    emitter.label("__rt_explode_fast_linux_x86_64");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // current segment start
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // subject length
+    emitter.instruction("sub rdx, rcx");                                        // bytes left to search
+    emitter.instruction("jz __rt_explode_last_linux_x86_64");                   // nothing left: push the (empty) tail
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // subject pointer
+    emitter.instruction("add rdi, rcx");                                        // search from the segment start
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // delimiter pointer
+    emitter.instruction("movzx esi, BYTE PTR [rax]");                           // the delimiter byte
+    emitter.instruction("call memchr");
+    emitter.instruction("test rax, rax");                                       // no more delimiters: push the tail
+    emitter.instruction("jz __rt_explode_last_linux_x86_64");
+    emitter.instruction("sub rax, QWORD PTR [rbp - 24]");                       // delimiter offset
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // remember it across the push
+    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // segment start
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");
+    emitter.instruction("add rsi, r8");                                         // segment pointer
+    emitter.instruction("mov rdx, rax");
+    emitter.instruction("sub rdx, r8");                                         // segment length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // result array
+    emitter.instruction("call __rt_array_push_str");                            // append the segment
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // the array may have moved
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // delimiter offset
+    emitter.instruction("add rcx, 1");                                          // next segment starts after it
+    emitter.instruction("mov QWORD PTR [rbp - 56], rcx");
+    emitter.instruction("jmp __rt_explode_fast_linux_x86_64");
 
     emitter.label("__rt_explode_loop_linux_x86_64");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the current scan position before checking whether the subject string has been exhausted

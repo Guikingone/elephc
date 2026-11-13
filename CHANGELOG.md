@@ -4,6 +4,13 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Branches to the block emitted next fall through (conditional branches invert their integer condition), removing a jump from most loop iterations, and a commutative integer operation whose destination already holds its right operand folds the left one into it (loop −19 % instructions).
+- `explode()` accepts its `$limit` argument (positive, zero and negative limits, through an elephc-PHP prelude wrapper), and splits on one-byte delimiters with `memchr`.
+- Fixed leaks: list destructuring of a temporary array (`[$k, $v] = explode(...)`), and returning a local array widened to `array<mixed>` (the forced copy kept the original alive).
+- Float-to-string conversion prints short exact decimals directly (the value must round-trip from `m / 10^k`), falling back to `snprintf("%.14G")` otherwise; the formatter no longer writes past the concat scratch buffer (implode of floats −85 % instructions).
+- Fixed: `return $a + $b` from an `: int` function returned a wrapped integer on overflow instead of raising PHP's `TypeError` ("Return value must be of type int, float returned"); discarded calls that can throw are no longer removed by the optimizer.
+- Fixed leaks: TypeError objects built by the return/argument type guards, `get_class_methods()`, reflection and several runtime helpers carried a byte-swapped x86_64 heap marker, so they were never freed.
+- Faster calls: functions that never rewind the concat buffer no longer save its offset, and an add whose overflow only feeds a branch uses the CPU overflow flag (fib −15 % instructions); hash tables round their capacity to a power of two and probe with a mask instead of a division.
 - A closure stored in a local that is only ever called directly (`$add = fn($x) => $x + $i; $add($i)`) is no longer allocated when it captures only scalars (closures −57 % instructions).
 - Fixed leaks: `json_encode()` of a temporary (`json_encode(json_decode($s))`) released nothing it was given, and reading a typed array through a `mixed` key (`$this->a[$this->i]`) leaked the array reference.
 - Fixed (use-after-free): a `throw` caught inside a `foreach` body no longer ends the enclosing loops (their iterator or temporary source was released while the loop kept running).

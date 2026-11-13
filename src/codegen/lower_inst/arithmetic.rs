@@ -52,6 +52,25 @@ pub(super) fn lower_int_binop(
             }
         }
         Arch::X86_64 => {
+            // A commutative op whose destination already holds the right operand folds the left
+            // operand into it directly (`add r8, rdi` rather than going through rax).
+            let commutative = matches!(x86_64_mnemonic, "add" | "and" | "or" | "xor" | "imul");
+            if let (Some(reg), true, true) = (dst_reg, commutative, lhs != rhs) {
+                let lhs_fits = match lhs_op {
+                    IntOperand::Reg(_) => true,
+                    IntOperand::Imm(value) => i32::try_from(value).is_ok(),
+                    _ => false,
+                };
+                if rhs_op == IntOperand::Reg(reg) && lhs_fits {
+                    let lhs_text = x86_int_operand_text(lhs_op);
+                    if x86_64_mnemonic == "imul" && matches!(lhs_op, IntOperand::Imm(_)) {
+                        ctx.emitter.instruction(&format!("imul {}, {}, {}", reg, reg, lhs_text)); // multiply the destination by the left immediate
+                    } else {
+                        ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, reg, lhs_text)); // fold the left operand into the destination holding the right one
+                    }
+                    return Ok(());
+                }
+            }
             let acc = match dst_reg {
                 Some(reg) if rhs_op != IntOperand::Reg(reg) || lhs == rhs => reg,
                 _ => "rax",

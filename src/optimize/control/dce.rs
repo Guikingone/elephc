@@ -642,7 +642,11 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         }
         StmtKind::ExprStmt(expr) => {
             let expr = prune_expr(expr);
-            if expr_has_side_effects(&expr) {
+            // A discarded value still has to be computed when computing it can throw
+            // (`f($x);` with a typed return or parameter raises a TypeError).
+            if expr_has_side_effects(&expr)
+                || crate::optimize::effects::expr_effect(&expr).may_throw
+            {
                 vec![Stmt {
                     kind: StmtKind::ExprStmt(expr),
                     span,

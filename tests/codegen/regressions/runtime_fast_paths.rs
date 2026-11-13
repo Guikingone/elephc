@@ -323,3 +323,33 @@ $b = []; for ($i = 0; $i < 100; $i++) { $b[] = $i + 0.5; $b[] = $i % 3 == 0; $b[
     assert_eq!(out.stdout, "cc\n2\n0=1 0=1 1f2f3f\n2450\nsame\n300\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// Float-to-string (`echo`, `.`, `implode`) prints short exact decimals without `snprintf`
+/// (`m / 10^k` checked by a round trip); NAN, INF, -0, exponent ranges and inexact values keep
+/// the `%.14G` path.
+#[test]
+fn test_float_to_string_fast_path_matches_precision_14() {
+    let out = compile_and_run(r#"<?php
+$v = [0.5, -0.5, 1200.0, -0.0, 0.0, 0.1 + 0.2, 1/3, 2/3, 0.0001, 0.00012345, 0.00001, 123456789012.5, 99999999999999.0, 1e14, 1e15, 3.14159, -2.75, 1e-5, 7.0E-10, 1.5e300, NAN, INF, -INF, 0.1, 100.25, 12345678.12345678, 0.30000000000000004, 1.23456789012345, 5e-324, 4.35, 1.005, 8.0, 1e13 + 0.5];
+foreach ($v as $x) { echo $x, " | "; } echo "\n";
+echo implode(",", [1.5, 2.25, -3.125, 1e20]), "\n";
+$s = ""; for ($i = 0; $i < 20; $i++) { $s .= ($i / 7) . " "; } echo $s, "\n";
+"#);
+    assert_eq!(out, "0.5 | -0.5 | 1200 | -0 | 0 | 0.3 | 0.33333333333333 | 0.66666666666667 | 0.0001 | 0.00012345 | 1.0E-5 | 123456789012.5 | 99999999999999 | 1.0E+14 | 1.0E+15 | 3.14159 | -2.75 | 1.0E-5 | 7.0E-10 | 1.5E+300 | NAN | INF | -INF | 0.1 | 100.25 | 12345678.123457 | 0.3 | 1.2345678901235 | 4.9406564584125E-324 | 4.35 | 1.005 | 8 | 10000000000000 | \n1.5,2.25,-3.125,1.0E+20\n0 0.14285714285714 0.28571428571429 0.42857142857143 0.57142857142857 0.71428571428571 0.85714285714286 1 1.1428571428571 1.2857142857143 1.4285714285714 1.5714285714286 1.7142857142857 1.8571428571429 2 2.1428571428571 2.2857142857143 2.4285714285714 2.5714285714286 2.7142857142857 \n");
+}
+
+/// A `finally` body still reads a returned local array with its own element type (the
+/// return's `array<mixed>` widening happens after it), and power-of-two hash probing keeps
+/// lookups and deletions exact.
+#[test]
+fn test_return_widening_after_finally_and_masked_hash_probes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(): array { $a = [1, 2]; try { return $a; } finally { echo $a[0] + 1, "\n"; } }
+function g(): array { $a = [1, 2]; if (count($a) > 5) { return [1.5]; } return $a; }
+var_dump(f(), g());
+$h = []; for ($i = 0; $i < 40; $i++) { $h["k$i"] = $i; } unset($h["k3"]); echo count($h), $h["k39"], "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n3939\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

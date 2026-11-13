@@ -118,6 +118,39 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
+            let no_stubs = then_args.is_empty() && else_args.is_empty();
+            if no_stubs && ctx.next_block_id == Some(*then_target) && *then_target != *else_target {
+                // The then-block is emitted next: branch to the else-block on the inverted
+                // condition and fall through.
+                match fused {
+                    Some(Ok(predicate)) => {
+                        let inverted = match predicate {
+                            CmpPredicate::Eq => Some(CmpPredicate::Ne),
+                            CmpPredicate::Ne => Some(CmpPredicate::Eq),
+                            CmpPredicate::Slt => Some(CmpPredicate::Sge),
+                            CmpPredicate::Sge => Some(CmpPredicate::Slt),
+                            CmpPredicate::Sle => Some(CmpPredicate::Sgt),
+                            CmpPredicate::Sgt => Some(CmpPredicate::Sle),
+                            _ => None,
+                        };
+                        if let Some(inverted) = inverted {
+                            emit_branch_on_flags(ctx, inverted, &else_edge)?;
+                            return Ok(());
+                        }
+                        emit_branch_on_flags(ctx, predicate, &then_edge)?;
+                    }
+                    Some(Err(raw)) => match ctx.emitter.target.arch {
+                        Arch::AArch64 => ctx.emitter.instruction(&format!("b.{} {}", raw, then_edge)), // branch on the fused flags
+                        Arch::X86_64 => ctx.emitter.instruction(&format!("j{} {}", raw, then_edge)), // branch on the fused flags
+                    },
+                    None => {
+                        abi::emit_branch_if_int_result_zero(ctx.emitter, &else_edge);
+                        return Ok(());
+                    }
+                }
+                abi::emit_jump(ctx.emitter, &else_edge);
+                return Ok(());
+            }
             match fused {
                 Some(Ok(predicate)) => emit_branch_on_flags(ctx, predicate, &then_edge)?,
                 Some(Err(raw)) => match ctx.emitter.target.arch {
@@ -126,7 +159,9 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 },
                 None => abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge),
             }
-            abi::emit_jump(ctx.emitter, &else_edge);
+            if !(no_stubs && ctx.next_block_id == Some(*else_target)) {
+                abi::emit_jump(ctx.emitter, &else_edge);
+            }
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
             emit_edge_args(ctx, &else_edge, *else_target, else_args, "cond_br else")?;
             Ok(())
@@ -167,6 +202,9 @@ fn lower_branch(
     context: &str,
 ) -> Result<()> {
     materialize_block_args(ctx, target, args, context)?;
+    if ctx.next_block_id == Some(target) {
+        return Ok(()); // the target block is emitted next: fall through
+    }
     let label = ctx.block_label_for_id(target)?;
     abi::emit_jump(ctx.emitter, &label);
     Ok(())

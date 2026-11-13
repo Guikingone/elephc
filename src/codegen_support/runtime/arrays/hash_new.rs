@@ -33,6 +33,16 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // set up new frame pointer
+    // Round the capacity up to a power of two so probes can mask instead of divide.
+    emitter.instruction("cmp x0, #1");                                          // 0 and 1 are kept as they are
+    emitter.instruction("b.ls 1f");
+    emitter.instruction("sub x9, x0, #1");
+    emitter.instruction("clz x9, x9");                                          // leading zeros of capacity - 1
+    emitter.instruction("mov x10, #64");
+    emitter.instruction("sub x9, x10, x9");                                     // bits needed
+    emitter.instruction("mov x10, #1");
+    emitter.instruction("lsl x0, x10, x9");                                     // next power of two
+    emitter.label("1");
     emitter.instruction("str x0, [sp, #0]");                                    // save capacity to stack
     emitter.instruction("str x1, [sp, #8]");                                    // save value_type to stack
 
@@ -89,6 +99,15 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-construction spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved capacity and value-type metadata
     emitter.instruction("sub rsp, 16");                                         // reserve local slots for capacity and value_type across the malloc call
+    // Round the capacity up to a power of two so probes can mask instead of divide.
+    emitter.instruction("cmp rdi, 1");                                          // 0 and 1 are kept as they are
+    emitter.instruction("jbe 1f");
+    emitter.instruction("lea rcx, [rdi - 1]");
+    emitter.instruction("bsr rcx, rcx");                                        // highest set bit of capacity - 1
+    emitter.instruction("add ecx, 1");                                          // bits needed
+    emitter.instruction("mov edi, 1");
+    emitter.instruction("shl rdi, cl");                                         // next power of two
+    emitter.label("1");
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested hash capacity across the allocator call
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested runtime value_type across the allocator call
     emitter.instruction("mov rax, rdi");                                        // copy the capacity into a scratch register before scaling it by the entry size

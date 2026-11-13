@@ -188,6 +188,14 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
     if !direct_return_cleanup_is_inline_safe(callee) {
         return false;
     }
+    // A body that throws through an op (return-type TypeError) ends that path in
+    // `unreachable`; spliced into a caller, the throw's implicit edge to a surrounding catch
+    // is invisible to the reachability-based passes, which would prune the caller's code.
+    if callee.instructions.iter().any(|inst| {
+        matches!(inst.op, Op::ThrowCheckedReturnTypeError | Op::ThrowCheckedTypeError)
+    }) {
+        return false;
+    }
     // A refcounted internal local is released by the callee's epilogue on every call; once
     // spliced into a loop, overwriting it on the next iteration never releases the old value.
     let params = callee_param_slots(callee);

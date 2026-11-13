@@ -52,8 +52,16 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     // -- compute slot index: hash % capacity --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table pointer
     emitter.instruction("ldr x6, [x5, #8]");                                    // load table capacity
-    emitter.instruction("udiv x7, x0, x6");                                     // divide hash by capacity
-    emitter.instruction("msub x8, x7, x6, x0");                                 // compute hash % capacity
+    emitter.instruction("sub x7, x6, #1");                                      // capacity mask (exact when the capacity is a power of two)
+    emitter.instruction("cbz x6, 91f");                                          // zero capacity: never mask
+        emitter.instruction("tst x6, x7");                                          // is the capacity a power of two?
+    emitter.instruction("b.ne 91f");                                            // no: divide
+    emitter.instruction("and x8, x0, x7");                                      // x8 = x0 % capacity via the mask
+    emitter.instruction("b 92f");
+    emitter.label("91");
+    emitter.instruction("udiv x7, x0, x6");                                     // x7 = x0 / capacity
+    emitter.instruction("msub x8, x7, x6, x0");                                 // x8 = x0 % capacity
+    emitter.label("92");
     emitter.instruction("str x8, [sp, #48]");                                   // save initial probe index
     emitter.instruction("mov x10, #0");                                         // probe count = 0
 
@@ -89,8 +97,16 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
 
     // -- advance to the next probe slot --
     emitter.instruction("add x9, x9, #1");                                      // increment probe index
-    emitter.instruction("udiv x7, x9, x6");                                     // divide updated index by capacity
-    emitter.instruction("msub x9, x7, x6, x9");                                 // wrap index with modulo capacity
+    emitter.instruction("sub x7, x6, #1");                                      // capacity mask (exact when the capacity is a power of two)
+    emitter.instruction("cbz x6, 91f");                                          // zero capacity: never mask
+        emitter.instruction("tst x6, x7");                                          // is the capacity a power of two?
+    emitter.instruction("b.ne 91f");                                            // no: divide
+    emitter.instruction("and x9, x9, x7");                                      // x9 = x9 % capacity via the mask
+    emitter.instruction("b 92f");
+    emitter.label("91");
+    emitter.instruction("udiv x7, x9, x6");                                     // x7 = x9 / capacity
+    emitter.instruction("msub x9, x7, x6, x9");                                 // x9 = x9 % capacity
+    emitter.label("92");
     emitter.instruction("str x9, [sp, #48]");                                   // save wrapped probe index
     emitter.instruction("add x10, x10, #1");                                    // increment probe count
     emitter.instruction("b __rt_hash_insert_owned_probe");                      // continue probing
@@ -174,8 +190,17 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the owned normalized key payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the destination hash-table pointer after the hash helper returns
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the destination table capacity for the modulo operation and linear-probe loop
-    emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
-    emitter.instruction("div r11");                                             // compute hash % capacity using the SysV integer divide remainder register
+    emitter.instruction("lea rdx, [r11 - 1]");                               // capacity mask (exact when the capacity is a power of two)
+    emitter.instruction("test r11, r11");                                     // zero capacity: never mask
+    emitter.instruction("jz 91f");
+    emitter.instruction("test r11, rdx");                                     // is the capacity a power of two?
+    emitter.instruction("jnz 91f");                                           // no: divide
+    emitter.instruction("and rdx, rax");                                      // rdx = hash % capacity via the mask
+    emitter.instruction("jmp 92f");
+    emitter.label("91");
+    emitter.instruction("xor edx, edx");                                      // clear the high dividend half before dividing
+    emitter.instruction("div r11");                                           // rdx = hash % capacity
+    emitter.label("92");
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save the initial probe index so the loop can survive helper calls
 
     emitter.label("__rt_hash_insert_owned_probe");

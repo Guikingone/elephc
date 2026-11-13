@@ -7910,6 +7910,32 @@ pub(super) fn lower_fused_checked_mixed(
 /// Operands are compared in place (allocated register, x86_64 memory operand, or immediate);
 /// when the result only feeds the next `cond_br`, only the flags are produced.
 fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(result) = inst.result {
+        if ctx.fused_compare_value == Some(result) {
+            if let Some((lhs, rhs)) = ctx.fused_add_overflow.get(&result).copied() {
+                // `((a ^ r) & (b ^ r)) < 0` for `r = a + b` is the signed-overflow flag of the add.
+                let (lhs_reg, rhs_reg) = match ctx.emitter.target.arch {
+                    Arch::AArch64 => ("x9", "x10"),
+                    Arch::X86_64 => ("r10", "r11"),
+                };
+                // The right operand first: an AArch64 frame load far from x29 computes its
+                // address in x9, which must not hold the left operand yet.
+                ctx.load_value_to_reg(rhs, rhs_reg)?;
+                ctx.load_value_to_reg(lhs, lhs_reg)?;
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("adds x9, x9, x10");                // signed add, V flag = overflow
+                        ctx.fused_branch_condition = Some("vs");
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("add r10, r11");                    // signed add, OF = overflow
+                        ctx.fused_branch_condition = Some("o");
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
     use arithmetic::{aarch64_int_reg, int_operand, x86_int_operand_text, IntOperand};
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;

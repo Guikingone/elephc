@@ -36,7 +36,11 @@ pub const PRINTF_PRELUDE_FUNCTIONS: &[&str] = &[
     "__elephc_sprintf_all",
     "__elephc_printf_all",
     "__elephc_fprintf_all",
+    "__elephc_explode_limit",
 ];
+
+/// Prelude entry points that do not need the shared formatter helpers.
+const STANDALONE_ENTRY_POINTS: &[&str] = &["__elephc_explode_limit"];
 
 /// The shared helpers of the elephc-PHP formatted-output prelude.
 pub const PRINTF_PRELUDE_SRC: &str = r#"<?php
@@ -444,6 +448,35 @@ const PRINTF_ENTRY_POINTS: &[(&str, &str)] = &[
     return strlen($s);
 }"#,
     ),
+    (
+        "__elephc_explode_limit",
+        r#"function __elephc_explode_limit(string $separator, string $string, int $limit): array {
+    $parts = explode($separator, $string);
+    if ($limit === 0) {
+        $limit = 1;
+    }
+    $count = count($parts);
+    $out = [];
+    if ($limit > 0) {
+        if ($count <= $limit) {
+            return $parts;
+        }
+        for ($i = 0; $i < $limit - 1; $i++) {
+            $out[] = $parts[$i];
+        }
+        $rest = $parts[$limit - 1];
+        for ($i = $limit; $i < $count; $i++) {
+            $rest .= $separator . $parts[$i];
+        }
+        $out[] = $rest;
+        return $out;
+    }
+    for ($i = 0; $i < $count + $limit; $i++) {
+        $out[] = $parts[$i];
+    }
+    return $out;
+}"#,
+    ),
 ];
 
 /// Prepends the prelude when the program calls one of its entry points (the name resolver
@@ -466,7 +499,11 @@ pub fn inject_if_used(program: Program) -> Program {
     if used.is_empty() {
         return program;
     }
-    let mut source = PRINTF_PRELUDE_SRC.to_string();
+    let mut source = if used.iter().all(|name| STANDALONE_ENTRY_POINTS.contains(name)) {
+        String::from("<?php\n")
+    } else {
+        PRINTF_PRELUDE_SRC.to_string()
+    };
     for (name, body) in PRINTF_ENTRY_POINTS {
         if used.contains(name) {
             source.push_str(body);

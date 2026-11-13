@@ -4782,7 +4782,68 @@ fn lower_int_function_return(ctx: &mut LoweringContext<'_, '_>, value_expr: &Exp
                         checked_op.default_effects(),
                         Some(value_expr.span),
                     );
-                    finish_return(ctx, Some(value_expr), boxed, span);
+                    // An int add/sub that overflowed yields a float outside the int range,
+                    // which an `int` return rejects (PHP: "Return value must be of type int,
+                    // float returned") — except a negative overflow that rounds to exactly
+                    // -2^63, which PHP converts back to PHP_INT_MIN.
+                    let as_float = ctx.emit_value(
+                        Op::Cast,
+                        vec![boxed.value],
+                        Some(Immediate::CastTarget(IrType::F64)),
+                        PhpType::Float,
+                        Op::Cast.default_effects(),
+                        Some(value_expr.span),
+                    );
+                    let int_min = ctx.emit_value(
+                        Op::ConstF64,
+                        Vec::new(),
+                        Some(Immediate::F64(i64::MIN as f64)),
+                        PhpType::Float,
+                        Op::ConstF64.default_effects(),
+                        Some(value_expr.span),
+                    );
+                    let is_int_min = ctx.emit_value(
+                        Op::FCmp,
+                        vec![as_float.value, int_min.value],
+                        Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
+                        PhpType::Bool,
+                        Op::FCmp.default_effects(),
+                        Some(value_expr.span),
+                    );
+                    let min_block = ctx.builder.create_named_block("return.int_min", Vec::new());
+                    let throw_block = ctx.builder.create_named_block("return.type_error", Vec::new());
+                    ctx.builder.terminate(Terminator::CondBr {
+                        cond: is_int_min.value,
+                        then_target: min_block,
+                        then_args: Vec::new(),
+                        else_target: throw_block,
+                        else_args: Vec::new(),
+                    });
+                    ctx.builder.position_at_end(min_block);
+                    crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(value_expr.span));
+                    let min_value = ctx.emit_value(
+                        Op::ConstI64,
+                        Vec::new(),
+                        Some(Immediate::I64(i64::MIN)),
+                        PhpType::Int,
+                        Op::ConstI64.default_effects(),
+                        Some(value_expr.span),
+                    );
+                    finish_return(ctx, Some(value_expr), min_value, span);
+                    ctx.builder.position_at_end(throw_block);
+                    let prefix = format!(
+                        "{}(): Return value must be of type int, ",
+                        ctx.owner_name()
+                    );
+                    let prefix = ctx.intern_string(&prefix);
+                    ctx.emit_void(
+                        Op::ThrowCheckedReturnTypeError,
+                        vec![boxed.value],
+                        Some(Immediate::Data(prefix)),
+                        Op::ThrowCheckedReturnTypeError.default_effects(),
+                        Some(span),
+                    );
+                    ctx.builder.terminate(Terminator::Unreachable);
                 }
             }
             true
@@ -5152,6 +5213,11 @@ fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: 
             Some(span),
         );
         ctx.store_local(var, item, item_type.clone(), Some(span));
+    }
+    // Every target took its own reference to its element, so a temporary source array
+    // (`[$a, $b] = explode(...)`) is released here instead of leaking.
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }
 

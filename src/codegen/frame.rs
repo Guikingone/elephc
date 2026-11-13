@@ -222,7 +222,9 @@ pub(super) fn emit_function_prologue_with_label(
     ctx.emitter.blank();
     ctx.emitter.label_global(entry_label);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
-    capture_concat_base(ctx);
+    if function_resets_concat_buffer(ctx.function) {
+        capture_concat_base(ctx);
+    }
     emit_callee_saved_saves(ctx);
 
     // Save every incoming argument before any parameter post-processing can call
@@ -277,6 +279,21 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
     // `emit_store` performs the string persist itself; other refcounted values
     // were retained explicitly above and are stored without another incref.
     abi::emit_store(emitter, ty, offset);
+}
+
+/// Returns whether a function body ever rewinds `_concat_off` to its frame base: a
+/// `concat_reset`, or a string store that resets after an acquired concatenation. Functions
+/// without either never read the captured base.
+fn function_resets_concat_buffer(function: &crate::ir::Function) -> bool {
+    function.instructions.iter().any(|inst| match inst.op {
+        crate::ir::Op::ConcatReset => true,
+        crate::ir::Op::StoreLocal => inst.operands.first().is_some_and(|value| {
+            function
+                .value(*value)
+                .is_some_and(|value| value.ir_type == crate::ir::IrType::Str)
+        }),
+        _ => false,
+    })
 }
 
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.

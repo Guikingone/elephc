@@ -275,3 +275,53 @@ $m = memory_get_usage(); for ($j = 0; $j < 50; $j++) { foreach (g() as $v) { } }
 "#);
     assert_eq!(out, "int(0)\nint(0)\nint(3)\nint(0)\nint(1)\n3\n0=0 1=2 2=4 it-gone\n\n0=0 1=2 it-gone\n\nno-leak\n");
 }
+
+/// `return $a + $b` from an `: int` function raises PHP's TypeError when the sum overflows
+/// ("Return value must be of type int, float returned"), except a negative overflow that
+/// rounds to exactly -2^63; the call is kept even when its result is discarded.
+#[test]
+fn test_int_return_overflow_raises_type_error() {
+    let out = compile_and_run(r#"<?php
+function add(int $a, int $b): int { return $a + $b; }
+function sub(int $a, int $b): int { return $a - $b; }
+class K { function m(int $a): int { return $a + 1; } }
+try { echo add(PHP_INT_MAX, 1), "\n"; } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { echo sub(PHP_INT_MIN, 1), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { echo (new K)->m(PHP_INT_MAX), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo add(2, 3), sub(2, 3), (new K)->m(4), "\n";
+function fib(int $n): int { return $n < 2 ? $n : fib($n - 1) + fib($n - 2); } echo fib(25), "\n";
+function sub2(int $a, int $b): int { return $a - $b; }
+try { echo sub2(PHP_INT_MIN, 1000), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { echo sub2(PHP_INT_MIN, 5000), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { echo add(PHP_INT_MIN, -1), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+for ($i = 0; $i < 3; $i++) { try { add(PHP_INT_MAX, $i + 1); } catch (TypeError $e) { echo "c"; } } echo "\n";
+"#);
+    assert_eq!(out, "TypeError: add(): Return value must be of type int, float returned\n-9223372036854775808\nK::m(): Return value must be of type int, float returned\n5-15\n75025\n-9223372036854775808\nsub2(): Return value must be of type int, float returned\n-9223372036854775808\nccc\n");
+}
+
+/// `explode()` with a limit (positive, zero, negative) follows PHP through the elephc-PHP
+/// prelude, one-byte delimiters use the memchr splitter, list destructuring of a temporary
+/// array releases it, and returning a local array widened to `array<mixed>` neither leaks nor
+/// mutates a caller's array.
+#[test]
+fn test_explode_limit_destructuring_and_returned_conversions_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+foreach ([2, 1, 0, -1, -2, 5, -5, 3] as $l) { echo $l, ":", json_encode(explode(",", "a,b,c,d", $l)), json_encode(explode("||", "x||y||z", $l)), json_encode(explode(",", "", $l)), "\n"; }
+[$k, $v] = explode("=", "key=val=ue", 2); echo $k, "|", $v, "\n";
+echo json_encode(explode("-", "1-2-3", 2)), "\n";
+[$k, $v] = explode("=", "key=val"); echo $k, $v, "\n";
+function f() { return ["a", [1, 2], 3.5]; } [$a, $b, $c] = f(); echo $a, json_encode($b), $c, "\n";
+[$p, $q] = ["x", "y"]; echo $p, $q, "\n";
+$src = ["m", "n"]; [$m, $n] = $src; $src[0] = "z"; echo $m, $n, json_encode($src), "\n";
+foreach ([["a", 1], ["b", 2]] as [$s, $i]) { echo $s, $i; } echo "\n";
+[$k2, $v2] = explode("=", "k=v=w", 2); echo $k2, "|", $v2, "\n";
+function myx2(string $s): array { $parts = explode(",", $s); if (strlen($s) > 100) { $o = []; $o[] = 1.5; return $o; } return $parts; }
+function pass(array $a): array { if (count($a) > 100) { return [1.5]; } return $a; }
+$x = myx2("a,b,c,d"); echo count($x), "\n";
+$y = ["p", "q"]; $z = pass($y); $y[] = "r"; echo json_encode($y), json_encode($z), "\n";
+echo json_encode(explode(",", "a,b,c,d", 2)), json_encode(explode(",", "a,b,c,d", -1)), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:[\"a\",\"b,c,d\"][\"x\",\"y||z\"][\"\"]\n1:[\"a,b,c,d\"][\"x||y||z\"][\"\"]\n0:[\"a,b,c,d\"][\"x||y||z\"][\"\"]\n-1:[\"a\",\"b\",\"c\"][\"x\",\"y\"][]\n-2:[\"a\",\"b\"][\"x\"][]\n5:[\"a\",\"b\",\"c\",\"d\"][\"x\",\"y\",\"z\"][\"\"]\n-5:[][][]\n3:[\"a\",\"b\",\"c,d\"][\"x\",\"y\",\"z\"][\"\"]\nkey|val=ue\n[\"1\",\"2-3\"]\nkeyval\na[1,2]3.5\nxy\nmn[\"z\",\"n\"]\na1b2\nk|v=w\n4\n[\"p\",\"q\",\"r\"][\"p\",\"q\"]\n[\"a\",\"b,c,d\"][\"a\",\"b\",\"c\"]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
