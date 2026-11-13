@@ -99,7 +99,7 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // move the integer result into the Mixed helper payload register
     emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the integer result into a Mixed cell
+    emitter.instruction("bl __rt_mixed_box_scalar");                            // box the integer result into a Mixed cell
     emitter.instruction("b __rt_mixed_numeric_done");                           // restore the helper frame and return the boxed result
 
     emitter.label("__rt_mixed_numeric_int_overflow");
@@ -142,7 +142,7 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("fmov x1, d0");                                         // move the double bits into the Mixed helper payload register
     emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the double result into a Mixed cell
+    emitter.instruction("bl __rt_mixed_box_scalar");                            // box the double result into a Mixed cell
     emitter.instruction("b __rt_mixed_numeric_done");                           // restore the helper frame and return the boxed double
 
     // -- dynamic add: arrays union only with arrays; every mixed pairing is a TypeError --
@@ -286,7 +286,7 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r10");                                        // move the integer result into the Mixed helper payload register
     emitter.instruction("xor rsi, rsi");                                        // integer payloads do not use a high word
     emitter.instruction("mov rax, 0");                                          // runtime tag 0 = integer
-    emitter.instruction("call __rt_mixed_from_value");                          // box the integer result into a Mixed cell
+    emitter.instruction("call __rt_mixed_box_scalar");                          // box the integer result into a Mixed cell
     emitter.instruction("jmp __rt_mixed_numeric_done_linux_x86_64");            // restore the helper frame and return the boxed result
 
     emitter.label("__rt_mixed_numeric_int_overflow_linux_x86_64");
@@ -327,7 +327,7 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movq rdi, xmm0");                                      // move the double bits into the Mixed helper payload register
     emitter.instruction("xor rsi, rsi");                                        // double payloads do not use a high word
     emitter.instruction("mov rax, 2");                                          // runtime tag 2 = double
-    emitter.instruction("call __rt_mixed_from_value");                          // box the double result into a Mixed cell
+    emitter.instruction("call __rt_mixed_box_scalar");                          // box the double result into a Mixed cell
     emitter.instruction("jmp __rt_mixed_numeric_done_linux_x86_64");            // restore the helper frame and return the boxed double
 
     // -- dynamic add: arrays union only with arrays; every mixed pairing is a TypeError --

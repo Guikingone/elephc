@@ -170,3 +170,44 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the boxed mixed pointer in rax
 }
+
+/// Emits `__rt_mixed_box_scalar`: boxes an int, float or bool payload into a fresh Mixed cell.
+///
+/// The scalar tags need none of `__rt_mixed_from_value`'s ownership work (no string to
+/// persist, no child to retain, no null normalization), so this skips its dispatch and frame.
+/// Input: x0 / rax = runtime tag (0 int, 2 float, 3 bool); x1 / rdi = payload bits.
+/// Output: x0 / rax = the Mixed cell.
+pub fn emit_mixed_box_scalar(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_box_scalar ---");
+    emitter.label_global("__rt_mixed_box_scalar");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("sub rsp, 24");                                     // spill slots (keeps the call aligned)
+        emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the runtime tag
+        emitter.instruction("mov QWORD PTR [rsp + 8], rdi");                    // save the payload bits
+        emitter.instruction("mov rax, 24");                                     // tag plus two payload words
+        emitter.instruction("call __rt_heap_alloc");                            // allocate the cell
+        emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // mixed-cell heap kind word
+        emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the cell kind
+        emitter.instruction("mov r10, QWORD PTR [rsp]");                        // the runtime tag
+        emitter.instruction("mov QWORD PTR [rax], r10");                        // mixed[0] = tag
+        emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                    // the payload
+        emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // mixed[8] = payload
+        emitter.instruction("mov QWORD PTR [rax + 16], 0");                     // scalars use no second word
+        emitter.instruction("add rsp, 24");                                     // release the spill slots
+        emitter.instruction("ret");                                             // return the cell in rax
+        return;
+    }
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the frame
+    emitter.instruction("stp x0, x1, [sp, #16]");                               // save the runtime tag and payload
+    emitter.instruction("mov x0, #24");                                         // tag plus two payload words
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the cell
+    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the cell kind
+    emitter.instruction("ldp x10, x11, [sp, #16]");                             // reload tag and payload
+    emitter.instruction("stp x10, x11, [x0]");                                  // mixed[0] = tag, mixed[8] = payload
+    emitter.instruction("str xzr, [x0, #16]");                                  // scalars use no second word
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
+    emitter.instruction("ret");                                                 // return the cell in x0
+}

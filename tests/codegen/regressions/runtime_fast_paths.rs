@@ -222,3 +222,16 @@ echo $t, "\n";
 "#);
     assert_eq!(out, "float(1.0E+19)\n20\n");
 }
+
+/// Integer arithmetic with an `int|null` operand (an indexed read that may miss) unwraps the
+/// payload (null counts as 0) instead of boxing, and still overflows to float like PHP.
+#[test]
+fn test_nullable_int_operands_in_integer_arithmetic() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2, 3];
+$s = 0;
+for ($i = 0; $i < 5; $i++) { $s = $s + @$a[$i] * 2 - ($a[$i] ?? 7); $t = (@$a[$i]) ^ 5; echo $s, ",", $t, " "; }
+$m = [PHP_INT_MAX]; var_dump($m[0] + 1, @$m[3] + 1, @$m[3] | 4);
+"#);
+    assert_eq!(out, "1,4 3,7 6,6 -1,5 -8,5 float(9.223372036854776E+18)\nint(1)\nint(4)\n");
+}

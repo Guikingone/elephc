@@ -465,6 +465,22 @@ fn lower_numeric_binary_values(
             return result;
         }
     }
+    // An inline nullable int (`int|null`, e.g. an indexed-array read that may miss) behaves
+    // as its payload or 0 in integer arithmetic: unwrap it instead of boxing both operands
+    // into the generic mixed-numeric helper.
+    let int_like = |value: &LoweredValue| matches!(value.ir_type, IrType::I64 | IrType::TaggedScalar);
+    if (lhs.ir_type == IrType::TaggedScalar || rhs.ir_type == IrType::TaggedScalar)
+        && int_like(&lhs)
+        && int_like(&rhs)
+        && !matches!(op, BinOp::Pow)
+    {
+        if lhs.ir_type == IrType::TaggedScalar {
+            lhs = coerce_to_int(ctx, lhs, left);
+        }
+        if rhs.ir_type == IrType::TaggedScalar {
+            rhs = coerce_to_int(ctx, rhs, right);
+        }
+    }
     if matches!(op, BinOp::Pow) {
         let lhs = coerce_to_float(ctx, lhs, expr);
         let rhs = coerce_to_float(ctx, rhs, expr);

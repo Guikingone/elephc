@@ -115,7 +115,7 @@ fn emit_aarch64_overflow(emitter: &mut Emitter, label: &str, opcode: i64, oob_la
     emitter.instruction("fmov x1, d0");                                         // move the double bits into the Mixed helper payload register
     emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the double result into a Mixed cell
+    emitter.instruction("bl __rt_mixed_box_scalar");                            // box the double result into a Mixed cell
     emitter.instruction(&format!("b {}_done", label));                          // restore the helper frame and return the boxed result
 }
 
@@ -125,7 +125,7 @@ fn emit_aarch64_box_int(emitter: &mut Emitter, _label: &str, box_label: &str) {
     emitter.instruction("mov x1, x0");                                          // move the integer result into the Mixed helper payload register
     emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the integer result into a Mixed cell
+    emitter.instruction("bl __rt_mixed_box_scalar");                            // box the integer result into a Mixed cell
 }
 
 /// Emits the frame-restore and return epilogue for one AArch64 checked helper.
@@ -215,7 +215,7 @@ fn emit_x86_64_overflow(emitter: &mut Emitter, label: &str, opcode: i64, oob_lab
     emitter.instruction("movq rdi, xmm0");                                      // move the double bits into the Mixed helper payload register
     emitter.instruction("xor rsi, rsi");                                        // double payloads do not use a high word
     emitter.instruction("mov rax, 2");                                          // runtime tag 2 = double
-    emitter.instruction("call __rt_mixed_from_value");                          // box the double result into a Mixed cell
+    emitter.instruction("call __rt_mixed_box_scalar");                          // box the double result into a Mixed cell
     emitter.instruction(&format!("jmp {}_done", label));                        // restore the helper frame and return the boxed result
 }
 
@@ -225,7 +225,7 @@ fn emit_x86_64_box_int(emitter: &mut Emitter, _label: &str, box_label: &str, res
     emitter.instruction(&format!("mov rdi, {}", result_reg));                   // move the integer result into the Mixed helper payload register
     emitter.instruction("xor rsi, rsi");                                        // integer payloads do not use a high word
     emitter.instruction("mov rax, 0");                                          // runtime tag 0 = integer
-    emitter.instruction("call __rt_mixed_from_value");                          // box the integer result into a Mixed cell
+    emitter.instruction("call __rt_mixed_box_scalar");                          // box the integer result into a Mixed cell
 }
 
 /// Emits the frame-restore and return epilogue for one x86_64 checked helper.

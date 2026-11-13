@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Integer arithmetic with an `int|null` operand (`$sum + $a[$i]`) unwraps the inline nullable int (null counts as 0, as in PHP) instead of boxing both operands into the generic mixed-numeric helper: the `array` benchmark runs 55 % fewer instructions.
+- Scalar results of checked arithmetic and int/float/bool values are boxed by a dedicated `__rt_mixed_box_scalar` helper instead of the generic `__rt_mixed_from_value` (≈5 % on boxing-heavy benchmarks).
 - Inlined scalar parameters stay ordinary locals so mem2reg promotes them to registers, `int → float` conversions of constants fold, and array element reads no longer keep a `concat_reset` alive (their warning helpers restore the scratch offset): `spectralnorm` runs 20 % fewer instructions.
 - Fixed a leak: `substr()` of an owning temporary (`$l[$i] = substr($l[$i], 0, 10)`) now releases the temporary (its result is declared as aliasing the subject).
 - The integer-range analysis no longer assumes that calling a variable which only ever holds closure literals (`$add = fn(...) => ...; $add($i)`) can modify its arguments by reference, unless some closure, first-class callable or string-named callable binds a parameter by reference; loop counters passed to such calls stay native ints again (`closures` benchmark 0.45 s → 0.13 s).

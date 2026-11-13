@@ -80,12 +80,19 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                 emitter.instruction("call __rt_mixed_from_value");              // box the tagged scalar payload into a mixed cell
             }
         },
-        PhpType::Int
-        | PhpType::Bool
-        | PhpType::False
-        | PhpType::Void
-        | PhpType::Never
-        | PhpType::Resource(_) => match emitter.target.arch {
+        PhpType::Int | PhpType::Bool | PhpType::False => match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x1, x0");                              // move the current scalar payload into the boxing helper argument register
+                emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); // materialize the static value tag for this scalar
+                emitter.instruction("bl __rt_mixed_box_scalar");                // box the scalar payload into a mixed cell
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rdi, rax");                            // move the current scalar payload into the boxing helper payload register
+                abi::emit_load_int_immediate(emitter, "rax", runtime_value_tag(ty) as i64);
+                emitter.instruction("call __rt_mixed_box_scalar");              // box the scalar payload into a mixed cell
+            }
+        },
+        PhpType::Void | PhpType::Never | PhpType::Resource(_) => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // move the current scalar payload into the mixed helper argument register
                 emitter.instruction("mov x2, xzr");                             // scalar mixed payloads do not use a second word
@@ -101,16 +108,14 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
         },
         PhpType::Float => match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction("fmov x1, d0");                             // move the current float bits into the mixed helper payload register
-                emitter.instruction("mov x2, xzr");                             // float payloads only use the low word
+                emitter.instruction("fmov x1, d0");                             // move the current float bits into the boxing helper payload register
                 emitter.instruction("mov x0, #2");                              // runtime tag 2 = float
-                emitter.instruction("bl __rt_mixed_from_value");                // box the float payload into a mixed cell
+                emitter.instruction("bl __rt_mixed_box_scalar");                // box the float payload into a mixed cell
             }
             Arch::X86_64 => {
-                emitter.instruction("movq rdi, xmm0");                          // move the current float bits into the mixed helper payload register
-                emitter.instruction("xor rsi, rsi");                            // float payloads only use the low word
+                emitter.instruction("movq rdi, xmm0");                          // move the current float bits into the boxing helper payload register
                 abi::emit_load_int_immediate(emitter, "rax", 2);
-                emitter.instruction("call __rt_mixed_from_value");              // box the float payload into a mixed cell
+                emitter.instruction("call __rt_mixed_box_scalar");              // box the float payload into a mixed cell
             }
         },
         PhpType::Str => match emitter.target.arch {
