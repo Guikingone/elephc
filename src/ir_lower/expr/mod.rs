@@ -382,7 +382,7 @@ pub(crate) fn lower_int_return_arith(
     let rhs = lower_expr(ctx, right);
     let checked = lhs.ir_type == IrType::I64
         && rhs.ir_type == IrType::I64
-        && matches!(op, BinOp::Add | BinOp::Sub)
+        && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
         && fallback_expr_type(expr) == PhpType::Mixed
         && !crate::int_range::is_proven_binop(op, expr.span);
     if !checked {
@@ -392,6 +392,24 @@ pub(crate) fn lower_int_return_arith(
     let int_op = |ctx: &mut LoweringContext<'_, '_>, op: Op, a: crate::ir::ValueId, b: crate::ir::ValueId| {
         ctx.emit_value(op, vec![a, b], None, PhpType::Int, op.default_effects(), span)
     };
+    if matches!(op, BinOp::Mul) {
+        let fast = int_op(ctx, Op::IMul, lhs.value, rhs.value);
+        let overflow = ctx.emit_value(
+            Op::IMulOverflow,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Bool,
+            Op::IMulOverflow.default_effects(),
+            span,
+        );
+        return IntReturnArith::Split {
+            lhs: lhs.value,
+            rhs: rhs.value,
+            checked_op: Op::ICheckedMul,
+            fast,
+            overflow,
+        };
+    }
     let (native_op, checked_op) = if matches!(op, BinOp::Add) {
         (Op::IAdd, Op::ICheckedAdd)
     } else {

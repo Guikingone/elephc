@@ -363,6 +363,8 @@ pub enum Op {
     IAdd,
     ISub,
     IMul,
+    /// `1` when the signed 64-bit product of the two operands overflows, else `0`.
+    IMulOverflow,
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
@@ -701,6 +703,7 @@ impl Op {
             | IAdd
             | ISub
             | IMul
+            | IMulOverflow
             | IPow
             | INeg
             | IBitAnd
@@ -1008,6 +1011,7 @@ impl Op {
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
+            IMulOverflow => "imul_overflow",
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",

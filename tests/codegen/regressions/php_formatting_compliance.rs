@@ -428,3 +428,21 @@ try { max([]); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
 "#);
     assert_eq!(out, "the quick brown fox jumps over the lazy dog again and again 3\nzzzzzzzzHPLEthekey thekey\nArray\n(\n    [0] => 2\n    [1] => 4\n    [2] => 6\n)\n1,2,9,9\na,x,c\n3,1,2\n0,5,0\n10,12 12,10,8\n{\"2\":\"a\",\"0\":\"b\",\"1\":\"c\"}\n{\"3\":{\"id\":3,\"n\":\"c\"},\"1\":{\"id\":1,\"n\":\"a\"}}\nmax(): Argument #1 ($value) must contain at least one element\n");
 }
+
+/// `return $a * $b` from an `: int` function (or closure) raises PHP's return TypeError when
+/// the product overflows (a float outside the int range), except a product that rounds to
+/// exactly -2^63; closures are named `{closure}` in the message.
+#[test]
+fn test_int_return_mul_overflow_type_error() {
+    let out = compile_and_run(r#"<?php
+function m(int $x): int { return $x * PHP_INT_MAX; }
+function a(int $x): int { return $x + PHP_INT_MAX; }
+$f = fn(int $x): int => $x * PHP_INT_MAX;
+foreach (['m', 'a'] as $fn) { try { echo $fn(2), "\n"; } catch (TypeError $e) { echo "TE ", $e->getMessage(), "\n"; } }
+try { echo $f(2), "\n"; } catch (TypeError $e) { echo "TE ", $e->getMessage(), "\n"; }
+try { echo m(2), "\n"; } catch (TypeError $e) { echo "TE ", $e->getMessage(), "\n"; }
+function mm(int $a, int $b): int { return $a * $b; }
+foreach ([[3, 4], [PHP_INT_MAX, 1], [-1, PHP_INT_MAX], [PHP_INT_MIN, 1], [PHP_INT_MIN, -1], [4611686018427387904, -2], [4611686018427387904, 2], [-3037000500, 3037000500], [0, PHP_INT_MIN]] as [$x, $y]) { try { echo mm($x, $y), "\n"; } catch (TypeError $e) { echo "TE\n"; } }
+"#);
+    assert_eq!(out, "TE m(): Return value must be of type int, float returned\nTE a(): Return value must be of type int, float returned\nTE {closure}(): Return value must be of type int, float returned\nTE m(): Return value must be of type int, float returned\n12\n9223372036854775807\n-9223372036854775807\n-9223372036854775808\nTE\n-9223372036854775808\nTE\nTE\n0\n");
+}

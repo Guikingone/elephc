@@ -4760,7 +4760,7 @@ fn lower_int_function_return(ctx: &mut LoweringContext<'_, '_>, value_expr: &Exp
         }
         ExprKind::BinaryOp {
             left,
-            op: op @ (BinOp::Add | BinOp::Sub),
+            op: op @ (BinOp::Add | BinOp::Sub | BinOp::Mul),
             right,
         } => {
             match crate::ir_lower::expr::lower_int_return_arith(ctx, left, op, right, value_expr) {
@@ -4847,10 +4847,13 @@ fn lower_int_function_return(ctx: &mut LoweringContext<'_, '_>, value_expr: &Exp
                     );
                     finish_return(ctx, Some(value_expr), min_value, span);
                     ctx.builder.position_at_end(throw_block);
-                    let prefix = format!(
-                        "{}(): Return value must be of type int, ",
+                    // PHP names an anonymous function `{closure}` in its diagnostics.
+                    let owner = if ctx.owner_name().starts_with("__eir_closure") {
+                        "{closure}"
+                    } else {
                         ctx.owner_name()
-                    );
+                    };
+                    let prefix = format!("{}(): Return value must be of type int, ", owner);
                     let prefix = ctx.intern_string(&prefix);
                     ctx.emit_void(
                         Op::ThrowCheckedReturnTypeError,

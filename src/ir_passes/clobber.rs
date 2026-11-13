@@ -39,7 +39,7 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         ConstI64 | ConstBool | ConstNull | ConstF64
         // Integer arithmetic, bitwise, and shift: result + secondary/tertiary
         // scratch only (see `lower_inst::arithmetic`).
-        | IAdd | ISub | IMul | INeg
+        | IAdd | ISub | IMul | IMulOverflow | INeg
         | IBitAnd | IBitOr | IBitXor | IBitNot
         | IShl | IShrA | ISMod | IDiv
         // Floating-point arithmetic: d0/d1 or xmm0/xmm1 only (`lower_inst::floats`).

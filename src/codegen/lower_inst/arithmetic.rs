@@ -189,6 +189,44 @@ pub(super) fn is_aarch64_logical_immediate(value: u64) -> bool {
     })
 }
 
+/// Lowers `imul_overflow`: 1 when the signed 64-bit product overflows, else 0. Touches only
+/// the result and scratch registers (it is volatile-safe).
+pub(super) fn lower_int_mul_overflow(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_op = int_operand(ctx, lhs, inst)?;
+    let rhs_op = int_operand(ctx, rhs, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let rhs_reg = aarch64_int_reg(ctx, rhs_op, "x10");
+            let lhs_reg = aarch64_int_reg(ctx, lhs_op, "x9");
+            ctx.emitter.instruction(&format!("mul x11, {}, {}", lhs_reg, rhs_reg)); // low 64 bits of the product
+            ctx.emitter.instruction(&format!("smulh x9, {}, {}", lhs_reg, rhs_reg)); // high 64 bits of the product
+            ctx.emitter.instruction("cmp x9, x11, asr #63");                    // the product fits when the high word is the low word's sign
+            ctx.emitter.instruction("cset x0, ne");                             // 1 when the product overflowed
+        }
+        Arch::X86_64 => {
+            match lhs_op {
+                IntOperand::Imm(value) => abi::emit_load_int_immediate(ctx.emitter, "rax", value),
+                other => {
+                    ctx.emitter.instruction(&format!("mov rax, {}", x86_int_operand_text(other))); // left factor
+                }
+            }
+            let rhs_text = match rhs_op {
+                IntOperand::Imm(value) => {
+                    abi::emit_load_int_immediate(ctx.emitter, "r10", value);
+                    "r10".to_string()
+                }
+                other => x86_int_operand_text(other),
+            };
+            ctx.emitter.instruction(&format!("imul rax, {}", rhs_text));        // signed product, OF = overflow
+            ctx.emitter.instruction("seto al");                                 // 1 when the product overflowed
+            ctx.emitter.instruction("movzx eax, al");                           // widen the flag
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Where an integer operand can be read from without first copying it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum IntOperand {

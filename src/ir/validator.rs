@@ -420,8 +420,8 @@ fn validate_opcode_rules(
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),
-        IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
-        | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
+        IAdd | ISub | IMul | IMulOverflow | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr
+        | IBitXor | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         ICheckedAdd | ICheckedSub | ICheckedMul => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
