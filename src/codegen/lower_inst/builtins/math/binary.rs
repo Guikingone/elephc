@@ -144,31 +144,10 @@ pub(crate) fn lower_pow(
     store_if_result(ctx, inst)
 }
 
-/// Emits the legacy fatal diagnostic for `intdiv()` division by zero.
+/// Emits PHP's catchable `DivisionByZeroError("Division by zero")` for `intdiv($x, 0)`.
 fn emit_intdiv_zero_fatal(ctx: &mut FunctionContext<'_>, zero_label: &str) {
     ctx.emitter.label(zero_label);
-    let (err_label, err_len) = ctx.data.add_string(b"Fatal error: division by zero\n");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr as the fatal diagnostic destination
-            ctx.emitter.adrp("x1", &err_label);
-            ctx.emitter.add_lo12("x1", "x1", &err_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", err_len));          // pass the fatal diagnostic byte length to write()
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #1");                              // select process exit code 1 after the fatal diagnostic
-            ctx.emitter.syscall(1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("lea rsi, [rip + {}]", err_label)); // pass the fatal diagnostic buffer to write()
-            ctx.emitter.instruction(&format!("mov edx, {}", err_len));          // pass the fatal diagnostic byte length to write()
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr as the fatal diagnostic destination
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
-            ctx.emitter.instruction("syscall");                                 // write the fatal division-by-zero diagnostic
-            ctx.emitter.instruction("mov edi, 1");                              // select process exit code 1 after the fatal diagnostic
-            ctx.emitter.instruction("mov eax, 60");                             // select Linux exit syscall
-            ctx.emitter.instruction("syscall");                                 // terminate after reporting division by zero
-        }
-    }
+    crate::codegen::lower_inst::exceptions::emit_division_by_zero_error(ctx, "Division by zero");
 }
 
 /// Emits the AArch64 overflow check for `intdiv(PHP_INT_MIN, -1)`.

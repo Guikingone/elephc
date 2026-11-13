@@ -277,7 +277,11 @@ fn validate_instruction_effects(
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     let expected = inst.op.default_effects();
-    if !inst.op.allows_effect_refinement() && inst.effects != expected {
+    // A division whose divisor is not a known non-zero constant may also throw
+    // `DivisionByZeroError` (see `Builder::emit_with_effects`).
+    let division_may_throw = matches!(inst.op, Op::IDiv | Op::ISMod | Op::FDiv)
+        && inst.effects == expected | Effects::MAY_THROW;
+    if !inst.op.allows_effect_refinement() && inst.effects != expected && !division_may_throw {
         return Err(ValidationError::EffectMismatch {
             inst: inst_id,
             expected,
@@ -422,7 +426,7 @@ fn validate_opcode_rules(
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IMulOverflow | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr
         | IBitXor | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
-        ICheckedAdd | ICheckedSub | ICheckedMul => {
+        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedDiv => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),

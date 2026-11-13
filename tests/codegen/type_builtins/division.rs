@@ -58,11 +58,13 @@ fn test_intdiv_negative() {
     assert_eq!(out, "-3");
 }
 
-/// Verifies float division by zero produces `INF`.
+/// Verifies float division by zero throws `DivisionByZeroError` like PHP 8 (no `INF`).
 #[test]
 fn test_division_by_zero_inf() {
-    let out = compile_and_run("<?php echo 1.0 / 0.0;");
-    assert_eq!(out, "INF");
+    let out = compile_and_run(
+        "<?php try { echo 1.0 / 0.0; } catch (DivisionByZeroError $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Division by zero");
 }
 
 /// Regression: `intdiv()` must unbox a `Mixed` operand before dividing.

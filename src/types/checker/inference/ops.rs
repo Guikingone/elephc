@@ -123,8 +123,11 @@ impl Checker {
                         "Arithmetic operators require numeric operands",
                     ));
                 }
-                // Division always returns float (PHP compat: 10/3 → 3.333...)
-                if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
+                // `int / int` is an int when the division is exact and a float otherwise
+                // (`10 / 2` → int(5), `10 / 4` → float(2.5)); any other operand mix is a float.
+                if *op == BinOp::Div && lt == PhpType::Int && rt == PhpType::Int {
+                    Ok(int_division_type(left, right))
+                } else if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
@@ -1553,6 +1556,23 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
         _ => return None,
     };
     Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns the type of `int / int`: the exact type for two integer literals (an int when the
+/// division is exact and fits, a float otherwise, including a zero divisor that throws), and
+/// `mixed` (int|float decided at runtime) for anything else.
+pub(crate) fn int_division_type(left: &Expr, right: &Expr) -> PhpType {
+    match (int_literal_value(left), int_literal_value(right)) {
+        (Some(lhs), Some(rhs)) if rhs != 0 => {
+            if lhs.checked_rem(rhs) == Some(0) && lhs.checked_div(rhs).is_some() {
+                PhpType::Int
+            } else {
+                PhpType::Float
+            }
+        }
+        (Some(_), Some(_)) => PhpType::Float,
+        _ => PhpType::Mixed,
+    }
 }
 
 /// Returns `true` when an integer arithmetic expression cannot overflow.

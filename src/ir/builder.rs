@@ -319,6 +319,15 @@ impl<'f> Builder<'f> {
         for operand in &operands {
             self.assert_value_exists(*operand);
         }
+        // `/` and `%` throw `DivisionByZeroError` unless the divisor is a known non-zero constant;
+        // the effect keeps passes from hoisting, deduplicating or dropping such a division.
+        let effects = if matches!(op, Op::IDiv | Op::ISMod | Op::FDiv)
+            && !operands.get(1).is_some_and(|divisor| self.is_nonzero_constant(*divisor))
+        {
+            effects | Effects::MAY_THROW
+        } else {
+            effects
+        };
 
         let inst_id = InstId::from_raw(self.func.instructions.len() as u32);
         let block_index = block_id.as_raw() as usize;
@@ -356,6 +365,23 @@ impl<'f> Builder<'f> {
     }
 
     /// Emits an `i64` integer constant.
+    /// Returns whether `value` is an integer or float constant other than zero.
+    fn is_nonzero_constant(&self, value: ValueId) -> bool {
+        let Some(ValueDef::Instruction { inst, .. }) =
+            self.func.values.get(value.as_raw() as usize).map(|value| value.def)
+        else {
+            return false;
+        };
+        let Some(inst) = self.func.instructions.get(inst.as_raw() as usize) else {
+            return false;
+        };
+        match (inst.op, inst.immediate.as_ref()) {
+            (Op::ConstI64, Some(Immediate::I64(n))) => *n != 0,
+            (Op::ConstF64, Some(Immediate::F64(f))) => *f != 0.0,
+            _ => false,
+        }
+    }
+
     pub fn emit_const_i64(&mut self, value: i64) -> ValueId {
         self.emit(
             Op::ConstI64,

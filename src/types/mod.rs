@@ -81,6 +81,7 @@ pub(crate) use array_keys::{
 };
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
+pub(crate) use checker::int_division_type;
 pub(crate) use return_alias::{
     names_written_in_place,
     collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,

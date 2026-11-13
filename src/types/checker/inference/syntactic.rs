@@ -430,6 +430,12 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Int
                 }
             }
+            BinOp::Div
+                if infer_expr_type_syntactic(left) == PhpType::Int
+                    && infer_expr_type_syntactic(right) == PhpType::Int =>
+            {
+                super::ops::int_division_type(left, right)
+            }
             BinOp::Div | BinOp::Pow => PhpType::Float,
             BinOp::Eq
             | BinOp::NotEq

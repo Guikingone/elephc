@@ -4,6 +4,9 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed: assigning through a reference to an element of an `int`/`float`-typed array inside a function (`$r = &$h["a"]; $r = 5; echo $h["a"];`) read back the reference's internal pointer instead of the value (or crashed).
+- Fixed (PHP compliance): `/` on two ints returns an int when the division is exact (`10 / 2` is `int(5)`, `7 / 2` stays `float(3.5)`, `PHP_INT_MIN / -1` is a float), at runtime (`__rt_int_div_checked`) and in constant folding; a float context such as `1.0 / ($n * ($n + 1) / 2 + $i + 1)` evaluates the integer tree in floating point when every operand is small enough for the result to be exact, keeping the boxed `int|float` path only as a fallback.
+- Fixed (PHP compliance): `/` and `%` by zero and `intdiv($x, 0)` throw a catchable `DivisionByZeroError` ("Division by zero" / "Modulo by zero") instead of yielding `INF`/`0` or a fatal error, including inside a `try` in the same function; `PHP_INT_MIN % -1` is 0 instead of crashing on x86_64.
 - A method call on a boxed `mixed` array element (`$shapes[$i]->area()`) borrows the element instead of retaining and releasing it when every possible target method provably writes and releases nothing, including across the receiver's null check (oop −24 % instructions).
 - `$m[$i][$j] = $v` on an indexed array of indexed arrays writes the row in place: `__rt_array_fetch_dim_w` separates the parent and the row only when they are shared and the row's possibly relocated pointer is stored back without refcount traffic, instead of copying the row on every write (nbody −76 % instructions, now ahead of Manticore).
 - Array growth, shallow array copies and object clones copy their payload eight bytes at a time instead of byte by byte (array −35 %).

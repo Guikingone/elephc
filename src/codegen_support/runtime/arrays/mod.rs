@@ -118,6 +118,7 @@ mod hash_fnv1a;
 mod hash_free_deep;
 mod array_fetch_dim_w;
 mod hash_add_int;
+mod int_div_checked;
 mod hash_get;
 mod hash_grow;
 mod hash_ref_element;
@@ -390,6 +391,7 @@ pub use hash_free_deep::emit_hash_free_deep;
 /// Emit deep hash free helper.
 pub use array_fetch_dim_w::emit_array_fetch_dim_w;
 pub use hash_add_int::emit_hash_add_int;
+pub use int_div_checked::emit_int_div_checked;
 pub use hash_get::emit_hash_get;
 /// Emit hash get helper.
 pub use hash_grow::emit_hash_grow;

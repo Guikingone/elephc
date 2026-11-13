@@ -345,8 +345,202 @@ fn lower_numeric_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let rhs = lower_expr(ctx, right);
+    // `1.0 / ($n * ($n + 1) / 2 + $i + 1)`: an int arithmetic tree containing `/` is `int|float`
+    // and would box every intermediate; when the other operand is a float, only its float value
+    // matters, so compute it speculatively in float (see `lower_int_tree_as_float`).
+    let rhs = if lhs.ir_type == IrType::F64 && int_tree_with_division(right) {
+        lower_int_tree_as_float(ctx, right)
+    } else {
+        lower_expr(ctx, right)
+    };
     lower_numeric_binary_values(ctx, left, op, right, expr, lhs, rhs)
+}
+
+/// Returns whether `expr` is a `+`/`-`/`*`/`/` tree containing at least one `/`.
+fn int_tree_with_division(expr: &Expr) -> bool {
+    fn walk(expr: &Expr, has_div: &mut bool) -> bool {
+        match &expr.kind {
+            ExprKind::BinaryOp { left, op, right }
+                if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) =>
+            {
+                if matches!(op, BinOp::Div) {
+                    *has_div = true;
+                }
+                walk(left, has_div) && walk(right, has_div)
+            }
+            _ => true,
+        }
+    }
+    let mut has_div = false;
+    matches!(&expr.kind, ExprKind::BinaryOp { .. }) && walk(expr, &mut has_div) && has_div
+}
+
+/// Collects the maximal non-arithmetic subexpressions of a `+ - * /` tree in evaluation order.
+fn int_tree_leaves<'a>(expr: &'a Expr, leaves: &mut Vec<&'a Expr>) {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) =>
+        {
+            int_tree_leaves(left, leaves);
+            int_tree_leaves(right, leaves);
+        }
+        _ => leaves.push(expr),
+    }
+}
+
+/// Bound on `|tree|` when every leaf satisfies `|leaf| <= bound` (division never grows it: the
+/// divisor of a non-throwing division is at least 1 in magnitude).
+fn int_tree_bound(expr: &Expr, bound: f64) -> f64 {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) =>
+        {
+            let (l, r) = (int_tree_bound(left, bound), int_tree_bound(right, bound));
+            match op {
+                BinOp::Add | BinOp::Sub => l + r,
+                BinOp::Mul => l * r,
+                _ => l,
+            }
+        }
+        _ => bound,
+    }
+}
+
+/// Lowers an integer `+ - * /` tree whose value is only needed as a float.
+///
+/// Each leaf is evaluated exactly once. When every leaf is a native int no larger than a bound
+/// chosen so that no intermediate value of the tree can reach 2^53, every PHP int result is
+/// exactly representable as a double and every exact `int / int` quotient is computed exactly
+/// by floating-point division, so evaluating the tree in floating point yields exactly
+/// `(float)` of the PHP result. Otherwise (a larger leaf, or a non-int leaf) the ordinary
+/// `int|float` evaluation runs on the already evaluated leaves and is converted to float.
+fn lower_int_tree_as_float(ctx: &mut LoweringContext<'_, '_>, tree: &Expr) -> LoweredValue {
+    let mut leaf_exprs = Vec::new();
+    int_tree_leaves(tree, &mut leaf_exprs);
+    let leaves: Vec<LoweredValue> = leaf_exprs.iter().map(|leaf| lower_expr(ctx, leaf)).collect();
+    let all_int = leaves
+        .iter()
+        .all(|leaf| leaf.ir_type == IrType::I64 && ctx.builder.value_php_type(leaf.value) == PhpType::Int);
+    let mut bound_bits = 52;
+    while bound_bits > 0 && int_tree_bound(tree, 2f64.powi(bound_bits)) > 2f64.powi(53) {
+        bound_bits -= 1;
+    }
+    if !all_int || bound_bits < 2 {
+        let mut next = 0;
+        let value = lower_tree_from_leaves(ctx, tree, &leaves, &mut next);
+        return coerce_to_float(ctx, value, tree);
+    }
+    let span = Some(tree.span);
+    let bound = 1i64 << bound_bits;
+    // |v| <= bound  <=>  -bound <= v && v <= bound, for every leaf.
+    let mut ok: Option<LoweredValue> = None;
+    let mut guarded: Vec<crate::ir::ValueId> = Vec::new();
+    for (leaf, leaf_expr) in leaves.iter().zip(&leaf_exprs) {
+        // Literal leaves are checked statically; a value used twice is guarded once.
+        if let ExprKind::IntLiteral(n) = &leaf_expr.kind {
+            if n.unsigned_abs() <= bound as u64 {
+                continue;
+            }
+        }
+        if guarded.contains(&leaf.value) {
+            continue;
+        }
+        guarded.push(leaf.value);
+        let lo = lower_int_literal(ctx, -bound, tree);
+        let hi = lower_int_literal(ctx, bound, tree);
+        let ge = ctx.emit_value(Op::ICmp, vec![leaf.value, lo.value], Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Sge)), PhpType::Bool, Op::ICmp.default_effects(), span);
+        let le = ctx.emit_value(Op::ICmp, vec![leaf.value, hi.value], Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Sle)), PhpType::Bool, Op::ICmp.default_effects(), span);
+        let both = ctx.emit_value(Op::IBitAnd, vec![ge.value, le.value], None, PhpType::Bool, Op::IBitAnd.default_effects(), span);
+        ok = Some(match ok {
+            None => both,
+            Some(prev) => ctx.emit_value(Op::IBitAnd, vec![prev.value, both.value], None, PhpType::Bool, Op::IBitAnd.default_effects(), span),
+        });
+    }
+    let ok = match ok {
+        Some(ok) => ok,
+        // Every leaf is a small literal: the fast path always applies.
+        None => lower_bool_literal(ctx, true, tree),
+    };
+    let fast = ctx.builder.create_named_block("int_tree_float.fast", Vec::new());
+    let slow = ctx.builder.create_named_block("int_tree_float.slow", Vec::new());
+    let merge = ctx.builder.create_named_block("int_tree_float.merge", vec![(IrType::F64, PhpType::Float)]);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: ok.value,
+        then_target: fast,
+        then_args: Vec::new(),
+        else_target: slow,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(fast);
+    let float_leaves: Vec<LoweredValue> = leaves
+        .iter()
+        .map(|leaf| ctx.emit_value(Op::IToF, vec![leaf.value], None, PhpType::Float, Op::IToF.default_effects(), span))
+        .collect();
+    let mut next = 0;
+    let fast_value = float_tree_from_leaves(ctx, tree, &float_leaves, &mut next);
+    ctx.builder.terminate(Terminator::Br { target: merge, args: vec![fast_value.value] });
+
+    ctx.builder.position_at_end(slow);
+    let mut next = 0;
+    let slow_value = lower_tree_from_leaves(ctx, tree, &leaves, &mut next);
+    let slow_value = coerce_to_float(ctx, slow_value, tree);
+    ctx.builder.terminate(Terminator::Br { target: merge, args: vec![slow_value.value] });
+
+    ctx.builder.position_at_end(merge);
+    LoweredValue { value: ctx.builder.block_param(merge, 0), ir_type: IrType::F64 }
+}
+
+/// Recomputes a `+ - * /` tree with the ordinary PHP semantics from pre-evaluated leaves.
+fn lower_tree_from_leaves(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    leaves: &[LoweredValue],
+    next: &mut usize,
+) -> LoweredValue {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) =>
+        {
+            let lhs = lower_tree_from_leaves(ctx, left, leaves, next);
+            let rhs = lower_tree_from_leaves(ctx, right, leaves, next);
+            lower_numeric_binary_values(ctx, left, op, right, expr, lhs, rhs)
+        }
+        _ => {
+            let leaf = leaves[*next];
+            *next += 1;
+            leaf
+        }
+    }
+}
+
+/// Computes a `+ - * /` tree in floating point from float leaves (`/` keeps its zero check).
+fn float_tree_from_leaves(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    leaves: &[LoweredValue],
+    next: &mut usize,
+) -> LoweredValue {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) =>
+        {
+            let lhs = float_tree_from_leaves(ctx, left, leaves, next);
+            let rhs = float_tree_from_leaves(ctx, right, leaves, next);
+            let fop = match op {
+                BinOp::Add => Op::FAdd,
+                BinOp::Sub => Op::FSub,
+                BinOp::Mul => Op::FMul,
+                _ => Op::FDiv,
+            };
+            ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span))
+        }
+        _ => {
+            let leaf = leaves[*next];
+            *next += 1;
+            leaf
+        }
+    }
 }
 
 /// Result of lowering `left op right` as the value of a `return` in an `int` function.
@@ -632,6 +826,36 @@ fn lower_numeric_binary_values(
                     checked_op.default_effects(),
                     Some(expr.span),
                 );
+            }
+        }
+        if matches!(op, BinOp::Div)
+            && ctx.builder.value_php_type(lhs.value) == PhpType::Int
+            && ctx.builder.value_php_type(rhs.value) == PhpType::Int
+        {
+            // `int / int`: an int when exact, a float otherwise (decided at runtime unless both
+            // operands are literals), matching the checker's `int_division_type`.
+            match crate::types::int_division_type(left, right) {
+                PhpType::Mixed => {
+                    return ctx.emit_value(
+                        Op::ICheckedDiv,
+                        vec![lhs.value, rhs.value],
+                        None,
+                        PhpType::Mixed,
+                        Op::ICheckedDiv.default_effects(),
+                        Some(expr.span),
+                    );
+                }
+                PhpType::Int => {
+                    return ctx.emit_value(
+                        Op::ISDiv,
+                        vec![lhs.value, rhs.value],
+                        None,
+                        PhpType::Int,
+                        Op::ISDiv.default_effects(),
+                        Some(expr.span),
+                    );
+                }
+                _ => {}
             }
         }
         let iop = match op {
@@ -16484,6 +16708,7 @@ fn call_result_may_alias_arg(
                 | Op::ICheckedAdd
                 | Op::ICheckedSub
                 | Op::ICheckedMul
+                | Op::ICheckedDiv
         )
     ) {
         return false;

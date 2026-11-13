@@ -156,6 +156,9 @@ pub(super) fn lower_float_binop(
     let rhs = expect_operand(inst, 1)?;
     require_float(ctx.value_php_type(lhs)?, inst)?;
     require_float(ctx.value_php_type(rhs)?, inst)?;
+    if aarch64_mnemonic == "fdiv" && !super::arithmetic::value_is_nonzero_constant(ctx, rhs) {
+        emit_float_zero_divisor_throw(ctx, rhs)?;
+    }
     let dst_reg = inst.result.and_then(|result| ctx.allocation.register_of(result));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -213,6 +216,32 @@ fn float_operand_reg(
 }
 
 /// Returns an x86_64 operand naming a float value: its register or its frame slot.
+/// Emits `if ($divisor == 0.0) throw new DivisionByZeroError("Division by zero")` (both signed
+/// zeros) without disturbing allocated registers on the normal path.
+fn emit_float_zero_divisor_throw(ctx: &mut FunctionContext<'_>, divisor: crate::ir::ValueId) -> Result<()> {
+    let ok = ctx.next_label("fdiv_nonzero");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let reg = float_operand_reg(ctx, divisor, "d0")?;
+            ctx.emitter.instruction(&format!("fcmp {}, #0.0", reg));            // compare the divisor with zero (-0.0 compares equal)
+            ctx.emitter.instruction(&format!("b.ne {}", ok));                   // a non-zero (or NaN) divisor divides normally
+        }
+        Arch::X86_64 => {
+            let operand = x86_float_operand(ctx, divisor)?;
+            if operand.starts_with("xmm") {
+                ctx.emitter.instruction(&format!("movq r11, {}", operand));     // copy the divisor bits into a scratch register
+            } else {
+                ctx.emitter.instruction(&format!("mov r11, {}", operand));      // load the divisor bits into a scratch register
+            }
+            ctx.emitter.instruction("shl r11, 1");                              // drop the sign bit: zero bits mean +0.0 or -0.0
+            ctx.emitter.instruction(&format!("jnz {}", ok));                    // a non-zero divisor divides normally
+        }
+    }
+    super::exceptions::emit_division_by_zero_error(ctx, "Division by zero");
+    ctx.emitter.label(&ok);
+    Ok(())
+}
+
 fn x86_float_operand(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<String> {
     if let Some(reg) = ctx.allocation.register_of(value) {
         return Ok(reg.to_string());

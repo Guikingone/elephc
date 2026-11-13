@@ -446,3 +446,30 @@ foreach ([[3, 4], [PHP_INT_MAX, 1], [-1, PHP_INT_MAX], [PHP_INT_MIN, 1], [PHP_IN
 "#);
     assert_eq!(out, "TE m(): Return value must be of type int, float returned\nTE a(): Return value must be of type int, float returned\nTE {closure}(): Return value must be of type int, float returned\nTE m(): Return value must be of type int, float returned\n12\n9223372036854775807\n-9223372036854775807\n-9223372036854775808\nTE\n-9223372036854775808\nTE\nTE\n0\n");
 }
+
+/// PHP `/` on two ints is an int when the division is exact and a float otherwise; `/`, `%` and
+/// `intdiv()` by zero throw a catchable `DivisionByZeroError` (also inside a `try` in the same
+/// function); `PHP_INT_MIN % -1` is 0; and a float context computes an int tree speculatively in
+/// floating point with the exact result.
+#[test]
+fn test_int_division_semantics_and_division_by_zero_errors() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function d(int $x, int $y) { return $x / $y; }
+function m(int $x, int $y) { return $x % $y; }
+function A(int $i, int $j): float { $n = $i + $j; return 1.0 / ($n * ($n + 1) / 2 + $i + 1); }
+$a = 10; $b = 2;
+var_dump($a / $b, 10 / 4, 7 / 7, -9 / 3, PHP_INT_MIN / -1, 6 / 3 * 2, d(12, 4), d(12, 5), 9.0 / 3, m(PHP_INT_MIN, -1));
+$s = 0; for ($k = 1; $k <= 6; $k++) { $s += 12 / $k; } var_dump($s);
+printf("%.17g %.17g\n", A(3, 4), A(0, 0)); var_dump(2.0 + (PHP_INT_MAX / 3));
+foreach ([0, 2] as $z) {
+    try { var_dump(1 / $z); } catch (DivisionByZeroError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    try { var_dump(1.5 / $z); } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; }
+    try { var_dump(7 % $z); } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; }
+    try { var_dump(intdiv(7, $z)); } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; }
+    try { var_dump(1.0 * (1 / $z + 2)); } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; }
+}
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(5)\nfloat(2.5)\nint(1)\nint(-3)\nfloat(9.223372036854776E+18)\nint(4)\nint(3)\nfloat(2.4)\nfloat(3)\nint(0)\nfloat(29.4)\n0.03125 1\nfloat(3.0744573456182584E+18)\nDivisionByZeroError: Division by zero\nDivision by zero\nModulo by zero\nDivision by zero\nDivision by zero\nfloat(0.5)\nfloat(0.75)\nint(1)\nint(3)\nfloat(2.5)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

@@ -330,7 +330,9 @@ fn estimate_binary(ctx: &LoweringContext<'_, '_>, left: &Expr, op: &BinOp, right
             }
             Some(numeric_binary_result(ctx, left, right))
         }
-        BinOp::Div | BinOp::Pow => Some(PhpType::Float),
+        // `int / int` is int or float at runtime: only a float operand makes `/` a known float.
+        BinOp::Div => (numeric_binary_result(ctx, left, right) == PhpType::Float).then_some(PhpType::Float),
+        BinOp::Pow => Some(PhpType::Float),
         BinOp::Eq
         | BinOp::NotEq
         | BinOp::StrictEq

@@ -137,6 +137,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
         Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
+        Op::ICheckedDiv => arithmetic::lower_int_checked_div(ctx, &inst),
         Op::IDiv => arithmetic::lower_int_div_to_float(ctx, &inst),
         Op::ISMod => arithmetic::lower_int_mod(ctx, &inst),
         Op::INeg => arithmetic::lower_int_unary(ctx, &inst, "neg", "neg"),
@@ -8713,6 +8714,25 @@ fn store_value_to_ref_cell_as(
     // store below. TaggedScalar carries its tag in a dedicated register (not a runtime
     // value-tag) and Float lives in the float result register, so both keep the existing
     // branch for the rare adopted alias of those types.
+    // A float stored into an adopted cell also goes through `__rt_ref_cell_store`, so the cell's
+    // inner tag follows the new value (a raw float with tag 2, or a Mixed box with tag 7 for a
+    // `mixed` alias); writing only the value word left a stale tag that readers misinterpreted.
+    if ctx.is_adopted_ref_cell_local(slot)
+        && source_repr == PhpType::Float
+        && !matches!(target_ty, PhpType::TaggedScalar)
+    {
+        if target_ty == PhpType::Mixed {
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
+            let tag = crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
+            return emit_ref_cell_store_call(ctx, slot, tag, PhpType::Mixed);
+        }
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("fmov x0, d0"),            // float bits as the cell's value word
+            Arch::X86_64 => ctx.emitter.instruction("movq rax, xmm0"),          // float bits as the cell's value word
+        }
+        let tag = crate::codegen::runtime_value_tag(&PhpType::Float) as i64;
+        return emit_ref_cell_store_call(ctx, slot, tag, PhpType::Float);
+    }
     if ctx.is_adopted_ref_cell_local(slot)
         && !matches!(source_repr, PhpType::TaggedScalar | PhpType::Float)
         && !matches!(target_ty, PhpType::TaggedScalar)

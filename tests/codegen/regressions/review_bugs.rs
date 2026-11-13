@@ -257,3 +257,30 @@ run($argc);
     assert_eq!(out.stdout, "9\n1\n93\n121\n1,2,3\n3,1,2\n1\n2\n51\n1\n2\n1 2\n2\n3\n3\n7 1\n15\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// Assigning through a reference to an element of an int/float-typed array (`$r = &$h["a"]; $r = 5;`)
+/// inside a function is read back correctly: the typed element read unboxes a `mixed` value
+/// behind the reference, and a float store updates the reference's inner tag.
+#[test]
+fn test_reference_to_typed_array_element_reads_back_assigned_value() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function run() {
+    $h = ["a" => 1, "b" => 2];
+    $r = &$h["a"];
+    $r = 5;
+    echo $h["a"], " ", $h["b"], "\n";
+    $l = [1, 2];
+    $q = &$l[0];
+    $q = 9;
+    echo $l[0], $l[1], "\n";
+    $f = ["x" => 1.5];
+    $p = &$f["x"];
+    $p = 2.25;
+    echo $f["x"], "\n";
+}
+run();
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5 2\n92\n2.25\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

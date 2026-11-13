@@ -239,6 +239,14 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
+        // `/` and `%` throw `DivisionByZeroError` unless the divisor is a non-zero literal.
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::Div | crate::parser::ast::BinOp::Mod)
+                && !matches!(&right.kind, ExprKind::IntLiteral(n) if *n != 0)
+                && !matches!(&right.kind, ExprKind::FloatLiteral(f) if *f != 0.0) =>
+        {
+            expr_effect(left).combine(expr_effect(right)).with_may_throw()
+        }
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
         ExprKind::InstanceOf { value, target } => {
             expr_effect(value).combine(instanceof_target_effect(target))

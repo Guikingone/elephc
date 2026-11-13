@@ -52,7 +52,7 @@ use crate::types::{
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_storage::{loop_carried_storage_types, DataKeyLocals};
-pub(crate) use inference::{closure_body_rebinds_scope_only, closure_body_uses_this};
+pub(crate) use inference::{closure_body_rebinds_scope_only, closure_body_uses_this, int_division_type};
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;

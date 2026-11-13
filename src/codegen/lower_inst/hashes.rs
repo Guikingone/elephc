@@ -1398,6 +1398,7 @@ fn emit_hash_get_success_aarch64(
     // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the current
     // inner value + inner tag so every consumer reads through the reference (H2).
     abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
+    emit_unbox_referenced_scalar_aarch64(ctx, value_ty);
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
@@ -1438,6 +1439,7 @@ fn emit_hash_get_success_x86_64(
     // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the current
     // inner value + inner tag so every consumer reads through the reference (H2).
     abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
+    emit_unbox_referenced_scalar_x86_64(ctx, value_ty);
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result
@@ -1470,6 +1472,54 @@ fn emit_hash_get_success_x86_64(
         }
     }
     Ok(())
+}
+
+/// Returns the `__rt_mixed_cast_*` helper converting a boxed value to a scalar hash slot type.
+fn referenced_scalar_cast_helper(value_ty: &PhpType) -> Option<&'static str> {
+    match value_ty {
+        PhpType::Int => Some("__rt_mixed_cast_int"),
+        PhpType::Bool => Some("__rt_mixed_cast_bool"),
+        PhpType::Float => Some("__rt_mixed_cast_float"),
+        _ => None,
+    }
+}
+
+/// A reference cell shared with a `mixed` local (`$r = &$h["k"]; $r = 5;`) can hold a boxed
+/// Mixed value (tag 7) even in a scalar-typed hash: convert it to the slot's scalar so the
+/// typed read below sees a raw payload (AArch64: x1 = payload, x3 = tag).
+fn emit_unbox_referenced_scalar_aarch64(ctx: &mut FunctionContext<'_>, value_ty: &PhpType) {
+    let Some(helper) = referenced_scalar_cast_helper(value_ty) else {
+        return;
+    };
+    let raw = ctx.next_label("hash_get_ref_raw");
+    ctx.emitter.instruction("cmp x3, #7");                                      // a boxed Mixed value behind the reference?
+    ctx.emitter.instruction(&format!("b.ne {}", raw));                          // raw payloads are read directly
+    ctx.emitter.instruction("mov x0, x1");                                      // the box is the cast helper's argument
+    abi::emit_call_label(ctx.emitter, helper);
+    if matches!(value_ty, PhpType::Float) {
+        ctx.emitter.instruction("fmov x1, d0");                                 // float bits back in the payload register
+    } else {
+        ctx.emitter.instruction("mov x1, x0");                                  // converted scalar back in the payload register
+    }
+    ctx.emitter.label(&raw);
+}
+
+/// x86_64 variant of `emit_unbox_referenced_scalar_aarch64` (rdi = payload, rcx = tag).
+fn emit_unbox_referenced_scalar_x86_64(ctx: &mut FunctionContext<'_>, value_ty: &PhpType) {
+    let Some(helper) = referenced_scalar_cast_helper(value_ty) else {
+        return;
+    };
+    let raw = ctx.next_label("hash_get_ref_raw");
+    ctx.emitter.instruction("cmp rcx, 7");                                      // a boxed Mixed value behind the reference?
+    ctx.emitter.instruction(&format!("jne {}", raw));                           // raw payloads are read directly
+    ctx.emitter.instruction("mov rax, rdi");                                    // the x86_64 cast helpers take the box in rax
+    abi::emit_call_label(ctx.emitter, helper);
+    if matches!(value_ty, PhpType::Float) {
+        ctx.emitter.instruction("movq rdi, xmm0");                              // float bits back in the payload register
+    } else {
+        ctx.emitter.instruction("mov rdi, rax");                                // converted scalar back in the payload register
+    }
+    ctx.emitter.label(&raw);
 }
 
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.

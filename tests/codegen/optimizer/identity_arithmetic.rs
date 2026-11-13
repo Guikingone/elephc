@@ -58,8 +58,9 @@ fn test_identity_fold_preserves_operand_side_effects() {
 /// must report a float, exactly as the unoptimized path does.
 #[test]
 fn test_identity_div_one_keeps_float_type() {
-    let out = compile_and_run("<?php var_dump($argc / 1);");
-    assert_eq!(out, "float(1)\n");
+    // PHP: `int / int` is an int when exact, so `$argc / 1` is int(1); a float dividend stays float.
+    let out = compile_and_run("<?php var_dump($argc / 1, ($argc + 0.5) / 1);");
+    assert_eq!(out, "int(1)\nfloat(1.5)\n");
 }
 
 /// Regression (the dangerous manifestation): a folded `$x / 1` feeding a float

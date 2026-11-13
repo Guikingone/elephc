@@ -105,7 +105,7 @@ fn try_fold_numeric_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprK
 
 /// Evaluates a numeric binary operator with two integer operands using checked arithmetic.
 /// On overflow for add/sub/mul, delegates to `fold_int_overflow_to_float` to produce a float result.
-/// Division always returns a float; power returns a float if finite.
+/// Division is an int when exact and a float otherwise; power returns a float if finite.
 fn try_fold_int_numeric_binop(op: &BinOp, left: i64, right: i64) -> Option<ExprKind> {
     match op {
         BinOp::Add => left
@@ -123,6 +123,9 @@ fn try_fold_int_numeric_binop(op: &BinOp, left: i64, right: i64) -> Option<ExprK
         BinOp::Div => {
             if right == 0 {
                 None
+            } else if left.checked_rem(right) == Some(0) && left.checked_div(right).is_some() {
+                // PHP's `/` on two ints is an int when the division is exact (`10 / 2` → 5).
+                left.checked_div(right).map(ExprKind::IntLiteral)
             } else {
                 Some(ExprKind::FloatLiteral(left as f64 / right as f64))
             }

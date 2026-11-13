@@ -65,9 +65,22 @@ fn is_user_call_op(op: Op) -> bool {
     matches!(op, Op::Call | Op::FunctionVariantCall)
 }
 
-/// Count non-Nop instructions for the size threshold.
+/// Count the instructions that make up the callee's hot code for the size threshold:
+/// `nop`s, constants (rematerialized as immediates) and cold fallback blocks (named
+/// `*.slow`, e.g. the generic path of a speculative fast path) are not counted.
 fn count_non_nop_instructions(func: &Function) -> usize {
-    func.instructions.iter().filter(|i| i.op != Op::Nop).count()
+    func.blocks
+        .iter()
+        .filter(|block| !block.name.ends_with(".slow"))
+        .flat_map(|block| block.instructions.iter())
+        .filter_map(|id| func.instruction(*id))
+        .filter(|inst| {
+            !matches!(
+                inst.op,
+                Op::Nop | Op::ConstI64 | Op::ConstF64 | Op::ConstBool | Op::ConstNull
+            )
+        })
+        .count()
 }
 
 /// Resolves a call-site instruction's PHP callee name without borrowing the whole
@@ -419,8 +432,12 @@ fn call_args_bind_directly(host: &Function, call_inst: &Instruction, callee: &Fu
         .iter()
         .zip(&callee.params)
         .all(|(operand, param)| {
-            host.value(*operand)
-                .is_some_and(|value| value.ir_type == param.ir_type)
+            // The PHP representation must match too: an `array<mixed>` of boxes bound into an
+            // `array<int>` parameter slot would be read as raw ints (a real call converts it).
+            host.value(*operand).is_some_and(|value| {
+                value.ir_type == param.ir_type
+                    && value.php_type.codegen_repr() == param.php_type.codegen_repr()
+            })
         })
 }
 

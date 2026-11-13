@@ -175,12 +175,14 @@ fn test_modulo_normal() {
     assert_eq!(out, "0");
 }
 
-/// Verifies that modulo by zero returns 0 (no crash).
+/// Verifies that modulo by zero throws a catchable `DivisionByZeroError` like PHP (no crash).
 /// Regression for issue #23 (modulo by zero).
 #[test]
 fn test_modulo_by_zero() {
-    let out = compile_and_run("<?php echo 5 % 0;");
-    assert_eq!(out, "0");
+    let out = compile_and_run(
+        "<?php try { echo 5 % 0; } catch (DivisionByZeroError $e) { echo get_class($e), ': ', $e->getMessage(); }",
+    );
+    assert_eq!(out, "DivisionByZeroError: Modulo by zero");
 }
 
 /// Verifies normal modulo remainder: `7 % 3` returns 1.

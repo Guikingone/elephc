@@ -368,6 +368,9 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    /// PHP `/` on two ints: a boxed int when the division is exact, else a boxed float.
+    /// Throws `DivisionByZeroError` for a zero divisor.
+    ICheckedDiv,
     IDiv,
     ISDiv,
     ISMod,
@@ -751,6 +754,7 @@ impl Op {
             | Nop => E::PURE,
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
             ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
+            ICheckedDiv => E::ALLOC_HEAP | E::READS_HEAP | E::MAY_THROW,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
@@ -1034,6 +1038,7 @@ impl Op {
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedDiv => "ichecked_div",
             IDiv => "idiv",
             ISDiv => "isdiv",
             ISMod => "ismod",

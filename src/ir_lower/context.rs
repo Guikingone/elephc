@@ -2185,6 +2185,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
+                    | Op::ICheckedDiv
                     | Op::MixedCastString
                     | Op::StrConcat
                     | Op::StrBitwise
@@ -3001,6 +3002,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
+                    | Op::ICheckedDiv
             )
         ) {
             return false;

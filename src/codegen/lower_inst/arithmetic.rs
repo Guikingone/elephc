@@ -321,6 +321,31 @@ pub(super) fn lower_int_checked_binop(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `ICheckedDiv`: throws `DivisionByZeroError` for a zero divisor, then calls
+/// `__rt_int_div_checked`, which boxes an exact quotient as int and any other as float.
+pub(super) fn lower_int_checked_div(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_reg = abi::int_result_reg(ctx.emitter);
+    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, lhs, lhs_reg, inst)?;
+    load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    if !value_is_nonzero_constant(ctx, rhs) {
+        emit_int_zero_divisor_throw(ctx, rhs_reg, "Division by zero");
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x1, {}", rhs_reg));           // divisor in the second helper argument register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rdi, {}", lhs_reg));          // dividend in the first SysV argument register
+            ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // divisor in the second SysV argument register
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_int_div_checked");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a checked integer add/sub/mul whose boxed `int|float` result only feeds a cast back
 /// to `int` (`($a + $b) & 0xFFFF`), writing the cast's result directly.
 ///
@@ -408,32 +433,71 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
     load_integer_operand(ctx, lhs, result_reg, inst)?;
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
-    let zero_label = ctx.next_label("mod_zero");
+    if !value_is_nonzero_constant(ctx, rhs) {
+        emit_int_zero_divisor_throw(ctx, rhs_reg, "Modulo by zero");
+    }
+    let minus_one_label = ctx.next_label("mod_minus_one");
     let done_label = ctx.next_label("mod_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let quotient_reg = abi::tertiary_scratch_reg(ctx.emitter);
-            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // branch to zero-divisor guard when modulo divisor is zero
+            ctx.emitter.instruction(&format!("cmn {}, #1", rhs_reg));           // is the divisor -1?
+            ctx.emitter.instruction(&format!("b.eq {}", minus_one_label));      // x % -1 is 0 (and PHP_INT_MIN % -1 must not trap)
             ctx.emitter.instruction(&format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)); // compute signed quotient for the modulo operation
             ctx.emitter.instruction(&format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)); // compute left - quotient * right as the remainder
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the modulo zero fallback after a normal remainder
-            ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // return zero for modulo by zero
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the -1 shortcut
+            ctx.emitter.label(&minus_one_label);
+            ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // any integer modulo -1 is zero
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the modulo divisor is zero
-            ctx.emitter.instruction(&format!("je {}", zero_label));             // branch to zero-divisor guard when modulo divisor is zero
+            ctx.emitter.instruction(&format!("cmp {}, -1", rhs_reg));           // is the divisor -1?
+            ctx.emitter.instruction(&format!("je {}", minus_one_label));        // x % -1 is 0 (and PHP_INT_MIN % -1 must not fault in idiv)
             ctx.emitter.instruction("cqo");                                     // sign-extend the dividend before signed division
             ctx.emitter.instruction(&format!("idiv {}", rhs_reg));              // divide signed integers with quotient in rax and remainder in rdx
             ctx.emitter.instruction(&format!("mov {}, rdx", result_reg));       // move the signed remainder into the integer result register
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the modulo zero fallback after a normal remainder
-            ctx.emitter.label(&zero_label);
-            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // return zero for modulo by zero
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the -1 shortcut
+            ctx.emitter.label(&minus_one_label);
+            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // any integer modulo -1 is zero
             ctx.emitter.label(&done_label);
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns whether `value` is a constant that is known not to be zero (no division-by-zero
+/// check needed).
+pub(super) fn value_is_nonzero_constant(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
+    let Some(crate::ir::ValueDef::Instruction { inst, .. }) = ctx.function.value(value).map(|v| v.def)
+    else {
+        return false;
+    };
+    let Some(inst) = ctx.function.instruction(inst) else {
+        return false;
+    };
+    match (inst.op, inst.immediate.as_ref()) {
+        (crate::ir::Op::ConstI64, Some(Immediate::I64(n))) => *n != 0,
+        (crate::ir::Op::ConstF64, Some(Immediate::F64(f))) => *f != 0.0,
+        _ => false,
+    }
+}
+
+/// Emits `if (divisor == 0) throw new DivisionByZeroError(message)` for an integer divisor
+/// already loaded in `divisor_reg`; the throw never returns, so its helper calls may clobber
+/// any register.
+fn emit_int_zero_divisor_throw(ctx: &mut FunctionContext<'_>, divisor_reg: &str, message: &str) {
+    let ok = ctx.next_label("div_nonzero");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", divisor_reg, ok));  // a non-zero divisor divides normally
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", divisor_reg, divisor_reg)); // is the divisor zero?
+            ctx.emitter.instruction(&format!("jnz {}", ok));                    // a non-zero divisor divides normally
+        }
+    }
+    super::exceptions::emit_division_by_zero_error(ctx, message);
+    ctx.emitter.label(&ok);
 }
 
 /// Lowers PHP `/` for integer operands by promoting both sides to floating point.
@@ -447,6 +511,9 @@ pub(super) fn lower_int_div_to_float(
     let rhs_reg = abi::tertiary_scratch_reg(ctx.emitter);
     load_integer_operand(ctx, lhs, lhs_reg, inst)?;
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    if !value_is_nonzero_constant(ctx, rhs) {
+        emit_int_zero_divisor_throw(ctx, rhs_reg, "Division by zero");
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("scvtf d0, {}", lhs_reg));         // promote the integer dividend into the float result register
