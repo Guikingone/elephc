@@ -237,6 +237,11 @@ fn try_fold(
             Some((Const::Float(fold_float_binop(inst.op, lhs, rhs)), TypeNarrowing::None))
         }
         Op::FNeg => Some((Const::Float(-operand(0)?.as_f64()?), TypeNarrowing::None)),
+        // -- int to float (cvtsi2sd / scvtf round to nearest, like `as f64`) --
+        Op::IToF => match operand(0)? {
+            Const::Int(value) => Some((Const::Float(value as f64), TypeNarrowing::None)),
+            _ => None,
+        },
         // -- signed integer comparison --
         Op::ICmp => {
             let lhs = operand(0)?.as_i64()?;

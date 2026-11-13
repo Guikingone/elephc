@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Inlined scalar parameters stay ordinary locals so mem2reg promotes them to registers, `int → float` conversions of constants fold, and array element reads no longer keep a `concat_reset` alive (their warning helpers restore the scratch offset): `spectralnorm` runs 20 % fewer instructions.
+- Fixed a leak: `substr()` of an owning temporary (`$l[$i] = substr($l[$i], 0, 10)`) now releases the temporary (its result is declared as aliasing the subject).
 - The integer-range analysis no longer assumes that calling a variable which only ever holds closure literals (`$add = fn(...) => ...; $add($i)`) can modify its arguments by reference, unless some closure, first-class callable or string-named callable binds a parameter by reference; loop counters passed to such calls stay native ints again (`closures` benchmark 0.45 s → 0.13 s).
 - Fixed a leak introduced by the previous aliasing fix: only builtins that declare which argument their result slices get their result copied.
 - Fixed (use-after-free): `$s[$i]` on a temporary string (`ord($arr[$i][0])`) returned a slice of a string released before it was read; the selected byte is now copied into concat scratch.

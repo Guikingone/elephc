@@ -985,6 +985,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::Implode
         ) {
             BuiltinResultOwnership::Independent
+        } else if matches!(self, RuntimeFnId::Substr) {
+            // A slice of the subject string (or a fresh scratch string).
+            BuiltinResultOwnership::Aliases(&[0])
         } else {
             BuiltinResultOwnership::MayAliasArguments
         }

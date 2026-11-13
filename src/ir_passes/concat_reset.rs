@@ -51,7 +51,17 @@ fn dirty_effects(effects: Effects) -> bool {
 /// without declaring `alloc_concat`, and any non-trivial producer of a string may return
 /// one that lives in the scratch area. Both are treated as dirtying.
 fn dirties_scratch(function: &Function, inst: &Instruction) -> bool {
-    if dirty_effects(inst.effects) || inst.op.name().contains("call") {
+    // Element reads only warn about undefined keys / null containers; those warning helpers
+    // restore the scratch offset after formatting the key, so the warning leaves it clean.
+    let effects = if matches!(
+        inst.op,
+        Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent
+    ) {
+        inst.effects - Effects::MAY_WARN
+    } else {
+        inst.effects
+    };
+    if dirty_effects(effects) || inst.op.name().contains("call") {
         return true;
     }
     let produces_string = inst

@@ -634,7 +634,11 @@ fn transplant_callee_body(
 
     // Clone locals first.
     for local in &callee.locals {
-        let kind = if excluded_from_cleanup.contains(&local.id) {
+        // Scalar slots need no cleanup at all: keeping them `PhpLocal` lets mem2reg promote
+        // the spliced parameters to registers.
+        let kind = if excluded_from_cleanup.contains(&local.id)
+            && local.ir_type.is_refcounted_storage()
+        {
             LocalKind::BorrowedTemp
         } else {
             local.kind
