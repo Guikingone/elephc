@@ -458,7 +458,11 @@ fn infer_array_literal_element_storage(
         | ExprKind::ConstRef(_) => infer_value(item, env)
             .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(item))
             .codegen_repr(),
-        _ => crate::types::checker::infer_expr_type_syntactic(item).codegen_repr(),
+        // Arithmetic, casts and other expressions read locals (and integer-range proofs):
+        // the syntactic fallback has no environment and would see `$i + 1` as `mixed`.
+        _ => infer_value(item, env)
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(item))
+            .codegen_repr(),
     }
 }
 

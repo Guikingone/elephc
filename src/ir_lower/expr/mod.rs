@@ -9894,6 +9894,31 @@ fn array_literal_element_type_for_ir(
             result_target,
             ..
         } => array_literal_element_type_for_ir(ctx, result_target.as_deref().unwrap_or(value)),
+        // Integer arithmetic the lowering emits as a native op (`int_range` proved `+`/`-`/`*`
+        // overflow-free; `%`, bitwise ops and shifts on ints never overflow) yields an int, so
+        // the literal stays a packed `array<int>` instead of boxing every element.
+        ExprKind::BinaryOp { left, op, right } => {
+            let both_int = array_literal_element_type_for_ir(ctx, left).codegen_repr() == PhpType::Int
+                && array_literal_element_type_for_ir(ctx, right).codegen_repr() == PhpType::Int;
+            let native_int = both_int
+                && match op {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                        crate::int_range::is_proven_binop(op, item.span)
+                    }
+                    BinOp::Mod
+                    | BinOp::BitAnd
+                    | BinOp::BitOr
+                    | BinOp::BitXor
+                    | BinOp::ShiftLeft
+                    | BinOp::ShiftRight => true,
+                    _ => false,
+                };
+            if native_int {
+                PhpType::Int
+            } else {
+                ir_array_storage_type(infer_expr_type_syntactic(item))
+            }
+        }
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }

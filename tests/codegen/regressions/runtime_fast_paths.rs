@@ -487,3 +487,17 @@ echo array_reduce([1, 2, 3], fn(int $c, int $x): int => $c * 10 + $x, 0), "\n";
 "#);
     assert_eq!(out, "Array\n(\n    [0] => 9\n    [1] => 1\n    [2] => 16\n    [3] => 1\n    [4] => 25\n    [5] => 81\n    [6] => 4\n    [7] => 36\n)\nArray\n(\n    [0] => A!\n    [1] => BB!\n    [2] => !\n    [3] => DDDD!\n)\nArray\n(\n    [0] => 1\n    [1] => \n    [2] => 1\n    [3] => \n    [4] => 1\n    [5] => 1\n    [6] => \n    [7] => 1\n)\n31\n9\nint(7)\nArray\n(\n    [0] => v9\n    [1] => v3\n    [2] => v12\n    [3] => v3\n    [4] => v15\n    [5] => v27\n    [6] => v6\n    [7] => v18\n)\n5 13\n*,**,***\n7\n123\n");
 }
+
+/// An array literal whose elements are integer arithmetic the lowering proves overflow-free
+/// (`$i + 1` inside a bounded loop, `%`, bitwise ops) builds a packed `array<int>`.
+#[test]
+fn test_array_literal_of_proven_int_arithmetic_is_int_list() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$n = 4 * $argc; $sum = 0;
+for ($i = 0; $i < $n; $i++) { $vec = [$i, $i + 1, $i * 2, $i % 3, $i & 6]; $sum += $vec[1] * 10 + $vec[2] + $vec[3] + $vec[4]; }
+echo $sum, "\n"; var_dump([$n + 1, $n * 2]);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "119\narray(2) {\n  [0]=>\n  int(5)\n  [1]=>\n  int(8)\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

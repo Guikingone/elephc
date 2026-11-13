@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- An array literal whose elements are integer arithmetic proven overflow-free (`[$i, $i + 1, $i % 3]`) is a packed `array<int>` instead of boxing every element as `mixed` (alloc_churn −9 % instructions).
 - Fixed: `return $a * $b` from an `: int` function or closure returned a wrapped/truncated value when the product overflowed instead of raising PHP's `TypeError` ("Return value must be of type int, float returned"); the native multiply keeps its fast path through a new `imul_overflow` EIR op. Closures are named `{closure}` in that message.
 - Fixed review regressions: a string slice (`substr`, `strstr`, `trim`) used as a hash key could be mistaken for an interned literal key and corrupt its source (interned keys are now recognized by identity); `array_map`/`array_filter`/`array_reduce` call direct callbacks through a trampoline that preserves callee-saved registers (a callback building a capturing closure crashed); data-keyed hash promotion only applies to arrays still empty and not bound by reference, and never to a foreach-key write that runs on every iteration (by-reference outputs, in-place rewrites and list builtins on copies regressed). `int|null` hash keys, boxed values stored in a promoted hash, and `max([])`/`min([])` on a literal empty array are supported.
 - Hash key comparison returns early when both keys share the same storage (interned literal keys), skipping the byte scan (assoc_small −5 % instructions).
