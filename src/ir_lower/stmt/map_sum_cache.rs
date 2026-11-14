@@ -46,7 +46,7 @@ fn cache_block(
     let mut index = 0;
     while index < body.len() {
         let original = body[index].clone();
-        if let Some((cached, mapped)) = try_cache_loop(
+        if let Some((cached, mapped, map_call_for_cached)) = try_cache_loop(
             &mut body[index],
             env,
             by_ref_params,
@@ -63,9 +63,16 @@ fn cache_block(
             if used_elsewhere {
                 body[index] = original;
             } else {
-                body.insert(index, cached);
+                let map_stmt = Stmt::new(
+                    StmtKind::Assign {
+                        name: mapped.clone(),
+                        value: map_call_for_cached,
+                    },
+                    cached.span,
+                );
+                body.splice(index..index, [map_stmt, cached]);
                 *counter += 1;
-                index += 1;
+                index += 2;
             }
         } else {
             recurse_blocks(&mut body[index], env, by_ref_params, aliased, counter);
@@ -147,7 +154,7 @@ fn try_cache_loop(
     by_ref_params: &HashSet<String>,
     aliased: &HashSet<String>,
     counter: usize,
-) -> Option<(Stmt, String)> {
+) -> Option<(Stmt, String, Expr)> {
     let StmtKind::For {
         init,
         condition,
@@ -190,14 +197,17 @@ fn try_cache_loop(
             value: Expr::new(
                 ExprKind::FunctionCall {
                     name: Name::unqualified("array_sum"),
-                    args: vec![map_call],
+                    args: vec![Expr::new(
+                        ExprKind::Variable(mapped.clone()),
+                        stmt.span,
+                    )],
                 },
                 stmt.span,
             ),
         },
         stmt.span,
     );
-    Some((cached, mapped))
+    Some((cached, mapped, map_call))
 }
 
 /// Finds the adjacent `$mapped = array_map(...)` and `$sum = ... array_sum($mapped)` pair.
