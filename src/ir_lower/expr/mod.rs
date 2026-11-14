@@ -2728,6 +2728,62 @@ fn lower_inc_dec(
 }
 
 /// Lowers a direct function, builtin, or extern call.
+/// Lowers a `var_dump()` call routed to the elephc-PHP prelude argument by argument: a value
+/// whose static type is a scalar, string, null or object is printed by the native `var_dump`
+/// (exactly what the prelude would do, without boxing it), and anything that may hold an array
+/// goes through `__elephc_var_dump_value`. Several arguments are only split when evaluating them
+/// cannot have side effects (PHP evaluates every argument before printing). Returns `None` to
+/// keep the plain prelude call.
+fn lower_split_var_dump(ctx: &mut LoweringContext<'_, '_>, args: &[Expr], expr: &Expr) -> Option<LoweredValue> {
+    fn plain(arg: &Expr) -> bool {
+        matches!(
+            arg.kind,
+            ExprKind::Variable(_)
+                | ExprKind::IntLiteral(_)
+                | ExprKind::FloatLiteral(_)
+                | ExprKind::StringLiteral(_)
+                | ExprKind::BoolLiteral(_)
+                | ExprKind::Null
+        )
+    }
+    if args.is_empty()
+        || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. }))
+        || (args.len() > 1 && !args.iter().all(plain))
+    {
+        return None;
+    }
+    for arg in args {
+        let ty = match &arg.kind {
+            ExprKind::Variable(var) => ctx.local_type(var),
+            ExprKind::FunctionCall { name, .. } if ctx.functions.contains_key(name.as_str()) => {
+                ctx.functions[name.as_str()].return_type.clone()
+            }
+            _ => crate::types::checker::infer_expr_type_syntactic(arg),
+        };
+        let native = matches!(
+            ty.codegen_repr(),
+            PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::Str
+                | PhpType::Void
+                | PhpType::TaggedScalar
+                | PhpType::Object(_)
+                | PhpType::Resource(_)
+        );
+        let call = if native {
+            ExprKind::FunctionCall { name: Name::unqualified("var_dump"), args: vec![arg.clone()] }
+        } else {
+            ExprKind::FunctionCall {
+                name: Name::unqualified("__elephc_var_dump_value"),
+                args: vec![arg.clone(), Expr::new(ExprKind::StringLiteral(String::new()), arg.span)],
+            }
+        };
+        lower_expr(ctx, &Expr::new(call, expr.span));
+    }
+    Some(lower_expr(ctx, &Expr::new(ExprKind::Null, expr.span)))
+}
+
 fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
@@ -2737,6 +2793,11 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         return value;
     }
     let canonical = name.as_str();
+    if canonical == "__elephc_var_dump" {
+        if let Some(value) = lower_split_var_dump(ctx, args, expr) {
+            return value;
+        }
+    }
     if func_args_intrinsics::is_func_args_intrinsic(canonical) {
         return func_args_intrinsics::lower_func_args_intrinsic(ctx, canonical, args, expr);
     }

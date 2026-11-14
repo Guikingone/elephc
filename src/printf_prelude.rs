@@ -394,21 +394,21 @@ const PRINTF_ENTRY_POINTS: &[(&str, &str)] = &[
         // that inner call stays on the builtin).
         "__elephc_var_dump",
         r#"function __elephc_var_dump_value(mixed $v, string $ind): void {
-    if (!is_array($v)) {
-        echo $ind;
-        var_dump($v);
+    if (is_array($v)) {
+        echo $ind, 'array(', count($v), ") {\n";
+        foreach ($v as $k => $item) {
+            if (is_int($k)) {
+                echo $ind, '  [', $k, "]=>\n";
+            } else {
+                echo $ind, '  ["', $k, "\"]=>\n";
+            }
+            __elephc_var_dump_value($item, $ind . '  ');
+        }
+        echo $ind, "}\n";
         return;
     }
-    echo $ind, 'array(', count($v), ") {\n";
-    foreach ($v as $k => $item) {
-        if (is_int($k)) {
-            echo $ind, '  [', $k, "]=>\n";
-        } else {
-            echo $ind, '  ["', $k, "\"]=>\n";
-        }
-        __elephc_var_dump_value($item, $ind . '  ');
-    }
-    echo $ind, "}\n";
+    echo $ind;
+    var_dump($v);
 }
 function __elephc_var_dump(mixed ...$values): void {
     foreach ($values as $v) {

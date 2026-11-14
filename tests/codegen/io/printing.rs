@@ -126,7 +126,7 @@ var_dump($map["o"]);
     );
     assert_eq!(
         out,
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\nobject(Box)\n"
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nobject(Box)\n"
     );
 }
 
