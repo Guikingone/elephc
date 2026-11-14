@@ -48,6 +48,8 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         | ICmp | FCmp
         // Scalar int<->float conversions: inline scvtf/fcvtzs / cvtsi2sd/cvttsd2si.
         | IToF | FToI
+        // Scratch-offset rewind: one frame load and one symbol store through x9/x10 or r10/r11.
+        | ConcatReset
         | Nop
     )
 }

@@ -266,6 +266,51 @@ pub fn emit_borrow_ring_park(emitter: &mut Emitter) {
     }
 }
 
+/// Emits `__rt_borrow_ring_drain`: releases every box still parked by `__rt_borrow_ring_park`
+/// and clears the ring, so the heap-debug report at exit does not count them as leaks.
+pub fn emit_borrow_ring_drain(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: borrow_ring_drain ---");
+    emitter.label_global("__rt_borrow_ring_drain");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address
+            emitter.instruction("mov x29, sp");                                 // anchor the helper frame
+            emitter.instruction("str xzr, [sp, #16]");                          // ring slot index = 0
+            emitter.label("1");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_borrow_ring");
+            emitter.instruction("ldr x10, [sp, #16]");                          // ring slot index
+            emitter.instruction("ldr x0, [x12, x10, lsl #3]");                  // the parked box (or null)
+            emitter.instruction("str xzr, [x12, x10, lsl #3]");                 // clear the slot
+            emitter.instruction("bl __rt_decref_mixed");                        // release the parked box (null is safe)
+            emitter.instruction("ldr x10, [sp, #16]");                          // ring slot index
+            emitter.instruction("add x10, x10, #1");                            // next slot
+            emitter.instruction("str x10, [sp, #16]");                          // keep it
+            emitter.instruction("cmp x10, #4");                                 // all four slots drained?
+            emitter.instruction("b.lo 1b");                                     // no: continue
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // save the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // anchor the helper frame
+            emitter.instruction("sub rsp, 16");                                 // aligned slot for the ring index
+            emitter.instruction("mov QWORD PTR [rbp - 8], 0");                  // ring slot index = 0
+            emitter.label("1");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_borrow_ring");
+            emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                 // ring slot index
+            emitter.instruction("mov rax, QWORD PTR [r11 + r9 * 8]");           // the parked box (or null)
+            emitter.instruction("mov QWORD PTR [r11 + r9 * 8], 0");             // clear the slot
+            emitter.instruction("call __rt_decref_mixed");                      // release the parked box (null is safe)
+            emitter.instruction("add QWORD PTR [rbp - 8], 1");                  // next slot
+            emitter.instruction("cmp QWORD PTR [rbp - 8], 4");                  // all four slots drained?
+            emitter.instruction("jb 1b");                                       // no: continue
+            emitter.instruction("leave");                                       // drop the helper frame
+            emitter.instruction("ret");
+        }
+    }
+}
+
 /// Emits the allocation fast path of `__rt_mixed_box_scalar`: with heap debugging off, a box
 /// is popped from the 24-byte size-class bin or carved from the bump tail, stamped, counted
 /// exactly like `__rt_heap_alloc` does, filled and returned. Anything else (debug mode, a full

@@ -39,6 +39,8 @@ mod arithmetic;
 pub(super) use arithmetic::mixed_numeric_int_fast_path_applies;
 pub(super) use objects::this_scalar_prop_gets;
 mod arrays;
+mod fused_array_update;
+pub(super) use fused_array_update::lower_fused_array_update;
 mod buffers;
 mod runtime_functions;
 pub(crate) mod builtins;

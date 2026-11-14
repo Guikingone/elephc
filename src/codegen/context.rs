@@ -38,6 +38,17 @@ pub(super) enum LocalSlotRepresentation {
     Dynamic,
 }
 
+/// The instructions of one fused `$a[$i] op= $x` update on a `mixed` list: the element read,
+/// the optional checked int operation producing `$x`, the element store and the releases.
+#[derive(Debug, Clone)]
+pub(crate) struct FusedArrayUpdate {
+    pub get: InstId,
+    pub checked: Option<InstId>,
+    /// Instructions skipped at their own position and lowered on the slow path, in order
+    /// after the mixed operation (the store and the releases).
+    pub after: Vec<InstId>,
+}
+
 /// Mutable backend state for one EIR function.
 pub(crate) struct FunctionContext<'a> {
     pub(super) module: &'a Module,
@@ -100,6 +111,9 @@ pub(crate) struct FunctionContext<'a> {
     /// Checked int add/sub/mul instructions lowered together with the mixed `+`/`-`/`*`
     /// consuming their boxed result, keyed by the consuming instruction.
     pub(super) fused_checked_mixed: HashMap<InstId, InstId>,
+    /// `$a[$i] op= $x` on a `mixed` list lowered as one in-place update, keyed by the mixed
+    /// `+`/`-`/`*` instruction (see `lower_inst::fused_array_update`).
+    pub(super) fused_array_updates: HashMap<InstId, FusedArrayUpdate>,
     /// Temporary codegen types of values whose home holds a different representation
     /// while a fused lowering runs (a checked result kept as a raw int).
     pub(super) value_type_overrides: HashMap<ValueId, PhpType>,
@@ -163,6 +177,7 @@ impl<'a> FunctionContext<'a> {
             keep_registers_on_miss: false,
             fused_checked_casts: HashMap::new(),
             fused_checked_mixed: HashMap::new(),
+            fused_array_updates: HashMap::new(),
             value_type_overrides: HashMap::new(),
             released_values: HashSet::new(),
             epilogue_label,

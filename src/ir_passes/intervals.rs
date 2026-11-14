@@ -122,6 +122,9 @@ pub fn build_intervals(
 
     let mut weights: HashMap<ValueId, u32> = HashMap::new();
     let mut clobbers: Vec<u32> = Vec::new();
+    // Clobbers outside cold (`*.slow`) blocks: only these are paid on the common path, so they
+    // alone weigh against keeping a value in a caller-saved register (`clobber_count`).
+    let mut hot_clobbers: Vec<u32> = Vec::new();
     let ref_slots = ref_cell_slots(func);
 
     let extend = |value: ValueId, position: u32, ends: &mut HashMap<ValueId, u32>| {
@@ -134,6 +137,7 @@ pub fn build_intervals(
 
     for &block_id in &numbering.order {
         let block = func.block(block_id).expect("ordered block exists");
+        let cold = block.name.ends_with(".slow");
 
         for inst_id in &block.instructions {
             let position = numbering.inst_pos[inst_id];
@@ -144,6 +148,9 @@ pub fn build_intervals(
             }
             if !inst_is_volatile_safe(func, inst, &ref_slots) && !extra_safe.contains(inst_id) {
                 clobbers.push(position);
+                if !cold {
+                    hot_clobbers.push(position);
+                }
             }
         }
 
@@ -155,6 +162,9 @@ pub fn build_intervals(
             }
             if !terminator_is_volatile_safe(term) {
                 clobbers.push(terminator_position);
+                if !cold {
+                    hot_clobbers.push(terminator_position);
+                }
             }
         }
         for value in liveness.live_out_of(block_id) {
@@ -163,6 +173,7 @@ pub fn build_intervals(
     }
 
     clobbers.sort_unstable();
+    hot_clobbers.sort_unstable();
 
     // Block parameters of one block are all written by the same parallel edge copy, so they
     // must never share a register: keep each one live past the block entry, even when it is
@@ -187,7 +198,7 @@ pub fn build_intervals(
                 end,
                 weight: weights.get(&value).copied().unwrap_or(0),
                 call_free: is_call_free(&clobbers, start, end),
-                clobber_count: clobbers_within(&clobbers, start, end),
+                clobber_count: clobbers_within(&hot_clobbers, start, end),
             }
         })
         .collect();

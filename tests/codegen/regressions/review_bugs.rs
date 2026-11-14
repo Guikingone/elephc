@@ -300,3 +300,51 @@ run(7);
     assert_eq!(out.stdout, "7,2|1,2|1,2,21|4,5\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `$a[$i] op= $x` on a list of `mixed` elements updates a uniquely owned int box in place, and
+/// falls back to the generic read/operate/store on int overflow, float/string/null elements,
+/// a copy-on-write shared list, a shared element box and a missing key.
+#[test]
+fn test_fused_mixed_list_compound_update_matches_generic_semantics() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function upd(array $row, int $n, $m) {
+    for ($j = 0; $j < $n; $j++) { $row[$j] += $m * 3; }
+    return $row;
+}
+function ovf() {
+    $r = [PHP_INT_MAX - 1, 5, 1.5, "7", null];
+    for ($j = 0; $j < 5; $j++) { $r[$j] += 2 * 1; }
+    var_dump($r);
+    $r[1] -= PHP_INT_MAX; $r[1] -= 100; var_dump($r[1]);
+    $r[0] *= 3; var_dump($r[0]);
+}
+function cow() {
+    $a = [1, 2, 3]; $a[0] = $a[0] + 0;
+    for ($i = 0; $i < 3; $i++) { $a[$i] += 0 + $i * 2; }
+    $b = $a;
+    for ($i = 0; $i < 3; $i++) { $b[$i] += 10 * 1; }
+    $x = $b[1];
+    for ($i = 0; $i < 3; $i++) { $b[$i] *= 2 * 1; }
+    var_dump($a, $b, $x);
+}
+function miss() {
+    $a = [1, 2];
+    for ($i = 0; $i < 4; $i++) { $a[$i] += 5 * $i; }
+    var_dump($a);
+}
+function refs() {
+    $a = [1, 2, 3];
+    $r = &$a[1];
+    for ($i = 0; $i < 3; $i++) { $a[$i] += 4 * 1; }
+    $r += 100;
+    var_dump($a);
+}
+$base = [1, 2, 3];
+$out = upd($base, 3, 2);
+var_dump($base, $out);
+ovf(); cow(); miss();
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(3) {\n  [0]=>\n  int(7)\n  [1]=>\n  int(8)\n  [2]=>\n  int(9)\n}\narray(5) {\n  [0]=>\n  float(9.223372036854776E+18)\n  [1]=>\n  int(7)\n  [2]=>\n  float(3.5)\n  [3]=>\n  int(9)\n  [4]=>\n  int(2)\n}\nfloat(-9.223372036854776E+18)\nfloat(2.7670116110564327E+19)\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(4)\n  [2]=>\n  int(7)\n}\narray(3) {\n  [0]=>\n  int(22)\n  [1]=>\n  int(28)\n  [2]=>\n  int(34)\n}\nint(14)\narray(4) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(7)\n  [2]=>\n  int(10)\n  [3]=>\n  int(15)\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

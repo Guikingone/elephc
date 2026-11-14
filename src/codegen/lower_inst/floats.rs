@@ -189,6 +189,15 @@ pub(super) fn lower_float_binop(
         }
         Arch::X86_64 => {
             let rhs_home = ctx.allocation.register_of(rhs);
+            let commutative = matches!(x86_64_mnemonic, "addsd" | "mulsd");
+            if let Some(reg) = dst_reg {
+                if commutative && rhs_home == Some(reg) && lhs != rhs {
+                    // `dst = lhs op dst` for a commutative op: one instruction in place.
+                    let lhs_operand = x86_float_operand(ctx, lhs)?;
+                    ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, reg, lhs_operand)); // apply the commutative float arithmetic in place
+                    return Ok(());
+                }
+            }
             // Accumulate in the destination register unless it is also the right operand.
             let acc = match dst_reg {
                 Some(reg) if rhs_home != Some(reg) || lhs == rhs => reg,
@@ -320,6 +329,24 @@ pub(super) fn lower_int_to_float(
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if let Some(dst) = inst.result.and_then(|result| ctx.allocation.register_of(result)) {
+        if matches!(ctx.value_php_type(value)?, PhpType::Int | PhpType::Bool) {
+            // Convert straight from the operand's register (or the loaded result register)
+            // into the result's register.
+            let src = match ctx.allocation.register_of(value) {
+                Some(reg) => reg,
+                None => {
+                    ctx.load_value_to_result(value)?;
+                    abi::int_result_reg(ctx.emitter)
+                }
+            };
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("scvtf {}, {}", dst, src)), // signed int to double
+                Arch::X86_64 => ctx.emitter.instruction(&format!("cvtsi2sd {}, {}", dst, src)), // signed int to double
+            }
+            return Ok(());
+        }
+    }
     match ctx.load_value_to_result(value)? {
         PhpType::Int | PhpType::Bool => {}
         PhpType::Void | PhpType::Never => {

@@ -33,6 +33,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
         emitter.label_global("__rt_heap_debug_report");
 
         emitter.instruction("sub rsp, 40");                                     // reserve aligned stack space for saved counters across nested itoa calls
+        emitter.instruction("call __rt_borrow_ring_drain");                     // boxes parked by borrowed reads are not leaks
         crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_allocs");
         emitter.instruction("mov r8, QWORD PTR [r8]");                          // load the total allocation count once for the summary
         crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_gc_frees");
@@ -170,6 +171,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // allocate a stack frame for saved temporaries and counters
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set up the frame pointer
+    emitter.instruction("bl __rt_borrow_ring_drain");                           // boxes parked by borrowed reads are not leaks
 
     // -- compute alloc/free/live counters once for the full report --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_allocs");

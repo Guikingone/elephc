@@ -413,6 +413,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_box_scalar(emitter);
     arrays::emit_borrow_ring_park(emitter);
+    arrays::emit_borrow_ring_drain(emitter);
     arrays::emit_mixed_from_array_kind(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);

@@ -464,7 +464,7 @@ pub use natsort::emit_natsort;
 /// Emit natural sort helper.
 pub use mixed_abs::emit_mixed_abs;
 pub use mixed_from_array_kind::emit_mixed_from_array_kind;
-pub use mixed_from_value::{emit_borrow_ring_park, emit_mixed_box_scalar, emit_mixed_from_value};
+pub use mixed_from_value::{emit_borrow_ring_drain, emit_borrow_ring_park, emit_mixed_box_scalar, emit_mixed_from_value};
 /// Emit Mixed from value conversion helper.
 pub use mixed_instanceof::emit_mixed_instanceof;
 /// Emit Mixed instanceof check helper.

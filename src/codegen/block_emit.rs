@@ -1275,6 +1275,170 @@ fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
         }
     }
     collect_fused_checked_mixed(ctx, &use_counts);
+    collect_fused_array_updates(ctx, &use_counts);
+}
+
+/// Returns the instruction defining `value`, when it is an instruction result.
+fn defining_inst(function: &Function, value: ValueId) -> Option<InstId> {
+    match function.value(value)?.def {
+        ValueDef::Instruction { inst, .. } => Some(inst),
+        ValueDef::BlockParam { .. } => None,
+    }
+}
+
+/// Returns whether two array operands name the same storage: the same value, or two loads of
+/// one local slot.
+fn same_array_operand(function: &Function, a: ValueId, b: ValueId) -> bool {
+    if a == b {
+        return true;
+    }
+    let load_slot = |value: ValueId| {
+        let inst = function.instruction(defining_inst(function, value)?)?;
+        (inst.op == Op::LoadLocal).then_some(inst.immediate.clone()).flatten()
+    };
+    matches!((load_slot(a), load_slot(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// Finds `$a[$i] op= $x` on a list of `mixed` elements lowered as `array_get` → mixed
+/// `+`/`-`/`*` → `array_set` of the same element → release: the four lower together as an
+/// in-place update of a uniquely owned int element box (`lower_inst::fused_array_update`).
+/// The element read moves down to the operation; the instructions it crosses only read.
+fn collect_fused_array_updates(
+    ctx: &mut FunctionContext<'_>,
+    use_counts: &std::collections::HashMap<ValueId, usize>,
+) {
+    use crate::ir::Effects;
+    let function = ctx.function;
+    let read_only = Effects::READS_HEAP
+        | Effects::READS_LOCAL
+        | Effects::READS_GLOBAL
+        | Effects::ALLOC_HEAP
+        | Effects::ALLOC_CONCAT
+        | Effects::MAY_WARN
+        | Effects::MAY_FATAL;
+    for block in &function.blocks {
+        let order: Vec<InstId> = block
+            .instructions
+            .iter()
+            .copied()
+            .filter(|id| {
+                !ctx.skipped_consts.contains(id)
+                    && function.instruction(*id).is_some_and(|inst| inst.op != Op::Nop)
+            })
+            .collect();
+        for (position, binop_id) in order.iter().enumerate() {
+            let Some(binop) = function.instruction(*binop_id) else {
+                continue;
+            };
+            if binop.op != Op::MixedNumericBinop
+                || !matches!(
+                    binop.immediate,
+                    Some(crate::ir::Immediate::MixedNumericOp(
+                        crate::ir::MixedNumericOp::Add
+                            | crate::ir::MixedNumericOp::Sub
+                            | crate::ir::MixedNumericOp::Mul
+                    ))
+                )
+                || ctx.fused_checked_casts.contains_key(binop_id)
+            {
+                continue;
+            }
+            let (Some(result), [lhs, rhs]) = (binop.result, binop.operands.as_slice()) else {
+                continue;
+            };
+            // The right operand is a native int, or a fused checked int operation.
+            let checked = ctx.fused_checked_mixed.get(binop_id).copied();
+            let rhs_is_int = checked.is_some_and(|id| {
+                function.instruction(id).and_then(|inst| inst.result) == Some(*rhs)
+            }) || (checked.is_none()
+                && function.value(*rhs).is_some_and(|value| {
+                    value.ir_type == crate::ir::IrType::I64 && value.php_type == PhpType::Int
+                }));
+            if !rhs_is_int || use_counts.get(lhs).copied() != Some(1) {
+                continue;
+            }
+            let Some(get_id) = defining_inst(function, *lhs) else {
+                continue;
+            };
+            let Some(get_position) = order[..position].iter().position(|id| *id == get_id) else {
+                continue;
+            };
+            let Some(get) = function.instruction(get_id) else {
+                continue;
+            };
+            let [get_array, get_index] = get.operands.as_slice() else {
+                continue;
+            };
+            let list_of_mixed = matches!(
+                function.value(*get_array).map(|value| value.php_type.codegen_repr()),
+                Some(PhpType::Array(element)) if element.codegen_repr() == PhpType::Mixed
+            );
+            let int_index = function.value(*get_index).is_some_and(|value| {
+                value.ir_type == crate::ir::IrType::I64 && value.php_type == PhpType::Int
+            });
+            if get.op != Op::ArrayGet || !list_of_mixed || !int_index {
+                continue;
+            }
+            // Everything the read moves across only reads (no store can reach the element).
+            let crossed_ok = order[get_position + 1..position].iter().all(|id| {
+                function.instruction(*id).is_some_and(|inst| {
+                    !inst.op.name().contains("call") && (inst.effects - read_only).is_empty()
+                })
+            });
+            if !crossed_ok {
+                continue;
+            }
+            let Some(&set_id) = order.get(position + 1) else {
+                continue;
+            };
+            let Some(set) = function.instruction(set_id) else {
+                continue;
+            };
+            let stores_back = set.op == Op::ArraySet
+                && matches!(set.operands.as_slice(), [array, index, value]
+                    if *value == result
+                        && index == get_index
+                        && same_array_operand(function, *array, *get_array));
+            if !stores_back || use_counts.get(&result).copied() != Some(2) {
+                continue;
+            }
+            let Some(&release_id) = order.get(position + 2) else {
+                continue;
+            };
+            let releases_result = function.instruction(release_id).is_some_and(|inst| {
+                inst.op == Op::Release && inst.operands.as_slice() == [result]
+            });
+            if !releases_result {
+                continue;
+            }
+            // A fused checked operand's own release (already skipped) runs on the slow path.
+            let checked_release = checked.and_then(|id| {
+                let checked_result = function.instruction(id)?.result?;
+                block.instructions.iter().copied().find(|inst_id| {
+                    function.instruction(*inst_id).is_some_and(|inst| {
+                        inst.op == Op::Release && inst.operands.as_slice() == [checked_result]
+                    })
+                })
+            });
+            if checked.is_some() && checked_release.is_none() {
+                continue;
+            }
+            ctx.skipped_consts.insert(get_id);
+            ctx.skipped_consts.insert(set_id);
+            ctx.skipped_consts.insert(release_id);
+            ctx.fused_array_updates.insert(
+                *binop_id,
+                crate::codegen::context::FusedArrayUpdate {
+                    get: get_id,
+                    checked,
+                    after: checked_release
+                        .into_iter()
+                        .chain([set_id, release_id])
+                        .collect(),
+                },
+            );
+        }
+    }
 }
 
 /// Finds checked int add/sub/mul instructions whose boxed result only feeds the very next
@@ -1404,6 +1568,11 @@ fn emit_block(
             ctx.add_flags_for = None;
         }
         emit_instruction_source_marker(ctx, *inst_id)?;
+        if let Some(update) = ctx.fused_array_updates.get(inst_id).cloned() {
+            // Preserves caller-saved registers itself, on its slow path only.
+            lower_inst::lower_fused_array_update(ctx, *inst_id, &update)?;
+            continue;
+        }
         let saves = ctx.allocation.call_saves(*inst_id).to_vec();
         for save in &saves {
             if save.store_before {
