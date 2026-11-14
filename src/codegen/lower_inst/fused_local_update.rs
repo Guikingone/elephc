@@ -42,7 +42,10 @@ pub(crate) fn lower_fused_local_update(
     let offset = ctx.local_offset(slot)?;
     let slow = ctx.next_label("local_update_slow");
     let done = ctx.next_label("local_update_done");
-    if binop.op == Op::MixedNumericBinop {
+    if let Some((checked_id, _)) = update.checked {
+        let checked = instruction(ctx, checked_id)?;
+        emit_checked_into_mixed_fast_path(ctx, &checked, &binop, &slow)?;
+    } else if binop.op == Op::MixedNumericBinop {
         super::arithmetic::emit_mixed_numeric_int_fast_path(ctx, &binop, &slow)?;
     } else {
         emit_checked_int_fast_path(ctx, &binop, &slow)?;
@@ -100,7 +103,15 @@ pub(crate) fn lower_fused_local_update(
     }
 
     ctx.emitter.label(&slow);
-    let group = [binop_id, update.release, update.store];
+    let mut group: Vec<InstId> = Vec::new();
+    if let Some((checked_id, _)) = update.checked {
+        group.push(checked_id);
+    }
+    group.push(binop_id);
+    if let Some((_, checked_release)) = update.checked {
+        group.push(checked_release);
+    }
+    group.extend([update.release, update.store]);
     let saves = merged_call_saves(ctx, &group);
     for save in &saves {
         if save.store_before {
@@ -160,6 +171,92 @@ fn emit_checked_int_fast_path(ctx: &mut FunctionContext<'_>, inst: &Instruction,
                     ctx.emitter.instruction("smulh x11, x0, x10");              // high 64 bits of the product
                     ctx.emitter.instruction("cmp x11, x9, asr #63");            // does the high half only extend the sign?
                     ctx.emitter.instruction(&format!("b.ne {}", slow));         // overflow: the checked helper yields a float
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Emits the native int path of a mixed `+`/`-`/`*` whose operand is a fused checked int
+/// operation (`$sum += $a * $b`): the checked operation runs natively, the other operand must be
+/// a native int or a box holding an int, and neither operation may overflow; otherwise branches
+/// to `slow`. On fall-through the int result is in x9 (AArch64) / rax (x86_64).
+fn emit_checked_into_mixed_fast_path(
+    ctx: &mut FunctionContext<'_>,
+    checked: &Instruction,
+    binop: &Instruction,
+    slow: &str,
+) -> Result<()> {
+    let checked_result = checked
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("checked int operation without a result"))?;
+    let (first, second) = match binop.operands.as_slice() {
+        [first, second] => (*first, *second),
+        _ => return Err(CodegenIrError::invalid_module("mixed operation without two operands")),
+    };
+    let checked_is_left = first == checked_result;
+    let other = if checked_is_left { second } else { first };
+    let other_is_box = ctx.value_php_type(other)?.codegen_repr() == crate::types::PhpType::Mixed;
+    let op = match binop.immediate {
+        Some(Immediate::MixedNumericOp(op)) => op,
+        _ => return Err(CodegenIrError::invalid_module("mixed operation without an operator")),
+    };
+    // The checked operation itself, into x9 / rdx.
+    emit_checked_int_fast_path(ctx, checked, slow)?;
+    match ctx.emitter.target.arch {
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdx, rax");                            // the checked int result
+            if other_is_box {
+                ctx.load_value_to_reg(other, "r11")?;
+                ctx.emitter.instruction("test r11, r11");                       // no box: generic path
+                ctx.emitter.instruction(&format!("jz {}", slow));
+                ctx.emitter.instruction("cmp QWORD PTR [r11], 0");              // the box must hold an int
+                ctx.emitter.instruction(&format!("jne {}", slow));
+                ctx.emitter.instruction("mov rax, QWORD PTR [r11 + 8]");        // the boxed int
+            } else {
+                ctx.load_value_to_reg(other, "rax")?;
+            }
+            if checked_is_left {
+                ctx.emitter.instruction("mov rcx, rax");                        // the other operand on the right
+                ctx.emitter.instruction("mov rax, rdx");                        // the checked result on the left
+            } else {
+                ctx.emitter.instruction("mov rcx, rdx");                        // the checked result on the right
+            }
+            let mnemonic = match op {
+                crate::ir::MixedNumericOp::Add => "add",
+                crate::ir::MixedNumericOp::Sub => "sub",
+                _ => "imul",
+            };
+            ctx.emitter.instruction(&format!("{} rax, rcx", mnemonic));         // native int operation
+            ctx.emitter.instruction(&format!("jo {}", slow));                   // overflow: generic path (float result)
+        }
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x11, x9");                             // the checked int result
+            if other_is_box {
+                ctx.load_value_to_reg(other, "x16")?;
+                ctx.emitter.instruction(&format!("cbz x16, {}", slow));         // no box: generic path
+                ctx.emitter.instruction("ldr x17, [x16]");                      // the box tag
+                ctx.emitter.instruction(&format!("cbnz x17, {}", slow));        // the box must hold an int
+                ctx.emitter.instruction("ldr x10, [x16, #8]");                  // the boxed int
+            } else {
+                ctx.load_value_to_reg(other, "x10")?;
+            }
+            let (lhs, rhs) = if checked_is_left { ("x11", "x10") } else { ("x10", "x11") };
+            match op {
+                crate::ir::MixedNumericOp::Add => {
+                    ctx.emitter.instruction(&format!("adds x9, {}, {}", lhs, rhs)); // add and set the overflow flag
+                    ctx.emitter.instruction(&format!("b.vs {}", slow));         // overflow: generic path (float result)
+                }
+                crate::ir::MixedNumericOp::Sub => {
+                    ctx.emitter.instruction(&format!("subs x9, {}, {}", lhs, rhs)); // subtract and set the overflow flag
+                    ctx.emitter.instruction(&format!("b.vs {}", slow));         // overflow: generic path (float result)
+                }
+                _ => {
+                    ctx.emitter.instruction(&format!("mul x9, {}, {}", lhs, rhs)); // low 64 bits of the product
+                    ctx.emitter.instruction(&format!("smulh x17, {}, {}", lhs, rhs)); // high 64 bits of the product
+                    ctx.emitter.instruction("cmp x17, x9, asr #63");            // does the high half only extend the sign?
+                    ctx.emitter.instruction(&format!("b.ne {}", slow));         // overflow: generic path (float result)
                 }
             }
         }

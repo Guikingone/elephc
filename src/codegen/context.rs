@@ -66,6 +66,9 @@ pub(crate) struct FusedArrayUpdate {
 pub(crate) struct FusedLocalUpdate {
     pub release: InstId,
     pub store: InstId,
+    /// A checked int operation feeding the mixed operation, and its own release, both skipped
+    /// at their position and lowered on the slow path (`$sum += $a * $b`).
+    pub checked: Option<(InstId, InstId)>,
 }
 
 /// Mutable backend state for one EIR function.

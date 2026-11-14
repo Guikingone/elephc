@@ -171,6 +171,8 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 ///
 /// # ABI / invariants
 /// - Entry size is 64 bytes: 40-byte header + 24-byte payload (same layout as ARM64)
+/// - Only the live entries are visited, by following the insertion-order chain (`head` at +24,
+///   each entry's `next` index at +56, -1 at the end), as `foreach` does
 /// - `_gc_release_suppressed` is set to 1 before the scan and cleared before freeing the struct
 /// - Recursive child cleanup routes through `__rt_decref_array`, `__rt_decref_hash`,
 ///   `__rt_decref_object`, `__rt_decref_mixed`, and `__rt_heap_free` as appropriate
@@ -191,14 +193,14 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the hash-table pointer across nested helper calls while freeing entries
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
     emitter.instruction("mov QWORD PTR [r10], 1");                              // suppress nested collector runs while this hash deep-free walk releases entry payloads
-    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the table capacity before entering the entry-scan loop
-    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the table capacity so the entry-scan loop can survive nested helper calls
-    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the entry-scan loop index to zero
+    // Walk the insertion-order chain (the live entries only) instead of every slot.
+    emitter.instruction("mov r10, QWORD PTR [rax + 24]");                       // the insertion-order head index (-1 when empty)
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // the current entry index survives nested helper calls
 
     emitter.label("__rt_hash_free_deep_loop");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current entry-scan index at the top of every loop iteration
-    emitter.instruction("cmp r10, QWORD PTR [rbp - 16]");                       // stop once every slot up to the stored capacity has been inspected
-    emitter.instruction("jae __rt_hash_free_deep_struct");                      // exit the loop when the entry-scan index reaches the table capacity
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current entry index at the top of every loop iteration
+    emitter.instruction("cmp r10, -1");                                         // end of the insertion-order chain?
+    emitter.instruction("je __rt_hash_free_deep_struct");                       // every live entry has been released
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after any nested helper call
     emitter.instruction("mov rcx, r10");                                        // copy the current entry-scan index before scaling it into a byte offset
     emitter.instruction("shl rcx, 6");                                          // convert the entry index into a 64-byte entry offset
@@ -232,6 +234,8 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rcx + 40]");                        // load the runtime value tag to decide whether the entry payload owns heap storage
     emitter.instruction("cmp r8, 1");                                           // detect string entry payloads that may now be shared across multiple hash owners
     emitter.instruction("je __rt_hash_free_deep_value_string");                 // release persisted string values through refcount-aware teardown rather than raw free
+    emitter.instruction("cmp r8, 3");                                           // int (0), float (2) and bool (3) payloads own no heap storage
+    emitter.instruction("jbe __rt_hash_free_deep_next");                        // nothing to release for a scalar payload
     emitter.instruction("cmp r8, 4");                                           // detect nested indexed-array payloads copied into associative-array entries
     emitter.instruction("je __rt_hash_free_deep_value_array");                  // release nested indexed-array payloads through array decref
     emitter.instruction("cmp r8, 5");                                           // detect nested associative-array payloads in the current bootstrap subset
@@ -291,8 +295,13 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor owned by the hash entry
 
     emitter.label("__rt_hash_free_deep_next");
-    emitter.instruction("add QWORD PTR [rbp - 24], 1");                         // advance the entry-scan index to the next hash slot
-    emitter.instruction("jmp __rt_hash_free_deep_loop");                        // continue scanning occupied entries until the whole table has been released
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current entry index after any nested helper call
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after any nested helper call
+    emitter.instruction("shl r10, 6");                                          // convert the entry index into a 64-byte entry offset
+    emitter.instruction("add r10, r11");                                        // advance to the selected entry block (before the 40-byte header skip)
+    emitter.instruction("mov r10, QWORD PTR [r10 + 96]");                       // the entry's insertion-order next index (header 40 + next field 56)
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // move on to the next live entry
+    emitter.instruction("jmp __rt_hash_free_deep_loop");                        // continue until the chain ends
 
     emitter.label("__rt_hash_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after finishing the deep-free scan

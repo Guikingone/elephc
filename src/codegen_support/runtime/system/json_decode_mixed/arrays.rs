@@ -179,10 +179,8 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x9, x1");                                          // copy for arg-order swap
     emitter.instruction("mov x1, x0");                                          // child = Mixed*
     emitter.instruction("mov x0, x9");                                          // x0 = array ptr
-    emitter.instruction("bl __rt_array_push_refcounted");                       // returns x0 = updated array
+    emitter.instruction("bl __rt_array_push_owned");                            // the array takes over the decoder's reference; x0 = updated array
     emitter.instruction("str x0, [sp, #24]");                                   // store updated JSON decoder state
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the element Mixed* pushed above
-    emitter.instruction("bl __rt_decref_mixed");                                // the push retained it: drop the decoder's own reference
 
     // Look at the separator.
     emitter.instruction("ldr x1, [sp, #0]");                                    // slice_ptr
@@ -391,10 +389,8 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // park the element Mixed* (elem_start is no longer needed)
     emitter.instruction("mov rsi, rax");                                        // child = Mixed*
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // array ptr
-    emitter.instruction("call __rt_array_push_refcounted");                     // rax = updated array
+    emitter.instruction("call __rt_array_push_owned");                          // the array takes over the decoder's reference; rax = updated array
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // load or prepare JSON decoder state
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the element Mixed* pushed above
-    emitter.instruction("call __rt_decref_mixed");                              // the push retained it: drop the decoder's own reference
 
     // Look at the separator.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load or prepare JSON decoder state

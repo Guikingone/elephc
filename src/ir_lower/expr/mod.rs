@@ -10718,6 +10718,9 @@ fn assoc_array_literal_value_type_for_ir(
             ctx,
             result_target.as_deref().unwrap_or(assigned),
         ),
+        // Native int arithmetic (`$i * 2`, `$i % 7` once proved overflow-free) yields an int,
+        // typed exactly as in an indexed literal so the entries stay unboxed.
+        ExprKind::BinaryOp { .. } => array_literal_element_type_for_ir(ctx, value),
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
 }

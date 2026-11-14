@@ -743,3 +743,54 @@ var_dump($s, $copy);
     assert_eq!(out.stdout, "float(9.223372036854776E+18)\nint(16)\nArray\n(\n    [0] => 21\n    [1] => 35\n    [2] => 19\n)\n5\n12\nfloat(6.5)\nint(7)\narray(2) {\n  [0]=>\n  int(6)\n  [1]=>\n  int(7)\n}\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// An associative literal whose values are native int arithmetic stores them unboxed, while
+/// arithmetic that may overflow or produce a float/string stays boxed; later writes of other
+/// types still work.
+#[test]
+fn test_assoc_literal_int_arithmetic_values_keep_php_types() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(int $i, int $big) {
+  $m = ['a' => $i * 2, 'b' => $big * 2, 'c' => $i % 3, 'd' => $i + 0.5, 'e' => $big + 1, 'f' => "x" . $i, 'g' => $i / 2, 'h' => $i << 2];
+  var_dump($m);
+  $m['a'] = "s"; $m['z'] = [1];
+  echo json_encode($m), "\n";
+}
+f(7, PHP_INT_MAX);
+f(-3, PHP_INT_MIN);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "array(8) {\n  [\"a\"]=>\n  int(14)\n  [\"b\"]=>\n  float(1.8446744073709552E+19)\n  [\"c\"]=>\n  int(1)\n  [\"d\"]=>\n  float(7.5)\n  [\"e\"]=>\n  float(9.223372036854776E+18)\n  [\"f\"]=>\n  string(2) \"x7\"\n  [\"g\"]=>\n  float(3.5)\n  [\"h\"]=>\n  int(28)\n}\n{\"a\":\"s\",\"b\":1.8446744073709552e+19,\"c\":1,\"d\":7.5,\"e\":9.223372036854776e+18,\"f\":\"x7\",\"g\":3.5,\"h\":28,\"z\":[1]}\narray(8) {\n  [\"a\"]=>\n  int(-6)\n  [\"b\"]=>\n  float(-1.8446744073709552E+19)\n  [\"c\"]=>\n  int(0)\n  [\"d\"]=>\n  float(-2.5)\n  [\"e\"]=>\n  int(-9223372036854775807)\n  [\"f\"]=>\n  string(3) \"x-3\"\n  [\"g\"]=>\n  float(-1.5)\n  [\"h\"]=>\n  int(-12)\n}\n{\"a\":\"s\",\"b\":-1.8446744073709552e+19,\"c\":0,\"d\":-2.5,\"e\":-9223372036854775807,\"f\":\"x-3\",\"g\":-1.5,\"h\":-12,\"z\":[1]}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// `$sum += $a * $b` on a `mixed` local fuses the checked int product, the mixed addition and
+/// the assignment: overflow of either operation, a float or string local and a shared box all
+/// keep PHP results.
+#[test]
+fn test_mixed_local_compound_assignment_of_checked_product() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function run(int $n, array $w) {
+  $sum = 0;
+  for ($i = 0; $i < $n; $i++) {
+    $sum += $w[$i % 3] * $i;
+    $sum = $sum - ($i + 1);
+    $sum += 7 * $i;
+  }
+  var_dump($sum);
+  $big = PHP_INT_MAX - 5;
+  $big += $n * 2;
+  var_dump($big);
+  $s = "x"; $s .= "y"; $t = 1;
+  $t += $n * PHP_INT_MAX;
+  var_dump($t);
+  $k = 2.5; $k += $n * 3; var_dump($k);
+  $keep = $sum; $sum += $n * 2; var_dump($keep === $sum, $sum);
+}
+run(10, [3, 4, 5]);
+run(3, [1, 1, 1]);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(437)\nfloat(9.223372036854776E+18)\nfloat(9.223372036854776E+19)\nfloat(32.5)\nbool(false)\nint(457)\nint(18)\nfloat(9.223372036854776E+18)\nfloat(2.7670116110564327E+19)\nfloat(11.5)\nbool(false)\nint(24)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

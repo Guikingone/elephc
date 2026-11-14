@@ -1587,9 +1587,41 @@ fn collect_fused_local_updates(
                         value.ir_type == crate::ir::IrType::I64 && value.php_type == PhpType::Int
                     })
                 });
+            // A mixed operation fed by a fused checked int operation (`$sum += $a * $b`): the
+            // checked operands must be native ints and the other operand an int or a box.
+            let fed_by_checked = ctx.fused_checked_mixed.get(binop_id).copied().filter(|checked_id| {
+                let Some(checked) = function.instruction(*checked_id) else {
+                    return false;
+                };
+                let (Some(checked_result), [first, second]) = (checked.result, binop.operands.as_slice()) else {
+                    return false;
+                };
+                let other = if *first == checked_result { *second } else { *first };
+                matches!(binop.immediate, Some(crate::ir::Immediate::MixedNumericOp(
+                    crate::ir::MixedNumericOp::Add | crate::ir::MixedNumericOp::Sub | crate::ir::MixedNumericOp::Mul
+                ))) && checked.operands.len() == 2
+                    && checked.operands.iter().all(|operand| {
+                        function.value(*operand).is_some_and(|value| {
+                            value.ir_type == crate::ir::IrType::I64 && value.php_type == PhpType::Int
+                        })
+                    })
+                    && function.value(other).is_some_and(|value| {
+                        (value.ir_type == crate::ir::IrType::I64 && value.php_type == PhpType::Int)
+                            || value.ir_type == crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+                    })
+            });
+            let checked_release = fed_by_checked.and_then(|checked_id| {
+                let checked_result = function.instruction(checked_id)?.result?;
+                block.instructions.iter().copied().find(|inst_id| {
+                    function.instruction(*inst_id).is_some_and(|inst| {
+                        inst.op == Op::Release && inst.operands.as_slice() == [checked_result]
+                    })
+                })
+            });
+            let mixed_op = mixed_op || (fed_by_checked.is_some() && checked_release.is_some());
             if !(mixed_op || checked_op)
                 || ctx.fused_checked_casts.contains_key(binop_id)
-                || ctx.fused_checked_mixed.contains_key(binop_id)
+                || (ctx.fused_checked_mixed.contains_key(binop_id) && checked_release.is_none())
                 || ctx.fused_checked_mixed.values().any(|id| id == binop_id)
                 || ctx.fused_array_updates.contains_key(binop_id)
                 || ctx.fused_array_updates.values().any(|update| update.checked == Some(*binop_id))
@@ -1626,9 +1658,14 @@ fn collect_fused_local_updates(
             }
             ctx.skipped_consts.insert(release_id);
             ctx.skipped_consts.insert(store_id);
+            let checked = fed_by_checked.zip(checked_release);
+            if checked.is_some() {
+                // Lowered by the fused local update instead (its slow path runs both unfused).
+                ctx.fused_checked_mixed.remove(binop_id);
+            }
             ctx.fused_local_updates.insert(
                 *binop_id,
-                crate::codegen::context::FusedLocalUpdate { release: release_id, store: store_id },
+                crate::codegen::context::FusedLocalUpdate { release: release_id, store: store_id, checked },
             );
         }
     }
