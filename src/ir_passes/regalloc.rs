@@ -107,6 +107,18 @@ fn plan_call_saves(
         }
         let lo = clobbers.partition_point(|(pos, _)| *pos < iv.start);
         for (pos, inst) in clobbers[lo..].iter().take_while(|(pos, _)| *pos <= iv.end) {
+            // The first argument of a direct call dying at the call is read before the call
+            // lowering writes any register (argument materialization starts with it), so it
+            // needs neither a store nor a reload.
+            let dies_here = iv.end == *pos && !precise.live_within(iv.value, *pos + 1, *pos + 1);
+            let first_call_arg = func.instruction(*inst).is_some_and(|call| {
+                call.op == Op::Call
+                    && call.operands.first() == Some(&iv.value)
+                    && call.operands.iter().filter(|operand| **operand == iv.value).count() == 1
+            });
+            if dies_here && first_call_arg {
+                continue;
+            }
             saves.entry(*inst).or_default().push(CallSave {
                 value: iv.value,
                 reg,

@@ -391,3 +391,22 @@ echo "\n";
     assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nint(-1)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nint(-1)\nbool(true)\nbool(true)\n[true,false,-1][false,false,1][false,true,0][false,true,0][false,true,0][false,true,0][true,false,-1][false,false,1][false,false,1][true,false,-1][true,false,-1][false,false,1][false,true,0][false,true,0][true,false,-1][false,false,1][false,true,0][false,true,0][false,true,0][false,true,0]\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// A miss-capable `int|null` read (untyped or `?int` property, int-list element) passed to a
+/// `mixed` or untyped parameter is boxed for the callee instead of handing it the raw tagged word
+/// (which crashed the callee).
+#[test]
+fn test_tagged_scalar_argument_to_mixed_parameter_is_boxed() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function v(mixed $x) { var_dump($x); }
+function w($x) { return $x === null ? "null" : $x * 2; }
+class Car { public $pippo; public ?int $n = null; }
+$c = new Car(); v($c->pippo); $c->pippo = 5; v($c->pippo); v($c->n); $c->n = 7; v($c->n);
+$a = [1, 2, 3]; v($a[1]); echo w($a[2]), w($c->n), "\n";
+for ($i = 0; $i < 3; $i++) { echo w($a[$i]), " "; }
+echo "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\nint(5)\nNULL\nint(7)\nint(2)\n614\n2 4 6 \n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

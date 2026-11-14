@@ -8091,6 +8091,19 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_local missing result value"))?;
+    // A raw int/float local read into a register-allocated value: one load straight into it.
+    if let Some(reg) = ctx.allocation.register_of(result) {
+        let local_ty = ctx.local_php_type(slot)?.codegen_repr();
+        let result_ty = ctx.value_php_type(result)?.codegen_repr();
+        if matches!(ctx.local_slot_representation(slot), crate::codegen::context::LocalSlotRepresentation::Raw)
+            && local_ty == result_ty
+            && matches!(local_ty, PhpType::Int | PhpType::Float | PhpType::Bool)
+        {
+            let offset = ctx.local_offset(slot)?;
+            abi::load_at_offset(ctx.emitter, reg, offset);
+            return Ok(());
+        }
+    }
     let source_ty = ctx.load_local_to_result(slot)?;
     let result_ty = ctx.value_php_type(result)?;
     let borrowed = ctx.value_ownership(result)? != Ownership::Owned

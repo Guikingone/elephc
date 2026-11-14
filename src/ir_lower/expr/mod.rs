@@ -7137,6 +7137,11 @@ fn coerce_scalar_arg_to_param_storage(
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
+    // A miss-capable tagged scalar (`int|null` property or element read) reaching a `mixed`
+    // parameter is boxed like any other scalar: the callee reads a box.
+    if value.ir_type == IrType::TaggedScalar && param_ty == PhpType::Mixed {
+        return ctx.box_value_as_mixed(value, PhpType::Mixed, Some(arg.span));
+    }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     // A BOXED source is deferred to `coerce_operands_to_params`: only a box can carry the array or
     // null payload PHP REFUSES at a `string` parameter, coercing here would consume the runtime tag
@@ -10279,6 +10284,7 @@ pub(crate) fn array_literal_type_for_ir(
     }
     PhpType::Array(Box::new(elem_ty))
 }
+
 
 /// Returns the best EIR storage element type for one indexed-array literal item.
 fn array_literal_element_type_for_ir(
