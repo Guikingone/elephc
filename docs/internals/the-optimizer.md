@@ -811,6 +811,17 @@ read's warning and null result. `count(array_map(...))` lowers to `ArrayLen(sour
 for the same pure closures; capturing or effectful callbacks keep the materialized map
 and its per-element calls.
 
+`src/ir_lower/stmt/map_sum_cache.rs` caches a loop-invariant
+`$sum += array_sum(array_map(<pure numeric closure>, $ints))` pair before a `for`
+loop whose counter starts at a non-negative constant and has a provably positive
+bound. The map and sum execute once into a compiler-generated Mixed local, and the
+loop only accumulates that local; the mapped temporary must have no other use, the
+source must be a plain `array<int>` local that the loop does not write or alias, and
+the body must contain exactly the map assignment and the sum update. The hidden
+local is released by the ordinary frame epilogue. A mapped local observed after the
+loop, a mutated source, a non-positive bound, or an unsupported callback keeps the
+per-iteration map and sum.
+
 `src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to `abs()`.
 When the operand is a concrete int, bool, or null-capable tagged scalar and the
 boxed result is observed only through one `(int)` cast, the call becomes

@@ -59,7 +59,7 @@ pub(crate) fn fuse_map_reads(
 /// The indexed-read fusion defers a source read that PHP's `array_map()` performed at the
 /// assignment. A reference, global, static binding, or by-reference parameter can change that
 /// source between the two points, so those sources keep the materialized map.
-pub(super) fn aliased_locals(
+pub(crate) fn aliased_locals(
     body: &[Stmt],
     by_ref_params: &std::collections::HashSet<String>,
 ) -> std::collections::HashSet<String> {

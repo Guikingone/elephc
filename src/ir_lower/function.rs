@@ -1838,6 +1838,16 @@ fn lower_body_into_function(
             .filter(|param| param.by_ref)
             .map(|param| param.name.clone())
             .collect::<std::collections::HashSet<_>>();
+        let aliased = crate::ir_lower::stmt::map_read_fusion::aliased_locals(
+            &fused_body,
+            &by_ref_param_names,
+        );
+        crate::ir_lower::stmt::map_sum_cache::cache_loop_invariant_map_sums(
+            &mut fused_body,
+            &env,
+            &by_ref_param_names,
+            &aliased,
+        );
         crate::ir_lower::stmt::map_read_fusion::fuse_map_reads(
             &mut fused_body,
             &env,
