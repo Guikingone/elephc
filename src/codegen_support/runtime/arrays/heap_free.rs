@@ -307,6 +307,8 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 /// - Segregated small-bin cache for ≤64-byte payloads
 /// - Ordered coalescing free list for larger blocks
 /// - Optional payload poisoning and debug validation when `_heap_debug_enabled`
+/// - With heap-debug disabled, a fast path releases small non-tail blocks straight into their
+///   bin and only branches into the shared code for tail resets and the ordered free list
 ///
 /// Input: `rax` = user pointer
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
@@ -322,7 +324,40 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
     emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
-    emitter.instruction("jz __rt_heap_free_debug_checked");                     // skip the validator and double-free guard when heap-debug mode is disabled
+    emitter.instruction("jnz __rt_heap_free_debug_path");                       // debug mode validates, poisons and checks duplicates on the general path
+
+    // -- fast path (heap-debug disabled): non-tail small blocks go straight to their bin --
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this payload belong to the x86_64 heap runtime?
+    emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers
+    emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
+    emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header
+    emitter.instruction("lea r10, [r11 + 16]");                                 // the freed footprint includes the 16-byte header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_live");
+    emitter.instruction("sub QWORD PTR [r8], r10");                             // subtract the freed footprint from the live-byte count
+    emitter.instruction("mov DWORD PTR [r9 + 4], 0");                           // clear the live refcount while the block is free
+    emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // clear the heap kind so free blocks do not look like live typed payloads
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the current bump offset before checking whether this is the tail block
+    emitter.instruction("lea rcx, [r10 + rcx]");                                // compute the current heap end address
+    emitter.instruction("lea rdx, [rax + r11]");                                // compute the freed block end address
+    emitter.instruction("cmp rdx, rcx");                                        // does the freed block reach the current heap end?
+    emitter.instruction("je __rt_heap_free_bump_reset");                        // yes — shrink the bump pointer instead
+    emitter.instruction(&format!("cmp r11, {}", HEAP_BIN_MAX_PAYLOAD));         // does the freed payload fit in the segregated bin cache?
+    emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads use the ordered coalescing free list
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
+    emit_free_bin_offset_x86_64(emitter, "r11", "rcx", "rdx", "r8");            // rcx = byte offset of the largest class the freed block can serve
+    emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the previous cached head for this size class
+    emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block onto the front of the bin chain
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // publish the freed block as the new bin head
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_frees");
+    emitter.instruction("add QWORD PTR [r8], 1");                               // count the released heap block
+    emitter.instruction("ret");                                                 // done
+
+    emitter.label("__rt_heap_free_debug_path");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
     emitter.instruction("cmp rax, r10");                                        // does the candidate freed pointer begin below the heap base?
     emitter.instruction("jb __rt_heap_free_debug_checked");                     // pointers outside the heap cannot participate in heap-debug double-free checks
@@ -385,6 +420,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_heap_free_cache_small");                      // no — cache small blocks or insert larger blocks into the general free list
 
     // -- bump reset: block is at end of heap, just shrink the bump pointer --
+    emitter.label("__rt_heap_free_bump_reset");
     emitter.instruction("mov rdx, r9");                                         // preserve the freed block header address while converting it back into a bump offset
     emitter.instruction("sub rdx, r10");                                        // compute the new bump offset from the heap base to the reclaimed block header
     emitter.instruction("mov QWORD PTR [r8], rdx");                             // shrink the bump pointer back to the start of the freed tail block

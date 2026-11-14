@@ -71,7 +71,7 @@ fn is_user_call_op(op: Op) -> bool {
 fn count_non_nop_instructions(func: &Function) -> usize {
     func.blocks
         .iter()
-        .filter(|block| !block.name.ends_with(".slow"))
+        .filter(|block| !crate::ir_passes::cfg::is_cold_block_name(&block.name))
         .flat_map(|block| block.instructions.iter())
         .filter_map(|id| func.instruction(*id))
         .filter(|inst| {

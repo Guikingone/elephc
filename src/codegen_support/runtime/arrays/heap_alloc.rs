@@ -411,8 +411,13 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = first cached block of this class, or null
     emitter.instruction("test r10, r10");                                       // is this class empty?
     emitter.instruction("jz __rt_heap_alloc_small_bump");                       // empty class: carve from the bump tail
-    emitter.instruction("mov rcx, r9");                                         // the bin head is the previous next-pointer slot
-    emitter.instruction("jmp __rt_heap_alloc_small_bin_found");                 // any cached block of this class satisfies the rounded request
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // any cached block of this class fits: load its next pointer
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // unlink the cached block from the head of its bin
+    emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused heap header
+    emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0))); // materialize the x86_64 heap marker while leaving the low kind bits clear
+    emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // stamp the reused heap header as an owned raw heap allocation
+    emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer instead of the internal header address
+    emitter.instruction("jmp __rt_heap_alloc_count");                           // shared allocation accounting
 
     // -- bump tail full: search larger classes, then the general free list --
     emitter.label("__rt_heap_alloc_small_rescan");
@@ -535,9 +540,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_heap_alloc_count");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_allocs");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current allocation counter before recording this heap allocation
-    emitter.instruction("add r9, 1");                                           // count the newly allocated or reused heap block
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated allocation counter back into runtime state
+    emitter.instruction("add QWORD PTR [r8], 1");                               // count the newly allocated or reused heap block
     emitter.instruction("mov r11d, DWORD PTR [r10]");                           // load the finalized payload size from the allocated block header
     emitter.instruction("add r11, 16");                                         // include the uniform 16-byte header in the live-footprint accounting
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_live");

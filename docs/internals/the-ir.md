@@ -1175,11 +1175,16 @@ or length in the same block, followed by exactly one `release`, and the
 instructions in between are pure reads or arithmetic (so the parent cannot be
 written, released or freed while the element pointer is held). The read is marked
 `Borrowed`, which makes codegen skip its incref, and the release becomes `nop`.
-A boxed `mixed` element may also be borrowed when it only feeds mixed arithmetic, a
-null test, or the receiver of a `method_call` whose effects show that no possible
-target writes or releases anything (`$shapes[$i]->area()`); the window may then
-continue past the receiver's null check into the call block when the other branch
-only throws.
+A boxed `mixed` or object element may also be borrowed when it only feeds mixed
+arithmetic, a loose comparison (`__rt_php_compare` never runs user code), a null
+test, or the receiver of an argument-less `method_call` all of whose possible
+implementations are pure (`$shapes[$i]->area()`). Purity is computed per method name
+over the whole module before the passes run (`set_pure_methods`): every class method
+of that name must contain no call of any kind and no effect beyond reading the heap,
+its own locals and globals, allocating and throwing, must have no by-reference
+parameter and no global, static or reference local, and the module must declare no
+`__call`. The window may then continue past the receiver's null check into the call
+block when the other branch only throws.
 
 ### Checked Cast Hoisting
 

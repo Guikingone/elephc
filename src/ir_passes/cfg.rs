@@ -11,6 +11,8 @@
 //! Key details:
 //! - Reverse postorder visits a definition before its dominated uses on
 //!   reducible CFGs, which is the order the linear-scan numbering relies on.
+//! - Cold blocks (`is_cold_block_name`) are ordered after their hot siblings so values
+//!   live across them on the hot path do not have their intervals stretched over cold calls.
 
 use std::collections::HashSet;
 
@@ -59,6 +61,15 @@ pub(super) fn successors(term: &Terminator) -> Vec<BlockId> {
     }
 }
 
+/// Returns true for the blocks of rarely taken paths: generic fallbacks of speculative fast
+/// paths (`*.slow`) and the overflow handling of a split `int` return (`return.overflow`,
+/// `return.int_min`, `return.type_error`). Their calls are not charged against keeping a value
+/// in a caller-saved register, and the linear order places them after the hot path.
+pub(crate) fn is_cold_block_name(name: &str) -> bool {
+    name.ends_with(".slow")
+        || matches!(name, "return.overflow" | "return.int_min" | "return.type_error")
+}
+
 /// Builds the predecessor list for every block: `preds[b]` holds each block
 /// whose terminator branches to `b`, in block-index order.
 ///
@@ -98,9 +109,15 @@ pub(super) fn reverse_postorder(func: &Function) -> Vec<BlockId> {
         stack.push((block_id, true));
         if let Some(block) = func.block(block_id) {
             if let Some(term) = &block.terminator {
-                for succ in successors(term) {
-                    if !visited.contains(&succ) {
-                        stack.push((succ, false));
+                // Cold successors are pushed last so they are explored first and finish
+                // first: reversed, they land after the hot path in the linear order.
+                let succs = successors(term);
+                let is_cold = |succ: &BlockId| {
+                    func.block(*succ).is_some_and(|block| is_cold_block_name(&block.name))
+                };
+                for succ in succs.iter().filter(|succ| !is_cold(succ)).chain(succs.iter().filter(|succ| is_cold(succ))) {
+                    if !visited.contains(succ) {
+                        stack.push((*succ, false));
                     }
                 }
             }

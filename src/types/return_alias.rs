@@ -95,6 +95,14 @@ impl ReturnAliasSummaries {
         ))
     }
 
+    /// Looks up a method implementation summary by class and case-folded method name.
+    #[cfg(test)]
+    pub(crate) fn method(&self, class_name: &str, method: &str) -> Option<&ReturnArgAlias> {
+        self.methods.get(&(
+            class_name.trim_start_matches('\\').to_string(),
+            php_symbol_key(method),
+        ))
+    }
 }
 
 /// Collects return/argument alias summaries from all source declarations.

@@ -60,6 +60,14 @@ pub(crate) struct FusedArrayUpdate {
     pub after: Vec<InstId>,
 }
 
+/// The instructions of one fused `$local = $a op $b` update on a `mixed` local: the release of
+/// the local's previous value and the store of the new one, lowered after the mixed operation.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FusedLocalUpdate {
+    pub release: InstId,
+    pub store: InstId,
+}
+
 /// Mutable backend state for one EIR function.
 pub(crate) struct FunctionContext<'a> {
     pub(super) module: &'a Module,
@@ -125,6 +133,8 @@ pub(crate) struct FunctionContext<'a> {
     /// `$a[$i] op= $x` on a `mixed` list lowered as one in-place update, keyed by the mixed
     /// `+`/`-`/`*` instruction (see `lower_inst::fused_array_update`).
     pub(super) fused_array_updates: HashMap<InstId, FusedArrayUpdate>,
+    /// Mixed `+`/`-`/`*` results assigned to a `mixed` local (see `FusedLocalUpdate`).
+    pub(super) fused_local_updates: HashMap<InstId, FusedLocalUpdate>,
     /// `hash_set`s of distinct literal string keys into a fresh table whose entry slot is known
     /// at compile time (see `lower_inst::hashes::lower_static_hash_literal_set`).
     pub(super) static_hash_literal_sets: HashMap<InstId, StaticHashSlot>,
@@ -192,6 +202,7 @@ impl<'a> FunctionContext<'a> {
             fused_checked_casts: HashMap::new(),
             fused_checked_mixed: HashMap::new(),
             fused_array_updates: HashMap::new(),
+            fused_local_updates: HashMap::new(),
             static_hash_literal_sets: HashMap::new(),
             value_type_overrides: HashMap::new(),
             released_values: HashSet::new(),

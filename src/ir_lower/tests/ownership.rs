@@ -240,9 +240,10 @@ echo (string) $values["s"];
     );
 }
 
-/// Verifies a user-call result that aliases a borrowed Mixed argument is not released.
+/// Verifies a user-call result is owned by the caller and released, even when the callee
+/// returns its borrowed argument as is: callees hand back a reference of their own.
 #[test]
-fn borrowed_user_call_result_is_not_treated_as_an_owning_temporary() {
+fn user_call_result_returning_its_argument_is_owned_and_released() {
     let module = super::lower_source(
         r#"<?php
 function identity(mixed $value): mixed { return $value; }
@@ -267,13 +268,13 @@ echo $value;
         function
             .instructions
             .iter()
-            .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(result)),
-        "a user-call result borrowed from a local argument must not be released"
+            .any(|inst| inst.op == Op::Release && inst.operands.first().copied() == Some(result)),
+        "the caller owns a user-call result and must release it"
     );
-    assert_ne!(
+    assert_eq!(
         function.value(result).expect("call result metadata").ownership,
         Ownership::Owned,
-        "borrowed call results must not publish an owning EIR contract"
+        "user-call results publish an owning EIR contract"
     );
 }
 

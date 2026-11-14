@@ -35,12 +35,14 @@ use super::literal_defaults;
 use super::literal_defaults::emit_string_literal_default_to_result;
 use super::{CodegenIrError, Result};
 
-mod arithmetic;
+pub(super) mod arithmetic;
 pub(super) use arithmetic::mixed_numeric_int_fast_path_applies;
 pub(super) use objects::this_scalar_prop_gets;
 mod arrays;
 mod fused_array_update;
+mod fused_local_update;
 pub(super) use fused_array_update::lower_fused_array_update;
+pub(super) use fused_local_update::lower_fused_local_update;
 mod buffers;
 mod runtime_functions;
 pub(crate) mod builtins;
@@ -2870,43 +2872,68 @@ fn interface_satisfies_interface(
 }
 
 /// Converts an untyped boxed Mixed payload into indexed-array storage with Mixed slots.
+///
+/// The unboxed payload is borrowed from the box, while `__rt_array_to_mixed` consumes one
+/// reference and returns a unique array: the payload is retained first, so a shared payload
+/// is copied rather than rewritten under its other owners, and the result is a reference of
+/// its own. A payload already holding boxed slots needs no conversion.
 fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let done = ctx.next_label("mixed_to_list_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
+            ctx.emitter.instruction("mov x0, x1");                              // the unboxed indexed-array payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // the unboxed indexed-array payload
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("cmp x1, #7");                              // already boxed Mixed slots?
+            ctx.emitter.instruction(&format!("b.eq {}", done));                 // the retained payload is the result
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the retained payload to the conversion helper
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("cmp rsi, 7");                              // already boxed Mixed slots?
+            ctx.emitter.instruction(&format!("je {}", done));                   // the retained payload is the result
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    ctx.emitter.label(&done);
     Ok(())
 }
 
 /// Converts an untyped boxed Mixed payload into associative-array storage with Mixed values.
+///
+/// As for indexed arrays, the borrowed payload is retained before `__rt_hash_to_mixed`
+/// consumes a reference, so the result is a reference of its own.
 fn lower_mixed_to_mixed_assoc_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed associative-array payload to the Mixed conversion helper
+            ctx.emitter.instruction("mov x0, x1");                              // the unboxed associative-array payload
         }
-        Arch::X86_64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // the unboxed associative-array payload
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &hash_ty);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the retained payload to the conversion helper
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
-    abi::emit_incref_if_refcounted(
-        ctx.emitter,
-        &PhpType::AssocArray {
-            key: Box::new(PhpType::Mixed),
-            value: Box::new(PhpType::Mixed),
-        },
-    );
     Ok(())
 }
 
@@ -7252,7 +7279,7 @@ fn emit_borrowed_stack_mixed_arg_release(
 }
 
 /// Converts the currently loaded indexed-array argument into boxed Mixed slots.
-fn emit_loaded_indexed_array_to_mixed(ctx: &mut FunctionContext<'_>, source_elem_ty: &PhpType) {
+pub(super) fn emit_loaded_indexed_array_to_mixed(ctx: &mut FunctionContext<'_>, source_elem_ty: &PhpType) {
     let value_tag = runtime_value_tag(source_elem_ty) as i64;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

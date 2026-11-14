@@ -118,6 +118,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 /// passes only simplify), with `MAX_MODULE_ITERATIONS` as a backstop.
 pub fn optimize_module(module: &mut Module) {
     let passes = default_passes();
+    super::borrow_reads::set_pure_methods(module);
     super::mem2reg::set_callee_ref_params(
         module
             .functions

@@ -1099,6 +1099,9 @@ fn ensure_static_property_value_supported(
     if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if indexed_array_needs_mixed_widening(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if can_coerce_mixed_to_scalar_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -1219,6 +1222,24 @@ fn load_static_property_store_value_to_result(
         }
         return Ok(());
     }
+    if indexed_array_needs_mixed_widening(&value_ty, slot_ty) {
+        let PhpType::Array(source_elem) = ctx.load_value_to_result(value)?.codegen_repr() else {
+            return Err(CodegenIrError::unsupported("static property array widening"));
+        };
+        // A list of typed elements (`[new A(), new B()]`) stored in an `array` property whose
+        // slots hold boxed values. The conversion consumes one reference and returns a unique
+        // widened array the store then owns: an owned source is consumed as is, a borrowed one
+        // is retained first so the conversion copies it instead of rewriting its storage.
+        let owned = ctx
+            .function
+            .value(value)
+            .is_some_and(|metadata| metadata.ownership == crate::ir::Ownership::Owned);
+        if !owned {
+            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty.codegen_repr());
+        }
+        super::emit_loaded_indexed_array_to_mixed(ctx, &source_elem.codegen_repr());
+        return Ok(());
+    }
     ctx.load_value_to_result(value)?;
     if matches!(slot_ty.codegen_repr(), PhpType::Int)
         && matches!(value_ty.codegen_repr(), PhpType::Mixed)
@@ -1228,6 +1249,17 @@ fn load_static_property_store_value_to_result(
     }
     box_static_property_value_if_needed(ctx, slot_ty, &value_ty);
     Ok(())
+}
+
+/// Returns true when a typed indexed array is stored in a static property whose list slots hold
+/// boxed `mixed` values.
+fn indexed_array_needs_mixed_widening(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(
+        (value_ty.codegen_repr(), slot_ty.codegen_repr()),
+        (PhpType::Array(value_elem), PhpType::Array(slot_elem))
+            if slot_elem.codegen_repr() == PhpType::Mixed
+                && !matches!(value_elem.codegen_repr(), PhpType::Mixed | PhpType::Void | PhpType::Never)
+    )
 }
 
 /// Narrows a loaded Mixed result to int for coercive typed static-property stores.

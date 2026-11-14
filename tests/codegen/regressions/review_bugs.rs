@@ -410,3 +410,203 @@ echo "\n";
     assert_eq!(out.stdout, "NULL\nint(5)\nNULL\nint(7)\nint(2)\n614\n2 4 6 \n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// Regression: a method call on an element borrowed from a list is not borrowed when the method may run user code (a closure stored in a
+/// property) that replaces the list; the receiver must stay alive for the whole call.
+#[test]
+fn test_method_receiver_from_list_survives_list_replacement_r1() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Holder { public array $items = []; }
+abstract class S { public ?Holder $h = null; public $v = 5; public $name = "nm"; public ?Closure $cb = null; abstract function area(): int; function label(): string { return $this->name . $this->v; } }
+class A extends S { function area(): int { return 1; } }
+class B extends S { function area(): int { if ($this->h !== null) { $this->h->items = []; } $junk = [new A(), new A(), new A()]; return $this->v + count($junk); } }
+class C extends S { function area(): int { if ($this->cb !== null) { ($this->cb)(); } $junk = [1, 2, 3, 4]; return $this->v * 2; } function label(): string { global $G; $G = []; $j = ["a" . $this->v, "b"]; return $this->name . count($j); } }
+function t1() {
+  $h = new Holder(); $b = new B(); $b->h = $h;
+  $h->items = [new A(), $b];
+  $b = null;
+  for ($i = 0; $i < count($h->items); $i++) { echo $h->items[$i]->area(), " "; }
+  echo count($h->items), "\n";
+}
+function t2() {
+  $shapes = [new A(), new C()];
+  $c = $shapes[1];
+  $c->cb = function() use (&$shapes) { $shapes = [new A()]; };
+  $c = null;
+  $n = count($shapes);
+  for ($i = 0; $i < $n && $i < count($shapes); $i++) { echo $shapes[$i]->area(), " "; }
+  echo count($shapes), "\n";
+}
+$G = [new A(), new C()];
+function t3() { global $G; for ($i = 0; $i < 2 && $i < count($G); $i++) { echo $G[$i]->label(), " "; } echo count($G), "\n"; }
+function t4() {
+  $xs = [new A(), new B(), null];
+  for ($i = 0; $i < 3; $i++) { if ($xs[$i] === null) { echo "null "; } else { echo $xs[$i]->area(), $xs[$i]->label(), " "; } }
+  echo $xs[2]?->area() ?? "ns", "\n";
+  try { echo $xs[2]->area(); } catch (Error $e) { echo get_class($e), ":", $e->getMessage(), "\n"; }
+}
+t1(); t2(); t3(); t4();
+"#);
+    assert_eq!(out.stdout, "1 8 0\n1 10 1\nnm5 nm2 0\n1nm5 8nm5 null ns\nError:Call to a member function area() on null\n");
+}
+
+/// Regression: a method call on an element of a list of sibling objects is not borrowed when the method may run user code (a closure stored in a
+/// property) that replaces the list; the receiver must stay alive for the whole call.
+#[test]
+fn test_method_receiver_from_list_survives_list_replacement_r2() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+abstract class S { public $v = 5; public ?Closure $cb = null; abstract function area(): int; }
+class A extends S { function area(): int { return 1; } }
+class C extends S { function area(): int { if ($this->cb !== null) { ($this->cb)(); } $junk = [1, 2, 3, 4]; return $this->v * 2; } }
+function t2() {
+  $shapes = [new A(), new C()];
+  $c = $shapes[1];
+  $c->cb = function() use (&$shapes) { $shapes = [new A()]; };
+  $c = null;
+  $n = count($shapes);
+  for ($i = 0; $i < $n && $i < count($shapes); $i++) { echo $shapes[$i]->area(), " "; }
+  echo count($shapes), "\n";
+}
+t2();
+"#);
+    assert_eq!(out.stdout, "1 10 1\n");
+}
+
+/// A typed list (sibling objects, ints) assigned to a static `array` property is widened to
+/// boxed slots; a borrowed local stays independent of the property afterwards.
+#[test]
+fn test_typed_list_assigned_to_static_array_property() {
+    let out = compile_and_run(r#"<?php
+abstract class S { public $v = 5; function area(): int { return $this->v; } }
+class A extends S {} class B extends S { function area(): int { return 9; } }
+class Reg { public static array $all = []; public static array $ints = []; }
+Reg::$all = [new A(), new B()]; echo count(Reg::$all), Reg::$all[1]->area(), "\n";
+$x = [new B(), new A(), new B()];
+Reg::$all = $x;
+$x[] = new A();
+echo count($x), count(Reg::$all), Reg::$all[0]->area(), $x[3]->area(), "\n";
+Reg::$all[] = new A();
+echo count(Reg::$all), count($x), "\n";
+Reg::$all = [new A(), new A()]; echo Reg::$all[1]->area(), "\n";
+$n = [1, 2, 3]; Reg::$ints = $n; $n[0] = 7; echo Reg::$ints[0], $n[0], "\n";
+function fill() { Reg::$ints = [4, 5]; return count(Reg::$ints); }
+echo fill(), "\n";
+"#);
+    assert_eq!(out, "29\n4395\n44\n5\n17\n2\n");
+}
+
+/// An untyped identity function (`function idu($u) { return $u; }`) returning an array or hash hands back its own reference: the caller's array survives and nothing leaks.
+#[test]
+fn test_untyped_identity_function_keeps_caller_array() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function idu($u) { return $u; }
+function f() { $a = [1,2,3]; $x = idu($a); $x = idu($x); echo count($x), "|", count($a), "\n"; }
+f();
+function g() { $a = [1,2,3]; for ($i = 0; $i < 3; $i++) { $x = idu($a); $x = idu($x); } $x[] = 4; echo count($x), count($a), "\n"; }
+g();
+function h() { $m = ['a' => 1, 'b' => [2]]; $y = idu($m); $y['c'] = 3; echo count($y), count($m), "\n"; }
+h();
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3|3\n43\n32\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// A closure called directly through its variable releases owned argument temporaries (a literal array, a widened local, a new object) after the call.
+#[test]
+fn test_direct_closure_call_releases_argument_temporaries() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class O { public $v = 1; }
+function t() {
+  $g = function(array $x) { return $x; };
+  echo count($g([4])), "\n";
+  $a = [1, 2];
+  echo count($g($a)), count($a), "\n";
+  $h = fn(O $o) => $o;
+  echo $h(new O())->v, "\n";
+}
+t();
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1\n22\n1\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// `array_map` with a named identity callback does not leak the elements it passes.
+#[test]
+fn test_array_map_identity_callback_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function ida(array $a) { return $a; }
+$r = array_map("ida", [[1],[2]]);
+echo count($r), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// A typed `bool` compared with an int or float, and bool literals in constant folding, compare as two booleans (`true <=> 2` is 0, `false < -1` is true).
+#[test]
+fn test_typed_bool_comparisons_use_boolean_semantics() {
+    let out = compile_and_run(r#"<?php
+function bi(bool $a, int $b, float $f) { var_dump($a <=> $b, $a < $b, !$a < -1, $f <=> $a, $a == $b, $a > $f); }
+bi(true, 2, 1.5); bi(false, -1, 0.0); bi(true, 0, -0.5);
+var_dump(true <=> 2, false < -1, 1.5 <=> true, true == 3, false >= 0);
+"#);
+    assert_eq!(out, "int(0)\nbool(false)\nbool(true)\nint(0)\nbool(true)\nbool(false)\nint(-1)\nbool(true)\nbool(false)\nint(0)\nbool(false)\nbool(false)\nint(1)\nbool(false)\nbool(true)\nint(0)\nbool(false)\nbool(false)\nint(0)\nbool(true)\nint(0)\nbool(true)\nbool(true)\n");
+}
+
+/// `call_user_func` with an identity closure taking `mixed` passes the argument-container
+/// elements borrowed (the callee hands back its own reference) and leaks nothing.
+#[test]
+fn test_call_user_func_identity_closure_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$c = function (mixed $x) { return $x; };
+echo call_user_func($c, "two"), ":", call_user_func($c, 1), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "two:1\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// Arguments spread into `Fiber::start()` are transferred to the fiber: a parameter suspended
+/// out to the caller stays alive after the call (heap-debug poisoning exposes a freed read).
+#[test]
+fn test_fiber_start_spread_argument_suspended_to_caller_stays_alive() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function make(): Fiber {
+    return new Fiber(function(mixed $a, mixed $b, mixed $c): void {
+        echo gettype($a) . ":" . $a . "\n";
+        echo gettype($b) . ":" . $b . "\n";
+        $x = Fiber::suspend($c);
+        echo gettype($x) . ":" . $x . "\n";
+    });
+}
+
+$args = ["b" => "bee", "a" => 7, "c" => ["k" => 1]];
+$f = make();
+$ret = $f->start(...$args);
+echo $ret["k"] . "\n";
+$f->resume("done");
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "integer:7\nstring:bee\n1\nstring:done\n");
+}
+
+/// A nullable int (`?int` parameter, int-list element) ordered against an int or float compares
+/// a null as a boolean (`null < -1` is true, `null <=> 0` is 0) and an int numerically.
+#[test]
+fn test_nullable_int_ordered_comparison_treats_null_as_bool() {
+    let out = compile_and_run(r#"<?php
+function ni(?int $a, int $b) { var_dump($a < $b, $a > $b, $a <=> $b, $a <= $b, $b >= $a, $b <=> $a); }
+ni(null, -1); ni(null, 0); ni(null, 5); ni(3, 2); ni(-4, -4);
+function nf(?int $a, float $f) { var_dump($a < $f, $a <=> $f); }
+nf(null, -0.5); nf(null, 0.0); nf(2, 2.5);
+$list = [5, 1, 9];
+$best = 3;
+$cnt = 0;
+for ($i = 0; $i < 3; $i++) { if ($list[$i] < $best) { $cnt++; } }
+echo $cnt, "\n";
+"#);
+    assert_eq!(out, "bool(true)\nbool(false)\nint(-1)\nbool(true)\nbool(true)\nint(1)\nbool(false)\nbool(false)\nint(0)\nbool(true)\nbool(true)\nint(0)\nbool(true)\nbool(false)\nint(-1)\nbool(true)\nbool(true)\nint(1)\nbool(false)\nbool(true)\nint(1)\nbool(false)\nbool(false)\nint(-1)\nbool(false)\nbool(false)\nint(0)\nbool(true)\nbool(true)\nint(0)\nbool(true)\nint(-1)\nbool(false)\nint(0)\nbool(true)\nint(-1)\n1\n");
+}

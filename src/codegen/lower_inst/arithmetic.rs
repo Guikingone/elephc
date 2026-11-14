@@ -786,7 +786,7 @@ pub(in crate::codegen) fn mixed_numeric_int_fast_path_applies(
 /// Emits the int fast path of a mixed `+`/`-`/`*`: branches to `slow` unless every boxed
 /// operand holds an int payload and the native operation does not overflow. On fall-through
 /// the int result is in x9 (AArch64) / rax (x86_64).
-fn emit_mixed_numeric_int_fast_path(
+pub(in crate::codegen) fn emit_mixed_numeric_int_fast_path(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     slow: &str,

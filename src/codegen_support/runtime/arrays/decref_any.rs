@@ -128,7 +128,7 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_decref_any_done");                            // foreign/static pointers must be ignored by the uniform x86_64 release dispatcher
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for the concrete release dispatch
     emitter.instruction("cmp r10, 1");                                          // does this heap-backed payload own a persisted string buffer?
-    emitter.instruction("je __rt_decref_any_string");                           // strings release through heap_free_safe on x86_64
+    emitter.instruction("je __rt_decref_any_string");                           // strings release through heap_free on x86_64
     emitter.instruction("cmp r10, 2");                                          // does this heap-backed payload point at an indexed array?
     emitter.instruction("je __rt_decref_any_array");                            // indexed arrays release through the x86_64 array decref helper
     emitter.instruction("cmp r10, 3");                                          // does this heap-backed payload point at an associative array?
@@ -144,7 +144,7 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");
-    emitter.instruction("jmp __rt_heap_free_safe");                             // tail-call to the persisted-string safe-free helper on x86_64
+    emitter.instruction("jmp __rt_heap_free");                                  // tail-call to the heap free path: the heap range and marker were checked above
 
     emitter.label("__rt_decref_any_array");
     emitter.instruction("jmp __rt_decref_array");                               // tail-call to the indexed-array decref helper on x86_64

@@ -149,7 +149,7 @@ pub(crate) fn lower_fused_array_update(
 }
 
 /// Returns a cloned instruction of the current function.
-fn instruction(ctx: &FunctionContext<'_>, id: InstId) -> Result<Instruction> {
+pub(super) fn instruction(ctx: &FunctionContext<'_>, id: InstId) -> Result<Instruction> {
     ctx.function
         .instruction(id)
         .cloned()
@@ -198,7 +198,7 @@ fn emit_aarch64_int_op(ctx: &mut FunctionContext<'_>, op: MixedNumericOp, lhs: &
 }
 
 /// Merges the caller-saved register saves of every instruction of the group (one per value).
-fn merged_call_saves(ctx: &FunctionContext<'_>, group: &[InstId]) -> Vec<crate::ir_passes::CallSave> {
+pub(super) fn merged_call_saves(ctx: &FunctionContext<'_>, group: &[InstId]) -> Vec<crate::ir_passes::CallSave> {
     let mut merged: Vec<crate::ir_passes::CallSave> = Vec::new();
     for id in group {
         for save in ctx.allocation.call_saves(*id) {

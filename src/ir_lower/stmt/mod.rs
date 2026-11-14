@@ -5131,8 +5131,9 @@ fn lower_int_function_return(ctx: &mut LoweringContext<'_, '_>, value_expr: &Exp
                 } => {
                     let split_initialized = ctx.initialized_slots_snapshot();
                     let split_types = ctx.local_types_snapshot();
-                    let slow_block = ctx.builder.create_named_block("return.overflow", Vec::new());
+                    // The native block first, so the emitted code falls through to it.
                     let fast_block = ctx.builder.create_named_block("return.native", Vec::new());
+                    let slow_block = ctx.builder.create_named_block("return.overflow", Vec::new());
                     ctx.builder.terminate(Terminator::CondBr {
                         cond: overflow.value,
                         then_target: slow_block,

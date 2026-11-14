@@ -77,7 +77,8 @@ pub(crate) fn set_callee_ref_params(map: HashMap<String, Vec<bool>>) {
 /// scalar operands by value (only their container receivers, never scalar slots, are traced
 /// back to slots), and a
 /// direct `call` reads an argument by value when the resolved callee declares that parameter
-/// by value. Every other consumer is treated as a potential by-reference escape.
+/// by value, as do a few by-value runtime functions (`printf`, `round`, ...). Every other
+/// consumer is treated as a potential by-reference escape.
 fn reads_by_value(data: &DataPool, inst: &Instruction, index: usize) -> bool {
     use Op::*;
     if super::dead_store::op_is_value_only_consumer(inst.op) {
@@ -101,6 +102,28 @@ fn reads_by_value(data: &DataPool, inst: &Instruction, index: usize) -> bool {
                     .is_some_and(|by_ref| !by_ref)
             })
         }
+        // Formatting, output and math runtime functions only read their scalar arguments
+        // (`printf("%.4f", $total)`); none of them takes a by-reference parameter.
+        RuntimeCall => matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::UnaryString(_)
+                    | crate::ir::RuntimeCallTarget::Function(
+                        crate::ir::RuntimeFnId::Printf
+                            | crate::ir::RuntimeFnId::Sprintf
+                            | crate::ir::RuntimeFnId::NumberFormat
+                            | crate::ir::RuntimeFnId::Abs
+                            | crate::ir::RuntimeFnId::Floor
+                            | crate::ir::RuntimeFnId::Round
+                            | crate::ir::RuntimeFnId::Sqrt
+                            | crate::ir::RuntimeFnId::Intdiv
+                            | crate::ir::RuntimeFnId::Max
+                            | crate::ir::RuntimeFnId::Min
+                            | crate::ir::RuntimeFnId::StrPad
+                            | crate::ir::RuntimeFnId::StrRepeat
+                    )
+            ))
+        ),
         _ => false,
     }
 }

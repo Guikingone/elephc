@@ -207,10 +207,11 @@ fn php_numeric_string(value: &str) -> Option<f64> {
     trimmed.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
-/// PHP compares `null` with a bool, int or float (or `null`) as two booleans: returns both
+/// PHP compares `null` or a bool with a bool, int or float (or `null`) as two booleans: returns both
 /// operands' truthiness as `0.0`/`1.0` for such a pair, `None` otherwise.
 fn null_bool_pair(left: &Expr, right: &Expr) -> Option<(f64, f64)> {
-    let null = |e: &Expr| matches!(e.kind, ExprKind::Null);
+    // A null or bool literal on either side makes PHP compare both sides as booleans.
+    let null = |e: &Expr| matches!(e.kind, ExprKind::Null | ExprKind::BoolLiteral(_));
     if !null(left) && !null(right) {
         return None;
     }

@@ -656,3 +656,90 @@ print_r(lit());
     assert_eq!(out.stdout, "Array\n(\n    [id] => 0\n    [name] => s0\n    [f] => 1.5\n    [b] => 1\n    [n] => \n    [arr] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [h] => Array\n        (\n            [x] => 0\n        )\n\n    [id2] => 0\n)\n{\"id\":0,\"name\":\"s0\",\"f\":1.5,\"b\":true,\"n\":null,\"arr\":[1,2],\"h\":{\"x\":0},\"id2\":0}\nArray\n(\n    [id] => 1\n    [name] => s1\n    [f] => 1.5\n    [b] => 1\n    [n] => \n    [arr] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [h] => Array\n        (\n            [x] => 1\n        )\n\n    [id2] => 2\n)\n{\"id\":1,\"name\":\"s1\",\"f\":1.5,\"b\":true,\"n\":null,\"arr\":[1,2],\"h\":{\"x\":1},\"id2\":2}\nArray\n(\n    [id] => 2\n    [name] => s2\n    [f] => 1.5\n    [b] => 1\n    [n] => \n    [arr] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [h] => Array\n        (\n            [x] => 2\n        )\n\n    [id2] => 4\n)\n{\"id\":2,\"name\":\"s2\",\"f\":1.5,\"b\":true,\"n\":null,\"arr\":[1,2],\"h\":{\"x\":2},\"id2\":4}\nArray\n(\n    [a] => 3\n    [b] => 2\n    [5] => five\n    [] => empty\n    [c] => 4\n)\n30 29 0 k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12,k13,k14,k15,k16,k17,k18,k19,k20,k21,k22,k23,k24,k25,k26,k27,k28,k29\nk29,new,k3\n19\np=q r=s \nyn\nArray\n(\n    [é] => u\n    [ü] => v\n    [a\0b] => w\n)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// A list literal of sibling objects is typed by their nearest common parent class: virtual
+/// calls through borrowed elements dispatch to every override (including a grandchild and a
+/// method that mutates its object), interface-only siblings, a null element and a copied list
+/// keep PHP semantics, and nothing leaks.
+#[test]
+fn test_sibling_object_list_literal_dispatches_virtually() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+abstract class Shape { abstract public function area(): float; public function name(): string { return static::class; } }
+class Circle extends Shape { public function __construct(private float $r) {} public function area(): float { return 3.0 * $this->r * $this->r; } }
+class Square extends Shape { public function __construct(private float $s) {} public function area(): float { return $this->s * $this->s; } }
+class BigSquare extends Square { public function area(): float { return 2.0 * parent::area(); } }
+class Counter extends Shape { public int $calls = 0; public function area(): float { $this->calls++; return (float)$this->calls; } }
+$shapes = [new Circle(1.0), new Square(2.0), new BigSquare(3.0), new Counter()];
+$total = 0.0;
+for ($i = 0; $i < 8; $i++) {
+    $total += $shapes[$i % 4]->area();
+}
+printf("%.2f\n", $total);
+echo $shapes[3]->calls, " ", $shapes[2]->name(), "\n";
+interface Named { public function n(): string; }
+class A implements Named { public function n(): string { return "a"; } }
+class B implements Named { public function n(): string { return "b"; } }
+$named = [new A(), new B(), new A()];
+foreach ($named as $x) { echo $x->n(); }
+echo "\n";
+$maybe = [new Circle(2.0), null, new Square(1.0)];
+foreach ([0, 2] as $k) { printf("%.1f ", $maybe[$k]->area()); }
+echo "\n";
+$copy = $shapes;
+$copy[0] = new Square(5.0);
+printf("%.1f %.1f\n", $shapes[0]->area(), $copy[0]->area());
+function sum(array $list): float { $t = 0.0; foreach ($list as $s) { $t += $s->area(); } return $t; }
+printf("%.1f\n", sum([new Square(1.0), new BigSquare(1.0)]));
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "53.00\n2 BigSquare\naba\n12.0 1.0 \n3.0 25.0\n3.0\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// `$local = $a op $b` on a `mixed` local rewrites the local's own box in place only when it is
+/// unshared and scalar: a box also stored in an array or another variable, an old string or
+/// float value, an overflowing result, a referenced local and a `global` keep PHP semantics.
+#[test]
+fn test_mixed_local_arithmetic_assignment_reuses_only_unshared_boxes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function run(array $d, int $n) {
+    $out = [];
+    $nd = "start";
+    for ($i = 0; $i < $n; $i++) {
+        $nd = $d[$i % 3] + $i;
+        if ($i % 4 == 1) { $out[] = $nd; }
+        if ($i == 5) { $nd = 2.5; }
+        if ($i == 6) { $keep = $nd; }
+    }
+    $nd = $d[3] + 1;
+    var_dump($nd, $keep);
+    return $out;
+}
+$d = [10, 20, 30, PHP_INT_MAX];
+$d[0] = $d[0] * 1;
+print_r(run($d, 12));
+function refd(array $d) {
+    $x = 0;
+    $r = &$x;
+    for ($i = 0; $i < 3; $i++) { $x = $d[$i] + $i; }
+    echo $r, "\n";
+}
+refd([1, 2, 3]);
+$g = null;
+function viaGlobal(array $d) { global $g; for ($i = 0; $i < 3; $i++) { $g = $d[$i] * 2; } }
+viaGlobal([4, 5, 6]);
+echo $g, "\n";
+$m = [1, "2", 3.5];
+$acc = 0;
+foreach ($m as $v) { $acc = $acc + $v; }
+var_dump($acc);
+$s = "x";
+$t = [7, 8];
+$copy = [];
+for ($i = 0; $i < 2; $i++) { $s = $t[$i] - 1; $copy[] = $s; }
+var_dump($s, $copy);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "float(9.223372036854776E+18)\nint(16)\nArray\n(\n    [0] => 21\n    [1] => 35\n    [2] => 19\n)\n5\n12\nfloat(6.5)\nint(7)\narray(2) {\n  [0]=>\n  int(6)\n  [1]=>\n  int(7)\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

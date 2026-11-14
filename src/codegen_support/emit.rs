@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Instruction comments are emitted by callers; this module preserves target syntax and output ordering.
+//! - `instruction()` forwards a frame-slot reload that immediately follows the store of the
+//!   same slot (comments only in between) from the stored register.
 
 use std::collections::HashSet;
 use std::fmt::Write;
@@ -62,8 +64,58 @@ impl Emitter {
     }
 
     /// Emits a single assembly instruction with standard indentation.
+    ///
+    /// A frame-slot load that directly follows a store of the same slot (only comments in
+    /// between, no label) is forwarded from the stored register: it becomes a register move,
+    /// or nothing when it reloads the register it just stored.
     pub fn instruction(&mut self, instr: &str) {
+        if let Some(forwarded) = self.forward_frame_reload(instr) {
+            match forwarded {
+                Some(mov) => {
+                    let _ = writeln!(self.buf, "    {}", mov);
+                }
+                None => {}
+            }
+            return;
+        }
         let _ = writeln!(self.buf, "    {}", instr);
+    }
+
+    /// Returns `Some(replacement)` when `instr` reloads the frame slot the previous instruction
+    /// stored: `Some(None)` drops it (same register), `Some(Some(mov))` copies the register.
+    fn forward_frame_reload(&self, instr: &str) -> Option<Option<String>> {
+        let (dest, load_slot, float) = parse_frame_access(self.target.arch, instr, false)?;
+        let previous = self.previous_instruction()?;
+        let (src, store_slot, store_float) = parse_frame_access(self.target.arch, previous, true)?;
+        if store_slot != load_slot || store_float != float {
+            return None;
+        }
+        if src == dest {
+            return Some(None);
+        }
+        let mov = match (self.target.arch, float) {
+            (Arch::X86_64, false) => format!("mov {}, {}", dest, src),
+            (Arch::X86_64, true) => format!("movapd {}, {}", dest, src),
+            (Arch::AArch64, false) => format!("mov {}, {}", dest, src),
+            (Arch::AArch64, true) => format!("fmov {}, {}", dest, src),
+        };
+        Some(Some(mov))
+    }
+
+    /// Returns the last emitted instruction when only comments follow it (no label, directive
+    /// or blank line, which could make the next instruction a branch target).
+    fn previous_instruction(&self) -> Option<&str> {
+        let comment = format!("    {}", self.target.line_comment_prefix());
+        let mut text = self.buf.strip_suffix('\n')?;
+        loop {
+            let start = text.rfind('\n').map_or(0, |index| index + 1);
+            let line = &text[start..];
+            if line.starts_with(&comment) {
+                text = text[..start].strip_suffix('\n')?;
+                continue;
+            }
+            return line.strip_prefix("    ").filter(|line| !line.starts_with(' ') && !line.is_empty());
+        }
     }
 
     /// Emits a local label (name:).
@@ -345,4 +397,92 @@ mod tests {
         linux_x86.emit_text_prelude();
         assert_eq!(linux_x86.output(), ".intel_syntax noprefix\n.text\n");
     }
+
+    /// Verifies a frame-slot reload right after its store is forwarded from the stored register,
+    /// and left alone across a label or for a different slot, width or register class.
+    #[test]
+    fn test_frame_reload_after_store_is_forwarded() {
+        let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        x86.instruction("mov QWORD PTR [rbp - 64], rax");
+        x86.comment("@src");
+        x86.instruction("mov rax, QWORD PTR [rbp - 64]");
+        x86.instruction("mov rcx, QWORD PTR [rbp - 64]");
+        x86.instruction("movsd QWORD PTR [rbp - 8], xmm1");
+        x86.instruction("movsd xmm0, QWORD PTR [rbp - 8]");
+        x86.instruction("mov QWORD PTR [rbp - 16], rdx");
+        x86.label("L1");
+        x86.instruction("mov rdx, QWORD PTR [rbp - 16]");
+        x86.instruction("mov QWORD PTR [rbp - 24], rsi");
+        x86.instruction("mov rsi, QWORD PTR [rbp - 32]");
+        x86.instruction("mov QWORD PTR [rbp - 40], rdi");
+        x86.instruction("movsd xmm2, QWORD PTR [rbp - 40]");
+        assert_eq!(
+            x86.output(),
+            "    mov QWORD PTR [rbp - 64], rax\n    # @src\n    mov rcx, rax\n    movsd QWORD PTR [rbp - 8], xmm1\n    movapd xmm0, xmm1\n    mov QWORD PTR [rbp - 16], rdx\nL1:\n    mov rdx, QWORD PTR [rbp - 16]\n    mov QWORD PTR [rbp - 24], rsi\n    mov rsi, QWORD PTR [rbp - 32]\n    mov QWORD PTR [rbp - 40], rdi\n    movsd xmm2, QWORD PTR [rbp - 40]\n"
+        );
+
+        let mut arm = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        arm.instruction("stur x0, [x29, #-24]");
+        arm.instruction("ldur x0, [x29, #-24]");
+        arm.instruction("ldur x3, [x29, #-24]");
+        arm.instruction("stur d1, [x29, #-8]");
+        arm.instruction("ldur d0, [x29, #-8]");
+        arm.instruction("stur w1, [x29, #-16]");
+        arm.instruction("ldur w2, [x29, #-16]");
+        assert_eq!(
+            arm.output(),
+            "    stur x0, [x29, #-24]\n    mov x3, x0\n    stur d1, [x29, #-8]\n    fmov d0, d1\n    stur w1, [x29, #-16]\n    ldur w2, [x29, #-16]\n"
+        );
+    }
 }
+
+/// Parses a plain 64-bit frame-slot store (`store` = true) or load: x86_64
+/// `mov QWORD PTR [rbp - N], reg` / `movsd QWORD PTR [rbp - N], xmmK` (and the loads), AArch64
+/// `stur xK, [x29, #-N]` / `ldur dK, [x29, #-N]`. Returns (register, slot text, is_float).
+fn parse_frame_access(arch: Arch, instr: &str, store: bool) -> Option<(&str, &str, bool)> {
+    let instr = instr.trim();
+    match arch {
+        Arch::X86_64 => {
+            let (mnemonic, rest) = instr.split_once(' ')?;
+            let float = match mnemonic {
+                "mov" => false,
+                "movsd" => true,
+                _ => return None,
+            };
+            let (left, right) = rest.split_once(", ")?;
+            let (reg, mem) = if store { (right, left) } else { (left, right) };
+            let slot = mem.strip_prefix("QWORD PTR ")?;
+            if !(slot.starts_with("[rbp - ") && slot.ends_with(']')) || slot.contains(',') {
+                return None;
+            }
+            let valid_reg = if float {
+                reg.starts_with("xmm") && reg[3..].bytes().all(|b| b.is_ascii_digit())
+            } else {
+                X86_GPR64.contains(&reg)
+            };
+            valid_reg.then_some((reg, slot, float))
+        }
+        Arch::AArch64 => {
+            let (mnemonic, rest) = instr.split_once(' ')?;
+            if mnemonic != if store { "stur" } else { "ldur" } {
+                return None;
+            }
+            let (reg, slot) = rest.split_once(", ")?;
+            if !(slot.starts_with("[x29, #-") && slot.ends_with(']')) {
+                return None;
+            }
+            let (class, number) = reg.split_at(1);
+            let numbered = !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
+            match class {
+                "x" if numbered => Some((reg, slot, false)),
+                "d" if numbered => Some((reg, slot, true)),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// The x86_64 64-bit general-purpose registers a frame-slot store may name.
+const X86_GPR64: &[&str] = &[
+    "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+];

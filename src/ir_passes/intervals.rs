@@ -137,7 +137,7 @@ pub fn build_intervals(
 
     for &block_id in &numbering.order {
         let block = func.block(block_id).expect("ordered block exists");
-        let cold = block.name.ends_with(".slow");
+        let cold = crate::ir_passes::cfg::is_cold_block_name(&block.name);
 
         for inst_id in &block.instructions {
             let position = numbering.inst_pos[inst_id];

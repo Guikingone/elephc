@@ -13,19 +13,104 @@
 //! - Every use must be the receiver of another container read in the same block, plus exactly
 //!   one `release`; the instructions between the read and its release may only be pure reads
 //!   and arithmetic, so the parent cannot be written, released or freed in the meantime.
-//! - A boxed `mixed` element read may also be borrowed when it only feeds mixed `+`/`-`/`*`
-//!   (`$dist[$u] + $w`), which reads the box and allocates its own result, a null test, or the
-//!   receiver of a method call whose targets provably write and release nothing.
+//! - A boxed `mixed` or object element read may also be borrowed when it only feeds mixed
+//!   `+`/`-`/`*` (`$dist[$u] + $w`), which reads the box and allocates its own result, a loose
+//!   comparison (`__rt_php_compare` runs no user code), a null test, or the receiver of an
+//!   argument-less method call all of whose possible implementations are pure
+//!   (`set_pure_methods`; `$shapes[$i]->area()`).
 //! - The read's result is marked `Borrowed` (codegen then skips its incref) and the release is
 //!   neutralized.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::{DataPool, Effects, Function, InstId, IrHeapKind, IrType, Op, Ownership, ValueId};
 
 use super::clobber::op_is_volatile_safe;
 use super::driver::IrPass;
 use super::rewrite::neutralize_to_nop;
+
+thread_local! {
+    /// Case-folded names of the methods every implementation of which is pure (see
+    /// `set_pure_methods`), for the module being optimized.
+    static PURE_METHODS: std::cell::RefCell<HashSet<String>> = std::cell::RefCell::new(HashSet::new());
+}
+
+/// Records which method names are pure in `module`: every class method of that name only reads
+/// the heap, its own locals and globals, computes, allocates and returns. Such a method cannot
+/// write, release or free anything a caller borrows, run user code (no call of any kind, no
+/// output that could reach an output callback, no warning that could reach an error handler),
+/// or reach a caller's variable (no by-reference parameter, global, static or reference local).
+/// A module declaring `__call` has no pure method names: a missing method would dispatch there.
+pub(crate) fn set_pure_methods(module: &crate::ir::Module) {
+    let mut verdicts: HashMap<String, bool> = HashMap::new();
+    let has_magic_call = module
+        .class_methods
+        .iter()
+        .any(|method| method_short_name(&method.name).eq_ignore_ascii_case("__call"));
+    if !has_magic_call {
+        for method in &module.class_methods {
+            let pure = function_is_pure(method);
+            let entry = verdicts
+                .entry(method_short_name(&method.name).to_ascii_lowercase())
+                .or_insert(true);
+            *entry &= pure;
+        }
+    }
+    PURE_METHODS.with(|cell| {
+        *cell.borrow_mut() = verdicts
+            .into_iter()
+            .filter_map(|(name, pure)| pure.then_some(name))
+            .collect();
+    });
+}
+
+/// Returns the method part of a `Class::method` function name.
+fn method_short_name(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
+}
+
+/// Returns whether a method body is pure in the sense of `set_pure_methods`.
+fn function_is_pure(function: &Function) -> bool {
+    let allowed = Effects::READS_HEAP
+        | Effects::READS_LOCAL
+        | Effects::WRITES_LOCAL
+        | Effects::READS_GLOBAL
+        | Effects::ALLOC_HEAP
+        | Effects::ALLOC_CONCAT
+        | Effects::MAY_THROW
+        | Effects::MAY_FATAL;
+    let own_locals_only = function.params.iter().all(|param| !param.by_ref)
+        && function.locals.iter().all(|local| {
+            matches!(
+                local.kind,
+                crate::ir::LocalKind::PhpLocal
+                    | crate::ir::LocalKind::HiddenTemp
+                    | crate::ir::LocalKind::BorrowedTemp
+                    | crate::ir::LocalKind::OwnedTemp
+            )
+        });
+    own_locals_only
+        && function.blocks.iter().all(|block| {
+            block.instructions.iter().all(|id| {
+                function.instruction(*id).is_some_and(|inst| {
+                    // Resetting the concat scratch offset touches no heap value.
+                    inst.op == Op::ConcatReset
+                        || (!inst.op.name().contains("call") && (inst.effects - allowed).is_empty())
+                })
+            })
+        })
+}
+
+/// Returns whether every implementation a method call may reach is pure.
+fn method_call_target_is_pure(data: &DataPool, inst: &crate::ir::Instruction) -> bool {
+    let Some(crate::ir::Immediate::Data(id)) = inst.immediate else {
+        return false;
+    };
+    let Some(name) = data.strings.get(id.as_raw() as usize) else {
+        return false;
+    };
+    PURE_METHODS.with(|cell| cell.borrow().contains(&name.to_ascii_lowercase()))
+}
 
 /// Pass making chained container reads borrow their intermediate element.
 pub(crate) struct BorrowReads;
@@ -37,7 +122,7 @@ impl IrPass for BorrowReads {
     }
 
     /// Borrows every qualifying intermediate read; returns whether anything changed.
-    fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
+    fn run(&self, function: &mut Function, data: &mut DataPool) -> bool {
         if super::cfg::has_exception_handlers(function) {
             return false;
         }
@@ -63,7 +148,12 @@ impl IrPass for BorrowReads {
                 let Some(inst) = function.instruction(*inst_id) else {
                     continue;
                 };
-                let mixed_element = inst.result_type == IrType::Heap(IrHeapKind::Mixed);
+                // Boxed `mixed` and object elements may also feed a null test and the receiver of
+                // a pure method call, across the receiver's null check.
+                let mixed_element = matches!(
+                    inst.result_type,
+                    IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Object)
+                );
                 if inst.op != Op::ArrayGet
                     || inst.result_ownership != Ownership::Owned
                     || !(mixed_element
@@ -86,7 +176,7 @@ impl IrPass for BorrowReads {
                         window.extend(function.blocks[next].instructions.iter().copied());
                     }
                 }
-                let Some(release) = sole_release_after(function, &window, result, &uses, mixed_element)
+                let Some(release) = sole_release_after(data, function, &window, result, &uses, mixed_element)
                 else {
                     continue;
                 };
@@ -154,6 +244,7 @@ fn non_throwing_successor(function: &Function, block_index: usize) -> Option<usi
 /// Returns the single `release` of `result` when every other use is a container-read receiver
 /// placed, like the release, later in the same window, with only pure instructions in between.
 fn sole_release_after(
+    data: &DataPool,
     function: &Function,
     window: &[InstId],
     result: ValueId,
@@ -180,17 +271,14 @@ fn sole_release_after(
             // a null test, or the receiver slot of a method call whose possible targets can
             // neither write anything nor release a reference (`$shapes[$i]->area()`).
             let allowed = match inst.op {
-                Op::MixedNumericBinop | Op::IsNull => true,
+                // A loose comparison reads both boxes through `__rt_php_compare`, which
+                // never runs user code (`$nd < $dist[$w]`).
+                Op::MixedNumericBinop | Op::IsNull | Op::StrCmp => true,
                 Op::MethodCall => {
                     uses_here == 1
                         && inst.operands.first() == Some(&result)
-                        && !inst.effects.intersects(
-                            Effects::WRITES_LOCAL
-                                | Effects::WRITES_HEAP
-                                | Effects::WRITES_GLOBAL
-                                | Effects::REFCOUNT_OP
-                                | Effects::MAY_THROW,
-                        )
+                        && inst.operands.len() == 1
+                        && method_call_target_is_pure(data, inst)
                 }
                 _ => false,
             };

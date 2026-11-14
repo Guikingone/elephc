@@ -86,6 +86,9 @@ pub(super) struct RuntimeCallableInvoker<'a> {
 struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
+    /// The target returns by reference: it hands back the aliased value without retaining
+    /// it, so arguments taken from the argument container are retained for it.
+    retain_args: bool,
 }
 
 impl InvokerEmitContext {
@@ -94,6 +97,7 @@ impl InvokerEmitContext {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
+            retain_args: false,
         }
     }
 
@@ -145,6 +149,7 @@ fn emit_runtime_callable_invoker_impl(
     catch_native_throws: bool,
 ) {
     let mut ctx = InvokerEmitContext::new(invoker.label);
+    ctx.retain_args = invoker.sig.by_ref_return;
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
     let frame_size = if catch_native_throws {
@@ -1220,9 +1225,13 @@ fn push_loaded_array_element_arg(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    // Callees borrow their parameters (they hand back a reference of their own when they
+    // return one), and the argument container outlives the call: the element is passed as is.
+    // A by-reference-returning target hands back the aliased value without retaining it, so
+    // the element is retained for it.
     let (pushed_ty, boxed_to_mixed) =
         coerce_current_value_to_target(emitter, ctx, data, source_elem_ty, target_ty);
-    if !boxed_to_mixed {
+    if ctx.retain_args && !boxed_to_mixed {
         abi::emit_incref_if_refcounted(emitter, &pushed_ty);
     }
     abi::emit_push_result_value(emitter, &pushed_ty);

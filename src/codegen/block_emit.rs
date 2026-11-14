@@ -1276,6 +1276,7 @@ fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
     }
     collect_fused_checked_mixed(ctx, &use_counts);
     collect_fused_array_updates(ctx, &use_counts);
+    collect_fused_local_updates(ctx, &use_counts);
     collect_static_hash_literal_sets(ctx);
 }
 
@@ -1544,6 +1545,95 @@ fn collect_fused_array_updates(
     }
 }
 
+/// Finds mixed `+`/`-`/`*` instructions (and checked int ones boxing an `int|float` result)
+/// whose result is only assigned to a plain `mixed` local right away (`$nd = $dist[$u] + $w`: the operation, the release of the local's previous value
+/// and the store), so the int result can overwrite the local's own box in place.
+fn collect_fused_local_updates(
+    ctx: &mut FunctionContext<'_>,
+    use_counts: &std::collections::HashMap<ValueId, usize>,
+) {
+    let function = ctx.function;
+    for block in &function.blocks {
+        let order: Vec<InstId> = block
+            .instructions
+            .iter()
+            .copied()
+            .filter(|id| {
+                !ctx.skipped_consts.contains(id)
+                    && function.instruction(*id).is_some_and(|inst| inst.op != Op::Nop)
+            })
+            .collect();
+        for (position, binop_id) in order.iter().enumerate() {
+            let Some(binop) = function.instruction(*binop_id) else {
+                continue;
+            };
+            let mixed_op = binop.op == Op::MixedNumericBinop
+                && matches!(
+                    binop.immediate,
+                    Some(crate::ir::Immediate::MixedNumericOp(
+                        crate::ir::MixedNumericOp::Add
+                            | crate::ir::MixedNumericOp::Sub
+                            | crate::ir::MixedNumericOp::Mul
+                    ))
+                )
+                && lower_inst::arithmetic::mixed_numeric_int_fast_path_applies(ctx, binop).unwrap_or(false);
+            // A checked int operation boxing its `int|float` result (`$nd = $d[$i] + $i`).
+            let checked_op = matches!(binop.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+                && binop.result_type == crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+                && binop.operands.len() == 2
+                && binop.operands.iter().all(|operand| {
+                    // A native int only: a null or bool operand is converted by the helper.
+                    function.value(*operand).is_some_and(|value| {
+                        value.ir_type == crate::ir::IrType::I64 && value.php_type == PhpType::Int
+                    })
+                });
+            if !(mixed_op || checked_op)
+                || ctx.fused_checked_casts.contains_key(binop_id)
+                || ctx.fused_checked_mixed.contains_key(binop_id)
+                || ctx.fused_checked_mixed.values().any(|id| id == binop_id)
+                || ctx.fused_array_updates.contains_key(binop_id)
+                || ctx.fused_array_updates.values().any(|update| update.checked == Some(*binop_id))
+            {
+                continue;
+            }
+            let Some(result) = binop.result else {
+                continue;
+            };
+            if use_counts.get(&result).copied() != Some(1) {
+                continue;
+            }
+            let (Some(&release_id), Some(&store_id)) = (order.get(position + 1), order.get(position + 2)) else {
+                continue;
+            };
+            let (Some(release), Some(store)) = (function.instruction(release_id), function.instruction(store_id)) else {
+                continue;
+            };
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = release.immediate else {
+                continue;
+            };
+            let same_slot_store = store.op == Op::StoreLocal
+                && store.immediate == Some(crate::ir::Immediate::LocalSlot(slot))
+                && store.operands.as_slice() == [result];
+            let plain_mixed_local = release.op == Op::ReleaseLocalSlot
+                && ctx.local_kind(slot).is_ok_and(|kind| kind == crate::ir::LocalKind::PhpLocal)
+                && ctx.local_slot_representation(slot) == crate::codegen::context::LocalSlotRepresentation::Raw
+                && ctx.ref_cell_state_offset(slot).is_none()
+                && !ctx.release_local_slot_may_observe_ref_cell(release_id)
+                && ctx.local_offset(slot).is_ok()
+                && ctx.local_php_type(slot).is_ok_and(|ty| ty.codegen_repr() == PhpType::Mixed);
+            if !same_slot_store || !plain_mixed_local {
+                continue;
+            }
+            ctx.skipped_consts.insert(release_id);
+            ctx.skipped_consts.insert(store_id);
+            ctx.fused_local_updates.insert(
+                *binop_id,
+                crate::codegen::context::FusedLocalUpdate { release: release_id, store: store_id },
+            );
+        }
+    }
+}
+
 /// Finds checked int add/sub/mul instructions whose boxed result only feeds the very next
 /// instruction, a mixed `+`/`-`/`*` (`$row[$j] += $a * $b`), and is then released: both lower
 /// together at the mixed operation so the checked result stays a raw int unless it overflows.
@@ -1674,6 +1764,11 @@ fn emit_block(
         if let Some(update) = ctx.fused_array_updates.get(inst_id).cloned() {
             // Preserves caller-saved registers itself, on its slow path only.
             lower_inst::lower_fused_array_update(ctx, *inst_id, &update)?;
+            continue;
+        }
+        if let Some(update) = ctx.fused_local_updates.get(inst_id).copied() {
+            // Preserves caller-saved registers itself, on its slow path only.
+            lower_inst::lower_fused_local_update(ctx, *inst_id, update)?;
             continue;
         }
         let saves = ctx.allocation.call_saves(*inst_id).to_vec();

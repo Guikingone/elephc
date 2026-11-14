@@ -1583,18 +1583,33 @@ fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
-    // PHP compares `null` with a bool, int or float as two booleans (`null < -1` is
-    // `false < true`): ordered and loose comparisons of such a pair use the operands' truthiness.
+    // PHP compares `null` or a bool with a bool, int or float as two booleans (`null < -1` is
+    // `false < true`, `true <=> 2` is 0): ordered and loose comparisons of such a pair use the
+    // operands' truthiness.
     if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Eq | BinOp::NotEq | BinOp::Spaceship) {
         let null_like = |ctx: &LoweringContext<'_, '_>, v: &LoweredValue| {
-            matches!(ctx.builder.value_php_type(v.value), PhpType::Void)
+            matches!(ctx.builder.value_php_type(v.value), PhpType::Void | PhpType::Bool | PhpType::False)
         };
         let scalar = |ctx: &LoweringContext<'_, '_>, v: &LoweredValue| {
-            matches!(ctx.builder.value_php_type(v.value), PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void)
+            matches!(ctx.builder.value_php_type(v.value), PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Void)
         };
         if (null_like(ctx, &lhs) || null_like(ctx, &rhs)) && scalar(ctx, &lhs) && scalar(ctx, &rhs) {
-            lhs = ctx.truthy_consuming(lhs, Some(left.span));
-            rhs = ctx.truthy_consuming(rhs, Some(right.span));
+            lhs = comparison_bool_operand(ctx, lhs, left.span);
+            rhs = comparison_bool_operand(ctx, rhs, right.span);
+        }
+    }
+    // A miss-capable `int|null` (`?int` parameter, int-list element) ordered against an int or
+    // float: PHP compares a null as a boolean (`null < -1` is `false < true`), so a null takes
+    // the boolean comparison and any int the numeric one.
+    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Spaceship) {
+        let plain_number = |ctx: &LoweringContext<'_, '_>, v: &LoweredValue| {
+            v.ir_type != IrType::TaggedScalar
+                && matches!(ctx.builder.value_php_type(v.value), PhpType::Int | PhpType::Float)
+        };
+        let left_tagged = lhs.ir_type == IrType::TaggedScalar && plain_number(ctx, &rhs);
+        let right_tagged = rhs.ir_type == IrType::TaggedScalar && plain_number(ctx, &lhs);
+        if left_tagged || right_tagged {
+            return lower_nullable_int_compare(ctx, lhs, rhs, left_tagged, op, left, right, expr);
         }
     }
     // `int == int` is exactly a signed integer compare; lowering it as `icmp` lets the backend
@@ -1647,6 +1662,96 @@ fn lower_compare(
         release_binary_operand_temporary(ctx, rhs, expr.span);
     }
     result
+}
+
+/// Lowers an ordered comparison (or `<=>`) between a miss-capable `int|null` operand and a plain
+/// int or float: a null compares as `false` against the other operand's truthiness, an int
+/// compares numerically.
+#[allow(clippy::too_many_arguments)]
+fn lower_nullable_int_compare(
+    ctx: &mut LoweringContext<'_, '_>,
+    lhs: LoweredValue,
+    rhs: LoweredValue,
+    left_tagged: bool,
+    op: &BinOp,
+    left: &Expr,
+    right: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let span = Some(expr.span);
+    let spaceship = matches!(op, BinOp::Spaceship);
+    let result_php = if spaceship { PhpType::Int } else { PhpType::Bool };
+    let (tagged, other) = if left_tagged { (lhs, rhs) } else { (rhs, lhs) };
+    let is_null = ctx.emit_value(Op::IsNull, vec![tagged.value], None, PhpType::Bool, Op::IsNull.default_effects(), span);
+    let null_block = ctx.builder.create_named_block("cmp.null", Vec::new());
+    let number_block = ctx.builder.create_named_block("cmp.number", Vec::new());
+    let merge = ctx.builder.create_named_block("cmp.merge", vec![(IrType::I64, result_php.clone())]);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: number_block,
+        else_args: Vec::new(),
+    });
+
+    // null: `false` against the other operand's truthiness.
+    ctx.builder.position_at_end(null_block);
+    let other_span = if left_tagged { right.span } else { left.span };
+    let other_bool = comparison_bool_operand(ctx, other, other_span);
+    let null_bool = ctx.emit_value(Op::ConstBool, Vec::new(), Some(Immediate::Bool(false)), PhpType::Bool, Op::ConstBool.default_effects(), span);
+    let (l, r) = if left_tagged { (null_bool.value, other_bool.value) } else { (other_bool.value, null_bool.value) };
+    let null_result = if spaceship {
+        ctx.emit_value(Op::Spaceship, vec![l, r], None, PhpType::Int, Op::Spaceship.default_effects(), span)
+    } else {
+        ctx.emit_value(Op::ICmp, vec![l, r], Some(Immediate::CmpPredicate(cmp_predicate(op))), PhpType::Bool, Op::ICmp.default_effects(), span)
+    };
+    ctx.builder.terminate(Terminator::Br { target: merge, args: vec![null_result.value] });
+
+    // int: numeric comparison.
+    ctx.builder.position_at_end(number_block);
+    let float = ctx.builder.value_php_type(other.value) == PhpType::Float;
+    let (l, r) = if float {
+        (coerce_to_float(ctx, lhs, left), coerce_to_float(ctx, rhs, right))
+    } else {
+        (coerce_to_int(ctx, lhs, left), coerce_to_int(ctx, rhs, right))
+    };
+    let number_result = if spaceship {
+        ctx.emit_value(Op::Spaceship, vec![l.value, r.value], None, PhpType::Int, Op::Spaceship.default_effects(), span)
+    } else {
+        let compare = if float { Op::FCmp } else { Op::ICmp };
+        ctx.emit_value(compare, vec![l.value, r.value], Some(Immediate::CmpPredicate(cmp_predicate(op))), PhpType::Bool, compare.default_effects(), span)
+    };
+    ctx.builder.terminate(Terminator::Br { target: merge, args: vec![number_result.value] });
+
+    ctx.builder.position_at_end(merge);
+    LoweredValue { value: ctx.builder.block_param(merge, 0), ir_type: IrType::I64 }
+}
+
+/// Converts a scalar comparison operand to its PHP truthiness as a 0/1 bool (an int becomes
+/// `$v != 0`; `truthy` alone keeps an int as is for branching).
+fn comparison_bool_operand(ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue, span: Span) -> LoweredValue {
+    match ctx.builder.value_php_type(operand.value) {
+        PhpType::Bool | PhpType::False => operand,
+        PhpType::Int => {
+            let zero = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(0)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(span),
+            );
+            ctx.emit_value(
+                Op::ICmp,
+                vec![operand.value, zero.value],
+                Some(Immediate::CmpPredicate(CmpPredicate::Ne)),
+                PhpType::Bool,
+                Op::ICmp.default_effects(),
+                Some(span),
+            )
+        }
+        _ => ctx.truthy_consuming(operand, Some(span)),
+    }
 }
 
 /// Releases an owning binary-operator operand once the consuming opcode has read it.
@@ -5627,14 +5732,24 @@ fn lower_static_callable_call(
             }
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
-            ))
+            );
+            // The callee hands back a reference of its own: release owned argument temporaries.
+            release_owned_call_arg_temporaries_with_signature(
+                ctx,
+                &operands,
+                Some(call.value),
+                &ReturnArgAlias::None,
+                sig.as_ref(),
+                expr.span,
+            );
+            Some(call)
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let sig = ctx
@@ -5672,17 +5787,29 @@ fn lower_static_callable_call(
             captures,
         } => {
             let mut operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let arguments = operands.clone();
             append_closure_capture_operands(&mut operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
                 operands,
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
-            ))
+            );
+            // The closure hands back a reference of its own: release owned argument temporaries
+            // (captures are borrowed from the enclosing scope).
+            release_owned_call_arg_temporaries_with_signature(
+                ctx,
+                &arguments,
+                Some(call.value),
+                &ReturnArgAlias::None,
+                Some(&signature),
+                expr.span,
+            );
+            Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
             Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))
@@ -10277,14 +10404,40 @@ pub(crate) fn array_literal_type_for_ir(
     }
     let mut elem_ty = array_literal_element_type_for_ir(ctx, &items[0]);
     for item in items.iter().skip(1) {
-        elem_ty = merge_ir_indexed_element_type(
-            elem_ty,
-            array_literal_element_type_for_ir(ctx, item),
-        );
+        let item_ty = array_literal_element_type_for_ir(ctx, item);
+        if let (PhpType::Object(left), PhpType::Object(right)) = (&elem_ty, &item_ty) {
+            if let Some(common) = common_ancestor_class(ctx, left, right) {
+                elem_ty = PhpType::Object(common);
+                continue;
+            }
+        }
+        elem_ty = merge_ir_indexed_element_type(elem_ty, item_ty);
     }
     PhpType::Array(Box::new(elem_ty))
 }
 
+/// Returns the nearest class both `left` and `right` extend (either may be that class),
+/// so a literal of sibling objects (`[new Circle(), new Square()]`) stores raw object
+/// pointers typed by their common parent instead of boxing every element as `mixed`.
+fn common_ancestor_class(ctx: &LoweringContext<'_, '_>, left: &str, right: &str) -> Option<String> {
+    if left.eq_ignore_ascii_case(right) {
+        return Some(left.to_string());
+    }
+    let mut left_chain: Vec<String> = Vec::new();
+    let mut current = Some(left.to_string());
+    while let Some(name) = current {
+        current = ctx.classes.get(&name)?.parent.clone();
+        left_chain.push(name);
+    }
+    let mut current = Some(right.to_string());
+    while let Some(name) = current {
+        if left_chain.iter().any(|known| known.eq_ignore_ascii_case(&name)) {
+            return Some(name);
+        }
+        current = ctx.classes.get(&name)?.parent.clone();
+    }
+    None
+}
 
 /// Returns the best EIR storage element type for one indexed-array literal item.
 fn array_literal_element_type_for_ir(
@@ -14137,14 +14290,18 @@ fn lower_method_call(
         Some(expr.span),
     );
     // User methods hand back their own reference to the result (see `lower_function_call`).
-    let return_alias = ReturnArgAlias::None;
-    release_owned_call_arg_temporaries(
-        ctx,
-        &arg_values,
-        Some(call.value),
-        &return_alias,
-        expr.span,
-    );
+    // `Fiber::start()` instead transfers its arguments to the fiber, which keeps them for the
+    // whole run (a parameter may be suspended out to the caller), so they are not released here.
+    if !method_is_fiber_start(ctx, object.value, dispatch_method) {
+        let return_alias = ReturnArgAlias::None;
+        release_owned_call_arg_temporaries(
+            ctx,
+            &arg_values,
+            Some(call.value),
+            &return_alias,
+            expr.span,
+        );
+    }
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
