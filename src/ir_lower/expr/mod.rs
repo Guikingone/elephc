@@ -1583,6 +1583,20 @@ fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    // PHP compares `null` with a bool, int or float as two booleans (`null < -1` is
+    // `false < true`): ordered and loose comparisons of such a pair use the operands' truthiness.
+    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Eq | BinOp::NotEq | BinOp::Spaceship) {
+        let null_like = |ctx: &LoweringContext<'_, '_>, v: &LoweredValue| {
+            matches!(ctx.builder.value_php_type(v.value), PhpType::Void)
+        };
+        let scalar = |ctx: &LoweringContext<'_, '_>, v: &LoweredValue| {
+            matches!(ctx.builder.value_php_type(v.value), PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void)
+        };
+        if (null_like(ctx, &lhs) || null_like(ctx, &rhs)) && scalar(ctx, &lhs) && scalar(ctx, &rhs) {
+            lhs = ctx.truthy_consuming(lhs, Some(left.span));
+            rhs = ctx.truthy_consuming(rhs, Some(right.span));
+        }
+    }
     // `int == int` is exactly a signed integer compare; lowering it as `icmp` lets the backend
     // branch on the flags instead of materializing a loose-comparison boolean.
     let int_pair = lhs.ir_type == IrType::I64
@@ -2727,35 +2741,21 @@ fn lower_inc_dec(
     }
 }
 
-/// Lowers a direct function, builtin, or extern call.
-/// Lowers a `var_dump()` call routed to the elephc-PHP prelude argument by argument: a value
-/// whose static type is a scalar, string, null or object is printed by the native `var_dump`
-/// (exactly what the prelude would do, without boxing it), and anything that may hold an array
-/// goes through `__elephc_var_dump_value`. Several arguments are only split when evaluating them
-/// cannot have side effects (PHP evaluates every argument before printing). Returns `None` to
-/// keep the plain prelude call.
+/// Lowers a `var_dump()` call routed to the elephc-PHP prelude: every argument is evaluated
+/// first (PHP evaluates them all before printing), then each one is printed by the native
+/// `var_dump` unless it is an array or a dynamic value, which `__elephc_var_dump_value` walks.
+/// Spread or named arguments keep the native builtin.
 fn lower_split_var_dump(ctx: &mut LoweringContext<'_, '_>, args: &[Expr], expr: &Expr) -> Option<LoweredValue> {
-    fn plain(arg: &Expr) -> bool {
-        matches!(
-            arg.kind,
-            ExprKind::Variable(_)
-                | ExprKind::IntLiteral(_)
-                | ExprKind::FloatLiteral(_)
-                | ExprKind::StringLiteral(_)
-                | ExprKind::BoolLiteral(_)
-                | ExprKind::Null
-        )
-    }
     if args.is_empty()
         || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. }))
-        || (args.len() > 1 && !args.iter().all(plain))
     {
-        return None;
+        let call = ExprKind::FunctionCall { name: Name::unqualified("var_dump"), args: args.to_vec() };
+        return Some(lower_expr(ctx, &Expr::new(call, expr.span)));
     }
-    for arg in args {
-        // Lower the argument first and dispatch on its actual representation: only an array or
-        // a dynamic value can hold an array the native walkers do not print.
-        let value = lower_expr(ctx, arg);
+    let values: Vec<LoweredValue> = args.iter().map(|arg| lower_expr(ctx, arg)).collect();
+    for (arg, value) in args.iter().zip(values) {
+        // Dispatch on the argument's actual representation: only an array or a dynamic value
+        // can hold an array the native walkers do not print.
         let repr = ctx.builder.value_php_type(value.value).codegen_repr();
         if matches!(
             repr,
@@ -2923,16 +2923,14 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.
-        let return_alias = ctx
-            .return_alias_summaries
-            .function(canonical)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown);
+        // A user function always hands back its own reference to the result (a returned
+        // borrowed parameter is retained by the callee), so every owned argument temporary is
+        // released here.
         release_owned_call_arg_temporaries(
             ctx,
             &operands,
             Some(call.value),
-            &return_alias,
+            &ReturnArgAlias::None,
             expr.span,
         );
         return call;
@@ -14132,7 +14130,8 @@ fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     );
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    // User methods hand back their own reference to the result (see `lower_function_call`).
+    let return_alias = ReturnArgAlias::None;
     release_owned_call_arg_temporaries(
         ctx,
         &arg_values,
@@ -16802,7 +16801,8 @@ fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    // User methods hand back their own reference to the result (see `lower_function_call`).
+    let return_alias = ReturnArgAlias::None;
     release_owned_call_arg_temporaries(
         ctx,
         &arg_values,
@@ -17090,79 +17090,7 @@ fn instance_method_arity_hungry_callee_key(
     candidates.next().is_none().then_some(candidate)
 }
 
-/// Returns the conservative return-to-argument alias summary for a method dispatch.
-///
-/// A non-final receiver type includes every closed-world descendant implementation,
-/// because runtime dispatch can select an override. Missing or synthetic summaries
-/// therefore fall back to `Unknown` rather than enabling unsafe cleanup.
-fn method_return_arg_alias(
-    ctx: &LoweringContext<'_, '_>,
-    object: crate::ir::ValueId,
-    method: &str,
-) -> ReturnArgAlias {
-    let object_ty = ctx.builder.value_php_type(object);
-    let method_key = php_symbol_key(method);
-    let mut summary: Option<ReturnArgAlias> = None;
-    if let Some((class_name, _)) = singular_object_class(&object_ty) {
-        let base_class = class_name.trim_start_matches('\\');
-        let Some(base_info) = ctx.classes.get(base_class) else {
-            return ReturnArgAlias::Unknown;
-        };
-        if base_info.is_final || base_info.final_methods.contains(&method_key) {
-            return class_method_return_arg_alias(ctx, base_class, &method_key)
-                .unwrap_or(ReturnArgAlias::Unknown);
-        }
-        for candidate in ctx.classes.keys() {
-            if !is_same_or_descendant_class(ctx, candidate, base_class) {
-                continue;
-            }
-            let Some(alias) = class_method_return_arg_alias(ctx, candidate, &method_key) else {
-                continue;
-            };
-            summary = Some(match summary {
-                Some(current) => current.merge(&alias),
-                None => alias,
-            });
-        }
-        return summary.unwrap_or(ReturnArgAlias::Unknown);
-    }
-    if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
-        if ctx.has_eval_barrier() {
-            return ReturnArgAlias::Unknown;
-        }
-        for candidate in ctx.classes.keys() {
-            let Some(alias) = class_method_return_arg_alias(ctx, candidate, &method_key) else {
-                continue;
-            };
-            summary = Some(match summary {
-                Some(current) => current.merge(&alias),
-                None => alias,
-            });
-        }
-    }
-    summary.unwrap_or(ReturnArgAlias::Unknown)
-}
 
-/// Resolves one concrete class's dispatched implementation and its source summary.
-fn class_method_return_arg_alias(
-    ctx: &LoweringContext<'_, '_>,
-    class_name: &str,
-    method_key: &str,
-) -> Option<ReturnArgAlias> {
-    class_method_signature(ctx, class_name, method_key)?;
-    let class_info = ctx.classes.get(class_name)?;
-    let impl_class = class_info
-        .method_impl_classes
-        .get(method_key)
-        .map(String::as_str)
-        .unwrap_or(class_name);
-    Some(
-        ctx.return_alias_summaries
-            .method(impl_class, method_key)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown),
-    )
-}
 
 /// Returns a class/interface method signature, preferring the implementing class metadata.
 fn class_method_signature<'a>(
@@ -17350,7 +17278,8 @@ fn lower_static_method_call_through_object(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
-    let return_alias = static_method_return_arg_alias(ctx, &receiver, method);
+    // User methods hand back their own reference to the result (see `lower_function_call`).
+    let return_alias = ReturnArgAlias::None;
     release_owned_call_arg_temporaries_with_signature(
         ctx,
         &visible_operands,
@@ -17540,7 +17469,8 @@ fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
-    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    // User methods hand back their own reference to the result (see `lower_function_call`).
+    let return_alias = ReturnArgAlias::None;
     release_owned_call_arg_temporaries_with_signature(
         ctx,
         &operands,
@@ -17776,63 +17706,7 @@ fn lower_static_method_descriptor_value_call(
     ))
 }
 
-/// Returns the conservative return-to-argument alias summary for static dispatch.
-fn static_method_return_arg_alias(
-    ctx: &LoweringContext<'_, '_>,
-    receiver: &StaticReceiver,
-    method: &str,
-) -> ReturnArgAlias {
-    let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
-        return ReturnArgAlias::Unknown;
-    };
-    let method_key = php_symbol_key(method);
-    let Some(class_info) = ctx.classes.get(&class_name) else {
-        return ReturnArgAlias::Unknown;
-    };
-    if !matches!(receiver, StaticReceiver::Static)
-        || class_info.is_final
-        || class_info.final_static_methods.contains(&method_key)
-    {
-        return class_static_method_return_arg_alias(ctx, &class_name, &method_key)
-            .unwrap_or(ReturnArgAlias::Unknown);
-    }
 
-    let mut summary: Option<ReturnArgAlias> = None;
-    for candidate in ctx.classes.keys() {
-        if !is_same_or_descendant_class(ctx, candidate, &class_name) {
-            continue;
-        }
-        let Some(alias) = class_static_method_return_arg_alias(ctx, candidate, &method_key) else {
-            continue;
-        };
-        summary = Some(match summary {
-            Some(current) => current.merge(&alias),
-            None => alias,
-        });
-    }
-    summary.unwrap_or(ReturnArgAlias::Unknown)
-}
-
-/// Resolves one class's static implementation and its source alias summary.
-fn class_static_method_return_arg_alias(
-    ctx: &LoweringContext<'_, '_>,
-    class_name: &str,
-    method_key: &str,
-) -> Option<ReturnArgAlias> {
-    let class_info = ctx.classes.get(class_name)?;
-    class_info.static_methods.get(method_key)?;
-    let impl_class = class_info
-        .static_method_impl_classes
-        .get(method_key)
-        .map(String::as_str)
-        .unwrap_or(class_name);
-    Some(
-        ctx.return_alias_summaries
-            .method(impl_class, method_key)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown),
-    )
-}
 
 /// Returns the implementation signature used by the static method symbol that will run.
 fn static_method_implementation_signature<'a>(

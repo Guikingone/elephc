@@ -198,7 +198,8 @@ fn emit_runtime_callable_invoker_impl(
         &mut ctx,
         data,
     );
-    emit_box_current_value_as_mixed(emitter, &ret_ty.codegen_repr());
+    // Callees hand back their own reference to the result: the box takes it over.
+    crate::codegen::emit_box_current_owned_value_as_mixed(emitter, &ret_ty.codegen_repr());
     if catch_native_throws {
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     }

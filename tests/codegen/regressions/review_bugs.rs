@@ -348,3 +348,46 @@ ovf(); cow(); miss();
     assert_eq!(out.stdout, "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(3) {\n  [0]=>\n  int(7)\n  [1]=>\n  int(8)\n  [2]=>\n  int(9)\n}\narray(5) {\n  [0]=>\n  float(9.223372036854776E+18)\n  [1]=>\n  int(7)\n  [2]=>\n  float(3.5)\n  [3]=>\n  int(9)\n  [4]=>\n  int(2)\n}\nfloat(-9.223372036854776E+18)\nfloat(2.7670116110564327E+19)\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(4)\n  [2]=>\n  int(7)\n}\narray(3) {\n  [0]=>\n  int(22)\n  [1]=>\n  int(28)\n  [2]=>\n  int(34)\n}\nint(14)\narray(4) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(7)\n  [2]=>\n  int(10)\n  [3]=>\n  int(15)\n}\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// A function, method, static method or closure returning one of its parameters hands the caller a reference of its own: the caller's variable survives `count(f($a))` in a loop, a fresh arithmetic argument returned as is stays valid (`rec($n - 1, $acc * 3)`), and nothing leaks.
+#[test]
+fn test_returned_parameters_are_owned_by_the_caller() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function ga(array $x) { return $x; }
+function gm($x) { return $x; }
+function gt($c, $x) { return $c ? $x : 0; }
+function rec($n, $acc) { if ($n == 0) return $acc; return rec($n - 1, $acc * 3); }
+class C { function id(array $x) { return $x; } static function sid(array $x) { return $x; } function keep(string $s): string { return $s; } }
+$a = [1, 2];
+$c = new C;
+for ($i = 0; $i < 3; $i++) { echo count(ga($a)), count($c->id($a)), count(C::sid($a)); }
+echo count($a), "\n";
+$f = function (array $x) { return $x; };
+for ($i = 0; $i < 3; $i++) { echo count($f($a)); }
+echo count($a), "\n";
+$g = function () { return [1, 2]; }; echo count($g()), "\n";
+echo gm($a[0] * 3), gt(true, $a[0] * 3), "\n";
+$r = rec(60, 1); echo $r > 1e20 ? "big" : "small", "\n";
+$s = "abc" . $i; $t = $c->keep($s); $s = "x"; echo $t, "\n";
+var_dump($a);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2222222222\n2222\n2\n33\nbig\nabc3\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// PHP 8 compares a bool with anything, and `null` with an int or float, as two booleans (`null < -1` is `false < true`), in folded constants, typed operands and boxed values.
+#[test]
+fn test_null_and_bool_compare_as_booleans() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+var_dump(null < -1, null > -1, null == 0, null == 1, null < 0.5, null <=> -3, 0 > null, null >= false, true > null);
+$n = null; $i = -1; var_dump($n < $i, $n == $i, $n <=> $i, $i > $n);
+$big = [PHP_INT_MAX, null]; var_dump($big[1] < -1);
+function m($a, $b) { return [$a < $b, $a == $b, $a <=> $b]; }
+foreach ([[null, -1], [null, 0], [true, 5], [false, "a"], [true, []], [null, 2.5], [null, ""], [null, "a"], [1, true], ["0", false]] as [$a, $b]) { echo json_encode(m($a, $b)), json_encode(m($b, $a)); }
+echo "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nint(-1)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nint(-1)\nbool(true)\nbool(true)\n[true,false,-1][false,false,1][false,true,0][false,true,0][false,true,0][false,true,0][true,false,-1][false,false,1][false,false,1][true,false,-1][true,false,-1][false,false,1][false,true,0][false,true,0][true,false,-1][false,false,1][false,true,0][false,true,0][false,true,0][false,true,0]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

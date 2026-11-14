@@ -71,15 +71,26 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                     && !ctx.owns_parameter_slot(slot)
                     && !ctx.local_slot_has_store(slot)
                 {
-                    // Heap values (arrays, mixed cells) are already handed over with their own
-                    // reference by the parameter ABI; only borrowed strings need one here.
-                    // Method calls already retain a passthrough result through the
-                    // return-alias summaries (`types::return_alias`).
-                    if source_ty.codegen_repr() == PhpType::Str
-                        && !ctx.function.flags.is_method
-                        && !ctx.function.flags.is_closure
-                    {
+                    // Every callee (function, method or closure) hands the caller a reference of
+                    // its own, so a borrowed parameter returned as is is retained here.
+                    if source_ty.codegen_repr() == PhpType::Str {
                         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+                    }
+                    // A borrowed heap parameter returned as is: the caller owns (and releases)
+                    // the result, so hand it a reference of its own.
+                    let returns_slot_load_directly = ctx
+                        .function
+                        .value(*value)
+                        .and_then(|v| match v.def {
+                            crate::ir::ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+                            _ => None,
+                        })
+                        .is_some_and(|inst| inst.op == crate::ir::Op::LoadLocal);
+                    if returns_slot_load_directly
+                        && source_ty.is_refcounted()
+                        && source_ty.codegen_repr() != PhpType::Str
+                    {
+                        abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
                     }
                 }
             }

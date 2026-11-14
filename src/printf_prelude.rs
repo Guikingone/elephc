@@ -413,10 +413,8 @@ function __elephc_var_dump_value(mixed $v, string $ind): void {
     echo $ind;
     var_dump($v);
 }
-function __elephc_var_dump(mixed ...$values): void {
-    foreach ($values as $v) {
-        __elephc_var_dump_value($v, '');
-    }
+// Declares the routed name for the checker; `ir_lower` lowers every call itself.
+function __elephc_var_dump(mixed $value, mixed ...$more): void {
 }"#,
     ),
     (

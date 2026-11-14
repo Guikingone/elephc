@@ -207,6 +207,25 @@ fn php_numeric_string(value: &str) -> Option<f64> {
     trimmed.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
+/// PHP compares `null` with a bool, int or float (or `null`) as two booleans: returns both
+/// operands' truthiness as `0.0`/`1.0` for such a pair, `None` otherwise.
+fn null_bool_pair(left: &Expr, right: &Expr) -> Option<(f64, f64)> {
+    let null = |e: &Expr| matches!(e.kind, ExprKind::Null);
+    if !null(left) && !null(right) {
+        return None;
+    }
+    let truth = |e: &Expr| -> Option<f64> {
+        match &e.kind {
+            ExprKind::Null => Some(0.0),
+            ExprKind::BoolLiteral(b) => Some(if *b { 1.0 } else { 0.0 }),
+            ExprKind::IntLiteral(n) => Some(if *n != 0 { 1.0 } else { 0.0 }),
+            ExprKind::FloatLiteral(f) => Some(if *f != 0.0 { 1.0 } else { 0.0 }),
+            _ => None,
+        }
+    };
+    Some((truth(left)?, truth(right)?))
+}
+
 /// Returns `Some(true)` if two numeric expressions satisfy the given comparison function,
 /// or `None` if either operand is not a numeric literal.
 pub(in crate::optimize) fn compare_numeric(
@@ -214,6 +233,9 @@ pub(in crate::optimize) fn compare_numeric(
     right: &Expr,
     cmp: impl FnOnce(f64, f64) -> bool,
 ) -> Option<bool> {
+    if let Some((l, r)) = null_bool_pair(left, right) {
+        return Some(cmp(l, r));
+    }
     if let (ExprKind::IntLiteral(l), ExprKind::IntLiteral(r)) = (&left.kind, &right.kind) {
         // Two ints compare exactly; doubles would merge neighbours above 2^53.
         let ordering = l.cmp(r);
@@ -233,6 +255,9 @@ pub(in crate::optimize) fn compare_numeric(
 /// Returns the result of the spaceship operator (<=>) on two numeric literals as an i64 (-1, 0, or 1),
 /// or `None` if either operand is not a numeric literal.
 pub(in crate::optimize) fn spaceship_numeric(left: &Expr, right: &Expr) -> Option<i64> {
+    if let Some((l, r)) = null_bool_pair(left, right) {
+        return Some((l as i64).cmp(&(r as i64)) as i64);
+    }
     if let (ExprKind::IntLiteral(l), ExprKind::IntLiteral(r)) = (&left.kind, &right.kind) {
         return Some(l.cmp(r) as i64);
     }

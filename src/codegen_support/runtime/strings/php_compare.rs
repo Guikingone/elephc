@@ -28,6 +28,7 @@ use crate::codegen::platform::Arch;
 ///
 /// Dispatches to the x86_64 variant on that target; otherwise emits ARM64 assembly inline.
 pub fn emit_php_compare(emitter: &mut Emitter) {
+    emit_php_compare_bool_pairs(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_php_compare_linux_x86_64(emitter);
         return;
@@ -35,7 +36,7 @@ pub fn emit_php_compare(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: php_compare ---");
-    emitter.label_global("__rt_php_compare");
+    emitter.label_global("__rt_php_compare_core");
 
     // -- set up helper frame and save both boxed operands --
     emitter.instruction("sub sp, sp, #96");                                     // allocate frame slots for operands, unboxed payloads and scratch
@@ -241,7 +242,7 @@ pub fn emit_php_compare(emitter: &mut Emitter) {
 fn emit_php_compare_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: php_compare ---");
-    emitter.label_global("__rt_php_compare");
+    emitter.label_global("__rt_php_compare_core");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer across nested calls
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
@@ -464,4 +465,120 @@ fn emit_php_compare_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the three-way comparison sign in rax
+}
+
+/// Emits the `__rt_php_compare` entry: PHP 8 compares a bool with anything, and `null` with an
+/// int, float or `null`, as two booleans (`null < -1` is `false < true`); every other pair goes
+/// to `__rt_php_compare_core`. Same register contract as the core.
+fn emit_php_compare_bool_pairs(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: php_compare (bool/null pairs) ---");
+    emitter.label_global("__rt_php_compare");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-48]!");                   // frame for the tag probes
+            emitter.instruction("mov x29, sp");
+            emitter.instruction("stp x0, x1, [sp, #16]");                       // keep both boxes
+            emitter.instruction("bl __rt_mixed_unbox");                         // left tag
+            emitter.instruction("str x0, [sp, #32]");
+            emitter.instruction("ldr x0, [sp, #24]");
+            emitter.instruction("bl __rt_mixed_unbox");                         // right tag in x0
+            emitter.instruction("ldr x9, [sp, #32]");                           // left tag in x9
+            emitter.instruction("cmp x9, #3");                                  // a bool operand: compare as bools
+            emitter.instruction("b.eq 5f");
+            emitter.instruction("cmp x0, #3");
+            emitter.instruction("b.eq 5f");
+            emitter.instruction("cmp x9, #8");                                  // left null?
+            emitter.instruction("b.ne 2f");
+            emitter.instruction("cmp x0, #0");                                  // with an int
+            emitter.instruction("b.eq 5f");
+            emitter.instruction("cmp x0, #2");                                  // with a float
+            emitter.instruction("b.eq 5f");
+            emitter.instruction("cmp x0, #8");                                  // with null
+            emitter.instruction("b.eq 5f");
+            emitter.instruction("b 9f");
+            emitter.label("2");
+            emitter.instruction("cmp x0, #8");                                  // right null?
+            emitter.instruction("b.ne 9f");
+            emitter.instruction("cmp x9, #0");                                  // with an int
+            emitter.instruction("b.eq 5f");
+            emitter.instruction("cmp x9, #2");                                  // with a float
+            emitter.instruction("b.eq 5f");
+            emitter.instruction("b 9f");
+            emitter.label("5");
+            emitter.instruction("ldr x0, [sp, #16]");
+            emitter.instruction("bl __rt_mixed_cast_bool");                     // left truthiness
+            emitter.instruction("str x0, [sp, #32]");
+            emitter.instruction("ldr x0, [sp, #24]");
+            emitter.instruction("bl __rt_mixed_cast_bool");                     // right truthiness
+            emitter.instruction("ldr x9, [sp, #32]");
+            emitter.instruction("cmp x9, x0");
+            emitter.instruction("cset x10, gt");
+            emitter.instruction("cset x11, lt");
+            emitter.instruction("sub x0, x10, x11");                            // -1 / 0 / +1
+            emitter.instruction("ldp x29, x30, [sp], #48");
+            emitter.instruction("ret");
+            emitter.label("9");
+            emitter.instruction("ldp x0, x1, [sp, #16]");                       // restore both boxes
+            emitter.instruction("ldp x29, x30, [sp], #48");
+            emitter.instruction("b __rt_php_compare_core");                     // general PHP 8 rules
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // frame for the tag probes
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 32");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // keep both boxes
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");
+            emitter.instruction("mov rax, rdi");
+            emitter.instruction("call __rt_mixed_unbox");                       // left tag
+            emitter.instruction("mov QWORD PTR [rbp - 24], rax");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");
+            emitter.instruction("call __rt_mixed_unbox");                       // right tag in rax
+            emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");               // left tag in rcx
+            emitter.instruction("cmp rcx, 3");                                  // a bool operand: compare as bools
+            emitter.instruction("je 5f");
+            emitter.instruction("cmp rax, 3");
+            emitter.instruction("je 5f");
+            emitter.instruction("cmp rcx, 8");                                  // left null?
+            emitter.instruction("jne 2f");
+            emitter.instruction("cmp rax, 0");                                  // with an int
+            emitter.instruction("je 5f");
+            emitter.instruction("cmp rax, 2");                                  // with a float
+            emitter.instruction("je 5f");
+            emitter.instruction("cmp rax, 8");                                  // with null
+            emitter.instruction("je 5f");
+            emitter.instruction("jmp 9f");
+            emitter.label("2");
+            emitter.instruction("cmp rax, 8");                                  // right null?
+            emitter.instruction("jne 9f");
+            emitter.instruction("cmp rcx, 0");                                  // with an int
+            emitter.instruction("je 5f");
+            emitter.instruction("cmp rcx, 2");                                  // with a float
+            emitter.instruction("je 5f");
+            emitter.instruction("jmp 9f");
+            emitter.label("5");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");
+            emitter.instruction("mov rdi, rax");
+            emitter.instruction("call __rt_mixed_cast_bool");                   // left truthiness
+            emitter.instruction("mov QWORD PTR [rbp - 24], rax");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");
+            emitter.instruction("mov rdi, rax");
+            emitter.instruction("call __rt_mixed_cast_bool");                   // right truthiness
+            emitter.instruction("mov r8, QWORD PTR [rbp - 24]");
+            emitter.instruction("xor ecx, ecx");
+            emitter.instruction("xor edx, edx");
+            emitter.instruction("cmp r8, rax");
+            emitter.instruction("setg cl");
+            emitter.instruction("setl dl");
+            emitter.instruction("mov rax, rcx");
+            emitter.instruction("sub rax, rdx");                                // -1 / 0 / +1
+            emitter.instruction("leave");
+            emitter.instruction("ret");
+            emitter.label("9");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // restore both boxes
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+            emitter.instruction("leave");
+            emitter.instruction("jmp __rt_php_compare_core");                   // general PHP 8 rules
+        }
+    }
 }

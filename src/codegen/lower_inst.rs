@@ -3691,7 +3691,7 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -4005,7 +4005,7 @@ fn lower_magic_call_candidate(
         cleanup_bytes: 16,
         borrowed_stack_arg_bytes: 0,
     };
-    emit_call_arg_temp_cleanups(ctx, &cleanup_material, inst.result)
+    emit_call_arg_temp_cleanups(ctx, &cleanup_material, None)
 }
 
 /// Builds the `$args` array forwarded to `__call($name, $args)` from the call operands, using
@@ -4255,7 +4255,7 @@ fn lower_interface_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -6262,7 +6262,7 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &callee_sig.return_type)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
@@ -6546,7 +6546,7 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             ctx.store_result_value(result)?;
         }
     }
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
@@ -7196,6 +7196,10 @@ fn emit_call_arg_temp_cleanups(
 }
 
 /// Returns the result value when it can alias a caller-owned temporary Mixed argument.
+///
+/// Only runtime-implemented callees can hand a temporary argument box back as their result:
+/// user functions and methods return their own reference (a returned borrowed parameter is
+/// retained), so their call sites pass no result and every temporary box is released.
 fn call_result_can_alias_mixed_temp(
     ctx: &FunctionContext<'_>,
     result: Option<ValueId>,
