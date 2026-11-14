@@ -624,3 +624,35 @@ echo sum([new A(), new A()]), "\n";
     assert_eq!(out.stdout, "9 0\n4\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// Associative literals with distinct literal string keys are built with compile-time entry
+/// slots (a fresh table, the runtime hash and linear probing replayed statically): values of
+/// every kind, duplicate keys, integer-like and empty keys (generic path), more keys than fit
+/// without growth, and later updates/unsets keep PHP's contents and insertion order.
+#[test]
+fn test_static_hash_literal_build_matches_runtime_insertion() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class P { public $v = 1; }
+function make($i, $s) {
+    $o = new P;
+    $m = ['id' => $i, 'name' => $s, 'f' => 1.5, 'b' => true, 'n' => null, 'arr' => [1, 2], 'h' => ['x' => $i], 'id2' => $i * 2];
+    return $m;
+}
+for ($i = 0; $i < 3; $i++) { $m = make($i, "s$i"); print_r($m); echo json_encode($m), "\n"; }
+$d = ['a' => 1, 'b' => 2, 'a' => 3, '5' => 'five', '' => 'empty', 'c' => 4];
+print_r($d);
+$big = ['k0' => 0, 'k1' => 1, 'k2' => 2, 'k3' => 3, 'k4' => 4, 'k5' => 5, 'k6' => 6, 'k7' => 7, 'k8' => 8, 'k9' => 9, 'k10' => 10, 'k11' => 11, 'k12' => 12, 'k13' => 13, 'k14' => 14, 'k15' => 15, 'k16' => 16, 'k17' => 17, 'k18' => 18, 'k19' => 19, 'k20' => 20, 'k21' => 21, 'k22' => 22, 'k23' => 23, 'k24' => 24, 'k25' => 25, 'k26' => 26, 'k27' => 27, 'k28' => 28, 'k29' => 29];
+echo count($big), " ", $big['k29'], " ", $big['k0'], " ", implode(',', array_keys($big)), "\n";
+$big['new'] = 1; unset($big['k3']); $big['k3'] = 'back';
+$ks = array_keys($big); echo $ks[28], ',', $ks[29], ',', $ks[30], "\n";
+$c = ['x' => 1, 'y' => 2]; $c2 = $c; $c2['x'] = 9; echo $c['x'], $c2['x'], "\n";
+foreach (['p' => 'q', 'r' => 's'] as $k => $v) echo "$k=$v ";
+echo "\n";
+$e = ['one' => 1, 'two' => 2]; echo isset($e['two']) ? 'y' : 'n', array_key_exists('three', $e) ? 'y' : 'n', "\n";
+function lit() { return ['é' => 'u', 'ü' => 'v', "a\0b" => 'w']; }
+print_r(lit());
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "Array\n(\n    [id] => 0\n    [name] => s0\n    [f] => 1.5\n    [b] => 1\n    [n] => \n    [arr] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [h] => Array\n        (\n            [x] => 0\n        )\n\n    [id2] => 0\n)\n{\"id\":0,\"name\":\"s0\",\"f\":1.5,\"b\":true,\"n\":null,\"arr\":[1,2],\"h\":{\"x\":0},\"id2\":0}\nArray\n(\n    [id] => 1\n    [name] => s1\n    [f] => 1.5\n    [b] => 1\n    [n] => \n    [arr] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [h] => Array\n        (\n            [x] => 1\n        )\n\n    [id2] => 2\n)\n{\"id\":1,\"name\":\"s1\",\"f\":1.5,\"b\":true,\"n\":null,\"arr\":[1,2],\"h\":{\"x\":1},\"id2\":2}\nArray\n(\n    [id] => 2\n    [name] => s2\n    [f] => 1.5\n    [b] => 1\n    [n] => \n    [arr] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [h] => Array\n        (\n            [x] => 2\n        )\n\n    [id2] => 4\n)\n{\"id\":2,\"name\":\"s2\",\"f\":1.5,\"b\":true,\"n\":null,\"arr\":[1,2],\"h\":{\"x\":2},\"id2\":4}\nArray\n(\n    [a] => 3\n    [b] => 2\n    [5] => five\n    [] => empty\n    [c] => 4\n)\n30 29 0 k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12,k13,k14,k15,k16,k17,k18,k19,k20,k21,k22,k23,k24,k25,k26,k27,k28,k29\nk29,new,k3\n19\np=q r=s \nyn\nArray\n(\n    [é] => u\n    [ü] => v\n    [a\0b] => w\n)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

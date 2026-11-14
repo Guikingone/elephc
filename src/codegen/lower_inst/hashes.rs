@@ -137,6 +137,12 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     require_hash(hash_ty.clone(), inst)?;
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    if let Some(placement) = ctx
+        .current_instruction()
+        .and_then(|id| ctx.static_hash_literal_sets.get(&id).copied())
+    {
+        return lower_static_hash_literal_set(ctx, hash, key, value, &value_ty, &storage_value_ty, placement);
+    }
     let source_local = source_load_local_slot(ctx, hash)?;
     if let Some(slot) = source_local {
         ctx.release_mutated_source_local_owner(slot, hash)?;
@@ -150,6 +156,96 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         ctx.store_value_to_local(slot, hash)?;
     }
     ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Lowers an insertion of a new literal string key into a fresh, unshared table whose entry slot
+/// is known at compile time (`block_emit::collect_static_hash_literal_sets`): the key, value,
+/// insertion-order links and header are stored directly, exactly as `__rt_hash_set`'s insert
+/// path would (no growth, no existing key, the table is not relocated). The interned key is
+/// shared with one more reference, like `__rt_str_persist_key` does.
+fn lower_static_hash_literal_set(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    placement: crate::codegen::context::StaticHashSlot,
+) -> Result<()> {
+    const HEADER: usize = 40;
+    const ENTRY: usize = 64;
+    let entry = HEADER + placement.slot * ENTRY;
+    let tag = hash_set_value_tag(value_ty, storage_value_ty);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if !emit_literal_hash_key(ctx, key, "x1", "x2")? {
+                return Err(CodegenIrError::invalid_module("static hash literal key is not a literal"));
+            }
+            ctx.emitter.instruction("ldur w9, [x1, #-12]");                     // interned key refcount
+            ctx.emitter.instruction("add w9, w9, #1");                          // the table takes a reference, released when it frees the key
+            ctx.emitter.instruction("stur w9, [x1, #-12]");                     // store it back
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x9", entry as i64);
+            ctx.emitter.instruction("add x9, x0, x9");                          // the key's entry
+            ctx.emitter.instruction("mov x10, #1");                             // occupied marker
+            ctx.emitter.instruction("str x10, [x9]");                           // mark the entry occupied
+            ctx.emitter.instruction("stp x1, x2, [x9, #8]");                    // key pointer and length
+            ctx.emitter.instruction("stp x3, x4, [x9, #24]");                   // value payload words
+            abi::emit_load_int_immediate(ctx.emitter, "x10", tag);
+            ctx.emitter.instruction("str x10, [x9, #40]");                      // value tag
+            abi::emit_load_int_immediate(ctx.emitter, "x10", placement.prev.map_or(-1, |prev| prev as i64));
+            ctx.emitter.instruction("str x10, [x9, #48]");                      // previous entry in insertion order
+            ctx.emitter.instruction("mov x10, #-1");                            // end of the insertion order
+            ctx.emitter.instruction("str x10, [x9, #56]");                      // no next entry yet
+            abi::emit_load_int_immediate(ctx.emitter, "x10", placement.slot as i64);
+            match placement.prev {
+                None => ctx.emitter.instruction("str x10, [x0, #24]"),          // header: insertion-order head
+                Some(prev) => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x9", (HEADER + prev * ENTRY + 56) as i64);
+                    ctx.emitter.instruction("str x10, [x0, x9]");               // previous tail links forward to this entry
+                }
+            }
+            ctx.emitter.instruction("str x10, [x0, #32]");                      // header: insertion-order tail
+            abi::emit_load_int_immediate(ctx.emitter, "x10", placement.count_before as i64 + 1);
+            ctx.emitter.instruction("str x10, [x0]");                           // header: live entry count
+        }
+        Arch::X86_64 => {
+            if !emit_literal_hash_key(ctx, key, "rsi", "rdx")? {
+                return Err(CodegenIrError::invalid_module("static hash literal key is not a literal"));
+            }
+            ctx.emitter.instruction("add DWORD PTR [rsi - 12], 1");             // the table takes a reference, released when it frees the key
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 1", entry)); // mark the entry occupied
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", entry + 8)); // key pointer
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rdx", entry + 16)); // key length
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rcx", entry + 24)); // value low word
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r8", entry + 32)); // value high word
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", entry + 40, tag)); // value tag
+            ctx.emitter.instruction(&format!(
+                "mov QWORD PTR [rdi + {}], {}",
+                entry + 48,
+                placement.prev.map_or(-1, |prev| prev as i64)
+            )); // previous entry in insertion order
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], -1", entry + 56)); // no next entry yet
+            match placement.prev {
+                None => ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + 24], {}", placement.slot)), // header: insertion-order head
+                Some(prev) => ctx.emitter.instruction(&format!(
+                    "mov QWORD PTR [rdi + {}], {}",
+                    HEADER + prev * ENTRY + 56,
+                    placement.slot
+                )), // previous tail links forward to this entry
+            }
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + 32], {}", placement.slot)); // header: insertion-order tail
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi], {}", placement.count_before + 1)); // header: live entry count
+        }
+    }
     Ok(())
 }
 

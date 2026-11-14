@@ -38,6 +38,17 @@ pub(super) enum LocalSlotRepresentation {
     Dynamic,
 }
 
+/// The compile-time placement of one literal-key insertion into a fresh hash table.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StaticHashSlot {
+    /// Entry slot the key lands in (its probe position in the table built so far).
+    pub slot: usize,
+    /// Slot of the previously inserted entry (insertion order), if any.
+    pub prev: Option<usize>,
+    /// Live entries before this insertion.
+    pub count_before: usize,
+}
+
 /// The instructions of one fused `$a[$i] op= $x` update on a `mixed` list: the element read,
 /// the optional checked int operation producing `$x`, the element store and the releases.
 #[derive(Debug, Clone)]
@@ -114,6 +125,9 @@ pub(crate) struct FunctionContext<'a> {
     /// `$a[$i] op= $x` on a `mixed` list lowered as one in-place update, keyed by the mixed
     /// `+`/`-`/`*` instruction (see `lower_inst::fused_array_update`).
     pub(super) fused_array_updates: HashMap<InstId, FusedArrayUpdate>,
+    /// `hash_set`s of distinct literal string keys into a fresh table whose entry slot is known
+    /// at compile time (see `lower_inst::hashes::lower_static_hash_literal_set`).
+    pub(super) static_hash_literal_sets: HashMap<InstId, StaticHashSlot>,
     /// Temporary codegen types of values whose home holds a different representation
     /// while a fused lowering runs (a checked result kept as a raw int).
     pub(super) value_type_overrides: HashMap<ValueId, PhpType>,
@@ -178,6 +192,7 @@ impl<'a> FunctionContext<'a> {
             fused_checked_casts: HashMap::new(),
             fused_checked_mixed: HashMap::new(),
             fused_array_updates: HashMap::new(),
+            static_hash_literal_sets: HashMap::new(),
             value_type_overrides: HashMap::new(),
             released_values: HashSet::new(),
             epilogue_label,
@@ -387,6 +402,11 @@ impl<'a> FunctionContext<'a> {
     /// Selects the EIR instruction whose CFG-local representation facts codegen must use.
     /// Returns the instruction currently being lowered, if any.
     pub(super) fn current_inst(&self) -> Option<InstId> {
+        self.current_inst
+    }
+
+    /// Returns the instruction being lowered, if any.
+    pub(super) fn current_instruction(&self) -> Option<InstId> {
         self.current_inst
     }
 

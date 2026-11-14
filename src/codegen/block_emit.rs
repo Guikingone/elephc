@@ -1276,6 +1276,109 @@ fn collect_fused_checked_casts(ctx: &mut FunctionContext<'_>) {
     }
     collect_fused_checked_mixed(ctx, &use_counts);
     collect_fused_array_updates(ctx, &use_counts);
+    collect_static_hash_literal_sets(ctx);
+}
+
+/// FNV-1a 64, the string-key hash of `__rt_hash_key_hash`.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
+/// Finds `hash_set`s of literal string keys into a table created by `hash_new` in the same
+/// block and used by nothing else in between (an associative array literal). The table's
+/// capacity and contents are then known at compile time, so each key's entry slot is the slot
+/// `__rt_hash_set` would probe to: the insertion lowers to direct entry stores.
+fn collect_static_hash_literal_sets(ctx: &mut FunctionContext<'_>) {
+    struct Table {
+        capacity: usize,
+        keys: Vec<Vec<u8>>,
+        occupied: Vec<bool>,
+        last: Option<usize>,
+    }
+    let function = ctx.function;
+    for block in &function.blocks {
+        let mut tables: std::collections::HashMap<ValueId, Table> = std::collections::HashMap::new();
+        for inst_id in &block.instructions {
+            let Some(inst) = function.instruction(*inst_id) else {
+                continue;
+            };
+            if inst.op == Op::HashNew {
+                if let (Some(result), Some(crate::ir::Immediate::Capacity(requested))) =
+                    (inst.result, inst.immediate.as_ref())
+                {
+                    // Mirrors `lower_hash_new` (`max(2n, 16)`) and `__rt_hash_new` (next power
+                    // of two).
+                    let capacity = ((*requested as usize) * 2).max(16).next_power_of_two();
+                    tables.insert(
+                        result,
+                        Table { capacity, keys: Vec::new(), occupied: vec![false; capacity], last: None },
+                    );
+                }
+                continue;
+            }
+            let used: Vec<ValueId> =
+                inst.operands.iter().copied().filter(|operand| tables.contains_key(operand)).collect();
+            if used.is_empty() {
+                continue;
+            }
+            let placed = (|| {
+                let [hash, key, _value] = inst.operands.as_slice() else {
+                    return None;
+                };
+                if inst.op != Op::HashSet || used.len() != 1 || used[0] != *hash {
+                    return None;
+                }
+                let key_inst = function.instruction(defining_inst(function, *key)?)?;
+                let (Op::ConstStr, Some(crate::ir::Immediate::Data(data))) =
+                    (key_inst.op, key_inst.immediate.as_ref())
+                else {
+                    return None;
+                };
+                let text = ctx.module.data.strings.get(data.as_raw() as usize)?;
+                let bytes = crate::string_bytes::literal_bytes(text);
+                if bytes.is_empty()
+                    || std::str::from_utf8(&bytes).map_or(true, crate::types::is_php_integer_array_key)
+                {
+                    return None;
+                }
+                let table = tables.get_mut(hash)?;
+                // A repeated key updates its entry; a full enough table would grow first.
+                if table.keys.contains(&bytes) || table.keys.len() * 4 >= table.capacity * 3 {
+                    return None;
+                }
+                let mask = table.capacity - 1;
+                let mut slot = (fnv1a64(&bytes) as usize) & mask;
+                while table.occupied[slot] {
+                    slot = (slot + 1) & mask;
+                }
+                let placement = crate::codegen::context::StaticHashSlot {
+                    slot,
+                    prev: table.last,
+                    count_before: table.keys.len(),
+                };
+                table.occupied[slot] = true;
+                table.last = Some(slot);
+                table.keys.push(bytes);
+                Some(placement)
+            })();
+            match placed {
+                Some(placement) => {
+                    ctx.static_hash_literal_sets.insert(*inst_id, placement);
+                }
+                None => {
+                    // Any other use of the table ends its compile-time tracking.
+                    for value in used {
+                        tables.remove(&value);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Returns the instruction defining `value`, when it is an instruction result.
