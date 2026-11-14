@@ -2753,33 +2753,30 @@ fn lower_split_var_dump(ctx: &mut LoweringContext<'_, '_>, args: &[Expr], expr: 
         return None;
     }
     for arg in args {
-        let ty = match &arg.kind {
-            ExprKind::Variable(var) => ctx.local_type(var),
-            ExprKind::FunctionCall { name, .. } if ctx.functions.contains_key(name.as_str()) => {
-                ctx.functions[name.as_str()].return_type.clone()
-            }
-            _ => crate::types::checker::infer_expr_type_syntactic(arg),
-        };
-        let native = matches!(
-            ty.codegen_repr(),
-            PhpType::Int
-                | PhpType::Float
-                | PhpType::Bool
-                | PhpType::Str
-                | PhpType::Void
-                | PhpType::TaggedScalar
-                | PhpType::Object(_)
-                | PhpType::Resource(_)
-        );
-        let call = if native {
-            ExprKind::FunctionCall { name: Name::unqualified("var_dump"), args: vec![arg.clone()] }
+        // Lower the argument first and dispatch on its actual representation: only an array or
+        // a dynamic value can hold an array the native walkers do not print.
+        let value = lower_expr(ctx, arg);
+        let repr = ctx.builder.value_php_type(value.value).codegen_repr();
+        if matches!(
+            repr,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+        ) {
+            let indent = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(String::new()), arg.span));
+            let name = "__elephc_var_dump_value";
+            let data = ctx.intern_function_name(name);
+            let operands = vec![value.value, indent.value];
+            let call = ctx.emit_value(
+                Op::Call,
+                operands.clone(),
+                Some(Immediate::Data(data)),
+                PhpType::Void,
+                effects_lookup::user_call_effects(name),
+                Some(arg.span),
+            );
+            release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), &ReturnArgAlias::None, arg.span);
         } else {
-            ExprKind::FunctionCall {
-                name: Name::unqualified("__elephc_var_dump_value"),
-                args: vec![arg.clone(), Expr::new(ExprKind::StringLiteral(String::new()), arg.span)],
-            }
-        };
-        lower_expr(ctx, &Expr::new(call, expr.span));
+            emit_builtin_call_value(ctx, "var_dump", vec![value.value], PhpType::Void, arg.span, None);
+        }
     }
     Some(lower_expr(ctx, &Expr::new(ExprKind::Null, expr.span)))
 }
