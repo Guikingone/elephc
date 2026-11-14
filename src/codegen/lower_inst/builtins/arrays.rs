@@ -6342,14 +6342,9 @@ fn lower_array_pad_call(
 
 /// Emits the `-1` runtime sentinel used when slicing to the end of the source array.
 fn emit_array_slice_until_end_sentinel(ctx: &mut FunctionContext<'_>, reg: &str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, #-1", reg));              // use -1 as the array_slice() runtime sentinel for length until the end
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, -1", reg));               // use -1 as the x86_64 array_slice() runtime sentinel for length until the end
-        }
-    }
+    // i64::MIN: no PHP length can mean "until the end" there (a negative length is relative to
+    // the end of the array, so -1 is a real length).
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::MIN);
 }
 
 /// Returns the helper that matches the chunk source element ownership representation.

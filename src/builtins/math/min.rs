@@ -50,13 +50,25 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     // Two-or-more-argument scalar form: any argument types are accepted; a float
     // argument promotes the result to float.
     let mut has_float = false;
+    let mut has_int = false;
+    let mut has_dynamic = false;
     for arg in cx.args {
         let t = cx.checker.infer_type(arg, cx.env)?;
         if t == PhpType::Float {
             has_float = true;
+        } else if t == PhpType::Int {
+            has_int = true;
+        } else if !matches!(t, PhpType::Int | PhpType::Bool | PhpType::False) {
+            // A `mixed`/string/array/... argument: PHP returns that argument itself, chosen by
+            // the full comparison rules, so the result keeps its own type.
+            has_dynamic = true;
         }
     }
-    if has_float {
+    // Mixed int and float arguments: the winning argument keeps its own type (`min(2.5, 1)`
+    // is `int(1)`).
+    if has_dynamic || (has_float && has_int) {
+        Ok(PhpType::Mixed)
+    } else if has_float {
         Ok(PhpType::Float)
     } else {
         Ok(PhpType::Int)

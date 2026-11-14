@@ -435,6 +435,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_mixed_numeric_div(emitter);
+    arrays::emit_mixed_widen_int_to_float(emitter);
     arrays::emit_mixed_bitwise(emitter);
     arrays::emit_mixed_bitwise_not(emitter);
     arrays::emit_int_checked_binops(emitter);

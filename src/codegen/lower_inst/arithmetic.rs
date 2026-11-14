@@ -500,6 +500,16 @@ fn emit_int_zero_divisor_throw(ctx: &mut FunctionContext<'_>, divisor_reg: &str,
     ctx.emitter.label(&ok);
 }
 
+/// Lowers `DivisionByZeroCheck`: throws `DivisionByZeroError` when the mixed division result is
+/// the null pointer the helper returns for a zero divisor.
+pub(super) fn lower_division_by_zero_check(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(value, reg)?;
+    emit_int_zero_divisor_throw(ctx, reg, "Division by zero");
+    Ok(())
+}
+
 /// Lowers PHP `/` for integer operands by promoting both sides to floating point.
 pub(super) fn lower_int_div_to_float(
     ctx: &mut FunctionContext<'_>,
@@ -937,11 +947,9 @@ fn emit_mixed_numeric_generic(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
-    if op == MixedNumericOp::Div {
-        // The division helper returns no box for a zero divisor.
-        let result_reg = abi::int_result_reg(ctx.emitter);
-        emit_int_zero_divisor_throw(ctx, result_reg, "Division by zero");
-    }
+    // A mixed `/` leaves a null result for a zero divisor; `Op::DivisionByZeroCheck` throws
+    // after the operand releases.
+    let _ = op;
     Ok(())
 }
 
@@ -1048,7 +1056,7 @@ fn is_mixed_like(ty: &PhpType) -> bool {
 }
 
 /// Loads an SSA value as a boxed Mixed pointer in the integer result register.
-fn materialize_value_as_mixed(
+pub(in crate::codegen) fn materialize_value_as_mixed(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     ty: &PhpType,

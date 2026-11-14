@@ -172,6 +172,7 @@ mod mixed_count;
 mod mixed_is_empty;
 mod mixed_numeric_binops;
 mod mixed_numeric_div;
+mod mixed_widen_int_to_float;
 mod mixed_bitwise;
 mod int_checked_binops;
 mod mixed_strict_eq;
@@ -484,6 +485,7 @@ pub use mixed_is_empty::emit_mixed_is_empty;
 /// Emit Mixed emptiness check helper.
 pub use mixed_numeric_binops::emit_mixed_numeric_binops;
 pub use mixed_numeric_div::emit_mixed_numeric_div;
+pub use mixed_widen_int_to_float::emit_mixed_widen_int_to_float;
 pub use mixed_bitwise::emit_mixed_bitwise;
 /// Emit Mixed unary bitwise NOT helper.
 pub use mixed_bitwise::emit_mixed_bitwise_not;

@@ -522,3 +522,76 @@ $x = 5; var_dump($x); var_dump(1.5); var_dump(true);
     assert_eq!(out.stdout, "array(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n  [1]=>\n  array(1) {\n    [0]=>\n    int(3)\n  }\n}\narray(2) {\n  [\"x\"]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n  [\"y\"]=>\n  string(1) \"s\"\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  array(2) {\n    [0]=>\n    int(2)\n    [1]=>\n    string(1) \"a\"\n  }\n}\narray(2) {\n  [\"a\"]=>\n  float(1.5)\n  [\"b\"]=>\n  array(3) {\n    [0]=>\n    bool(true)\n    [1]=>\n    NULL\n    [2]=>\n    float(0.30000000000000004)\n  }\n}\narray(0) {\n}\narray(1) {\n  [0]=>\n  array(0) {\n  }\n}\narray(1) {\n  [\"é\"]=>\n  array(1) {\n    [\"z\"]=>\n    array(1) {\n      [1]=>\n      int(-1)\n    }\n  }\n}\narray(2) {\n  [5]=>\n  string(1) \"a\"\n  [\"5x\"]=>\n  array(1) {\n    [0]=>\n    float(-1)\n  }\n}\nint(3)\nstring(3) \"str\"\nNULL\nfloat(1.0E+25)\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\narray(1) {\n  [\"k\"]=>\n  string(1) \"v\"\n}\narray(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n  [1]=>\n  array(1) {\n    [0]=>\n    int(3)\n  }\n}\narray(2) {\n  [\"a\"]=>\n  int(1)\n  [\"arr\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\narray(1) {\n  [\"q\"]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n}\nint(5)\nfloat(1.5)\nbool(true)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `min()`/`max()` with a `mixed`, string or mixed int/float operand return the winning argument itself (PHP 8 ordering, first of equal values wins) instead of truncating to int.
+#[test]
+fn test_min_max_with_dynamic_operands_return_the_winning_argument() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(mixed $a, mixed $b) { var_dump(max($a, $b), min($a, $b), max($a, 1, $b), min(3, $a / $b)); }
+f(5, 2); f(2.5, 2); f("10", "9"); f(1, 1.0); f(null, 2);
+$l = [5, 2, 2];
+var_dump(min($l[0] / $l[2], 7), max($l[0] / $l[2], $l[0] / $l[1]), max(3, 7, 1), min(2.5, 1), max("a", "b"));
+for ($i = 0; $i < 3; $i++) { $m = max($l[$i], $i); echo $m, " "; }
+echo "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(5)\nint(2)\nint(5)\nfloat(2.5)\nfloat(2.5)\nint(2)\nfloat(2.5)\nfloat(1.25)\nstring(2) \"10\"\nstring(1) \"9\"\nstring(2) \"10\"\nfloat(1.1111111111111112)\nint(1)\nint(1)\nint(1)\nfloat(1)\nint(2)\nNULL\nint(2)\nint(0)\nfloat(2.5)\nfloat(2.5)\nint(7)\nint(1)\nstring(1) \"b\"\n5 2 2 \n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// A `DivisionByZeroError` from a mixed `/` caught in the same function leaks none of the division's owned operand boxes.
+#[test]
+fn test_mixed_division_by_zero_releases_operands() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(mixed $a, mixed $b) { try { return $a / ($b - 2); } catch (DivisionByZeroError $e) { return 0; } }
+var_dump(f(10, 2));
+function g(array $l) { try { return $l[0] / $l[1]; } catch (DivisionByZeroError $e) { return 0; } }
+var_dump(g([10, 0, "x"]));
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(0)\nint(0)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// An int result of a mixed `/` widens to float in `?float`/`float|string` properties, parameters and return values.
+#[test]
+fn test_mixed_int_quotient_widens_into_nullable_float_targets() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+// `$mixed / $x` now has static type mixed; int results are no longer widened when they flow
+// into ?float / float|string properties, parameters and return types (5bd9a6f printed float(4)).
+class H {
+    public ?float $nf = null;
+    public float|string $fs = "a";
+    function go(mixed $m) { $this->nf = $m / 2; $this->fs = $m / 2; var_dump($this->nf, $this->fs); }
+}
+(new H)->go(8);
+function taken(?float $f) { var_dump($f); }
+function takeu(float|string $f) { var_dump($f); }
+function call(mixed $m) { taken($m / 2); takeu($m / 2); }
+call(8);
+function ret(mixed $m): ?float { return $m / 4; }
+function retu(mixed $m): float|bool { return $m / 4; }
+function retl(array $l): ?float { return $l[0] / $l[1]; }
+var_dump(ret(8), retu(8), retl([8, 2, "x"]));
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "float(4)\nfloat(4)\nfloat(4)\nfloat(4)\nfloat(2)\nfloat(2)\nfloat(4)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// `array_slice`/`array_splice` treat a negative length as relative to the end (`-1` is a real length, not "until the end"), never over-allocate, and a refcounted splice moves the removed elements without leaking them.
+#[test]
+fn test_array_slice_and_splice_negative_lengths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$a = [1,2,3,4,5];
+var_dump(array_slice($a, 1, -1), array_slice($a, -2), array_slice($a, 1, -10), array_slice($a, -3, -1), array_slice($a, 2), array_slice($a, 0, 0), array_slice($a, 9));
+$o = [new ArrayObject([1]), new ArrayObject([2]), new ArrayObject([3])]; echo count(array_slice($o, 0, -1)), count(array_slice($o, -1)), "\n";
+$b = [1,2,3,4,5]; $r = array_splice($b, 1, -1); var_dump($r, $b);
+$c = [1,2,3,4,5]; $r = array_splice($c, 1, -10); var_dump($r, $c);
+$d = [1,2,3,4,5]; $r = array_splice($d, 2); var_dump($r, $d);
+$e = [[1],[2],[3],[4]]; $r = array_splice($e, 1, -1); echo count($r), count($e), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "array(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n  [2]=>\n  int(4)\n}\narray(2) {\n  [0]=>\n  int(4)\n  [1]=>\n  int(5)\n}\narray(0) {\n}\narray(2) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(4)\n}\narray(3) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(4)\n  [2]=>\n  int(5)\n}\narray(0) {\n}\narray(0) {\n}\n21\narray(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n  [2]=>\n  int(4)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(5)\n}\narray(0) {\n}\narray(5) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n  [3]=>\n  int(4)\n  [4]=>\n  int(5)\n}\narray(3) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(4)\n  [2]=>\n  int(5)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n22\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

@@ -503,6 +503,14 @@ pub enum Op {
     /// Converts an indexed array of boxed `mixed` elements into a fresh int/float/bool array
     /// (the result type names the element type); consumes its input like the widening conversions.
     ArrayMixedToScalar,
+    /// PHP's int-to-float widening of a boxed `mixed` value for a `float`-accepting target that
+    /// does not accept `int` (`?float`): an int payload becomes a fresh float box, anything else
+    /// is retained. The operand is borrowed; the result is owned.
+    MixedWidenIntToFloat,
+    /// Throws `DivisionByZeroError("Division by zero")` when its operand — the result of a mixed
+    /// `/` — is the null pointer the division helper returns for a zero divisor. Emitted after the
+    /// division's operand releases so a caught throw leaks nothing.
+    DivisionByZeroCheck,
     ArrayElemAddr,
     ArraySet,
     HashSet,
@@ -880,6 +888,8 @@ impl Op {
             }
             ArrayStoreElemRaw => E::WRITES_HEAP,
             ArrayMixedToScalar => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            MixedWidenIntToFloat => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            DivisionByZeroCheck => E::MAY_THROW,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -1128,6 +1138,8 @@ impl Op {
             ArrayFetchDimW => "array_fetch_dim_w",
             ArrayStoreElemRaw => "array_store_elem_raw",
             ArrayMixedToScalar => "array_mixed_to_scalar",
+            MixedWidenIntToFloat => "mixed_widen_int_to_float",
+            DivisionByZeroCheck => "division_by_zero_check",
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",

@@ -5057,6 +5057,18 @@ fn finish_return(
 ) {
     let value = reload_returned_assignment_local(ctx, value_expr, value, span);
     let value = return_type_guard::emit_checked_downcast_return_guard(ctx, value, span);
+    // A return type that accepts `float` but not `int` was declared (an inferred one would
+    // include `int` had the function returned one), so the int widens.
+    let declared_return = ctx.return_php_type.clone();
+    // Only an owned temporary (`return $m / 4`): a returned local moves out of its slot without
+    // an acquire, which a retaining conversion would unbalance.
+    let value = if matches!(declared_return, PhpType::Union(_))
+        && (value.ir_type == IrType::I64 || ctx.value_is_owning_temporary(value))
+    {
+        widen_int_value_for_declared_type(ctx, value, &declared_return, Some(span))
+    } else {
+        value
+    };
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);
@@ -5788,14 +5800,9 @@ fn lower_property_assign(
     // narrower slot is guarded here rather than refused at compile time. A no-op for every flow the
     // checker already proved sound (see `emit_checked_downcast`'s PHASE 0).
     // PHP widens an `int` assigned to a `float` property (`$p->f = 6 / 3` stores `float(2)`).
-    let value = if value.ir_type == IrType::I64
-        && ctx.builder.value_php_type(value.value) == PhpType::Int
-        && raw_object_property_type(ctx, object.value, property)
-            .is_some_and(|ty| declared_type_widens_int_to_float(&ty))
-    {
-        coerce_to_float_at_span(ctx, value, Some(span))
-    } else {
-        value
+    let value = match raw_object_property_type(ctx, object.value, property) {
+        Some(declared) => widen_int_value_for_declared_type(ctx, value, &declared, Some(span)),
+        None => value,
     };
     let stored = guarded_property_store_value(ctx, object.value, property, value, span);
     let data = ctx.intern_string(property);
@@ -6478,6 +6485,39 @@ fn static_property_may_be_eval_dynamic(
         && !ctx
             .classes
             .contains_key(class_name.as_str().trim_start_matches('\\'))
+}
+
+/// Applies PHP's int-to-float widening for a value reaching a declared `float`-accepting type that
+/// does not accept `int` (`float`, `?float`, `float|string`): a native int converts to float, and
+/// a boxed `mixed` value is checked at run time (an int payload becomes a fresh float box; the
+/// source box is released when it was an owning temporary).
+pub(crate) fn widen_int_value_for_declared_type(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    declared: &PhpType,
+    span: Option<Span>,
+) -> LoweredValue {
+    if !declared_type_widens_int_to_float(declared) {
+        return value;
+    }
+    if value.ir_type == IrType::I64 && ctx.builder.value_php_type(value.value) == PhpType::Int {
+        return coerce_to_float_at_span(ctx, value, span);
+    }
+    if value.ir_type != IrType::Heap(IrHeapKind::Mixed) {
+        return value;
+    }
+    let widened = ctx.emit_value(
+        Op::MixedWidenIntToFloat,
+        vec![value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedWidenIntToFloat.default_effects(),
+        span,
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    widened
 }
 
 /// Returns whether a declared `float`, `?float` or other union accepting `float` but not `int`

@@ -1222,6 +1222,15 @@ fn lower_mixed_numeric_binary(
             crate::ir_lower::ownership::release_if_owned(ctx, operand, Some(expr.span));
         }
     }
+    if op == MixedNumericOp::Div {
+        ctx.emit_void(
+            Op::DivisionByZeroCheck,
+            vec![result.value],
+            None,
+            Op::DivisionByZeroCheck.default_effects(),
+            Some(expr.span),
+        );
+    }
     result
 }
 
@@ -7060,12 +7069,13 @@ fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
-    // `?float`/`float|string` parameters widen an int argument to float (PHP coercive typing).
-    if value.ir_type == IrType::I64
-        && ctx.builder.value_php_type(value.value) == PhpType::Int
+    // `?float`/`float|string` parameters widen an int argument to float (PHP coercive typing);
+    // only a declared parameter type converts (an inferred one is not a PHP contract).
+    if sig.declared_params.get(index).copied().unwrap_or(false)
         && crate::ir_lower::stmt::declared_type_widens_int_to_float(param_ty)
+        && !matches!(param_ty, PhpType::Float)
     {
-        return coerce_to_float(ctx, value, arg);
+        return crate::ir_lower::stmt::widen_int_value_for_declared_type(ctx, value, param_ty, Some(arg.span));
     }
     let param_ty = param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {

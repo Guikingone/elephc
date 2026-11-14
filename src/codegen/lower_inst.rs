@@ -220,6 +220,12 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayFetchDimW => arrays::lower_array_fetch_dim_w(ctx, &inst),
         Op::ArrayStoreElemRaw => arrays::lower_array_store_elem_raw(ctx, &inst),
         Op::ArrayMixedToScalar => arrays::lower_array_mixed_to_scalar(ctx, &inst),
+        Op::DivisionByZeroCheck => arithmetic::lower_division_by_zero_check(ctx, &inst),
+        Op::MixedWidenIntToFloat => {
+            ctx.load_value_to_result(expect_operand(&inst, 0)?)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_widen_int_to_float");
+            store_if_result(ctx, &inst)
+        }
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),

@@ -237,10 +237,7 @@ pub(crate) fn lower_min_max(
     match result_ty {
         PhpType::Float => lower_float_min_max(ctx, inst, want_max)?,
         PhpType::Int | PhpType::Bool => lower_int_min_max(ctx, inst, want_max)?,
-        PhpType::Mixed | PhpType::Union(_) => {
-            lower_int_min_max(ctx, inst, want_max)?;
-            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-        }
+        PhpType::Mixed | PhpType::Union(_) => lower_mixed_min_max(ctx, inst, want_max)?,
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",
@@ -907,6 +904,72 @@ fn lower_int_min_max(
         load_numeric_as_int(ctx, candidate, min_max_name(want_max))?;
         emit_int_select(ctx, want_max);
     }
+    Ok(())
+}
+
+/// Lowers `min()` / `max()` with a dynamic operand: every operand becomes an owned boxed value,
+/// `__rt_php_compare` (PHP 8 ordering) picks the winner, and the winning argument itself is the
+/// result (the first of equal values wins, as in PHP). Losing boxes are released.
+fn lower_mixed_min_max(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    want_max: bool,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    // Two stack slots: [0] the current winner, [8] the candidate.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    for (index, operand) in inst.operands.iter().enumerate() {
+        let ty = ctx.value_php_type(*operand)?;
+        super::super::arithmetic::materialize_value_as_mixed(ctx, *operand, &ty)?;
+        if matches!(ty.codegen_repr(), PhpType::Mixed) {
+            abi::emit_call_label(ctx.emitter, "__rt_incref");               // own a reference to a borrowed boxed operand
+        }
+        if index == 0 {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("str x0, [sp, #0]"), // keep the boxed operand
+                Arch::X86_64 => ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax"), // keep the boxed operand
+            }
+            continue;
+        }
+        match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("str x0, [sp, #8]"), // keep the boxed operand
+                Arch::X86_64 => ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"), // keep the boxed operand
+            }
+        let keep = ctx.next_label("min_max_keep");
+        let next = ctx.next_label("min_max_next");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x0, [sp, #8]");                    // candidate
+                ctx.emitter.instruction("ldr x1, [sp]");                        // current winner
+                abi::emit_call_label(ctx.emitter, "__rt_php_compare");
+                ctx.emitter.instruction("cmp x0, #0");                          // candidate <=> winner
+                ctx.emitter.instruction(&format!("b.{} {}", if want_max { "le" } else { "ge" }, keep)); // ties keep the earlier argument
+                ctx.emitter.instruction("ldr x0, [sp]");                        // the old winner is released
+                ctx.emitter.instruction("ldr x9, [sp, #8]");                    // the candidate wins
+                ctx.emitter.instruction("str x9, [sp]");
+                ctx.emitter.instruction(&format!("b {}", next));
+                ctx.emitter.label(&keep);
+                ctx.emitter.instruction("ldr x0, [sp, #8]");                    // the losing candidate is released
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");        // candidate
+                ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");            // current winner
+                abi::emit_call_label(ctx.emitter, "__rt_php_compare");
+                ctx.emitter.instruction("cmp rax, 0");                          // candidate <=> winner
+                ctx.emitter.instruction(&format!("j{} {}", if want_max { "le" } else { "ge" }, keep)); // ties keep the earlier argument
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");            // the old winner is released
+                ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");        // the candidate wins
+                ctx.emitter.instruction("mov QWORD PTR [rsp], rcx");
+                ctx.emitter.instruction(&format!("jmp {}", next));
+                ctx.emitter.label(&keep);
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");        // the losing candidate is released
+            }
+        }
+        ctx.emitter.label(&next);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
 }
 

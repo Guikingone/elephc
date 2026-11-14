@@ -56,8 +56,16 @@ pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, x9");                                          // compare offset with source length
     emitter.instruction("b.ge __rt_array_slice_ref_empty");                     // return empty array when offset is out of range
     emitter.instruction("sub x3, x9, x1");                                      // compute maximum possible slice length
-    emitter.instruction("cmn x2, #1");                                          // check whether requested length is -1
-    emitter.instruction("csel x2, x3, x2, eq");                                 // use remaining length when caller requested -1
+    // A negative length stops that many elements before the end; i64::MIN means "until the end".
+    emitter.instruction("tbz x2, #63, __rt_array_slice_ref_len_known");                     // non-negative length: clamp below
+    emitter.instruction("adds x10, x2, x2");                                    // only i64::MIN doubles to zero
+    emitter.instruction("b.eq __rt_array_slice_ref_len_all");
+    emitter.instruction("adds x2, x3, x2");                                     // remaining + negative length
+    emitter.instruction("csel x2, xzr, x2, lt");                                // past the start: nothing
+    emitter.instruction("b __rt_array_slice_ref_len_known");
+    emitter.label("__rt_array_slice_ref_len_all");
+    emitter.instruction("mov x2, x3");                                          // until the end of the source array
+    emitter.label("__rt_array_slice_ref_len_known");
     emitter.instruction("cmp x2, x3");                                          // compare requested length with remaining length
     emitter.instruction("csel x2, x3, x2, gt");                                 // clamp requested length to remaining length
     emitter.instruction("str x1, [sp, #16]");                                   // save normalized offset
@@ -127,9 +135,18 @@ fn emit_array_slice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_slice_ref_empty_x86");                  // return an empty indexed array when the requested slice offset starts beyond the source length
     emitter.instruction("mov rcx, r10");                                        // seed the remaining-window scratch register from the source indexed-array logical length
     emitter.instruction("sub rcx, rsi");                                        // compute the remaining refcounted payload count from the normalized slice offset to the end of the source indexed array
-    emitter.instruction("cmp rdx, -1");                                         // detect the sentinel that means array_slice should run until the end of the source indexed array
-    emitter.instruction("jne __rt_array_slice_ref_known_len_x86");              // keep the explicit requested slice length when the caller did not use the until-end sentinel
-    emitter.instruction("mov rdx, rcx");                                        // replace the until-end sentinel with the remaining refcounted payload count in the source indexed array
+    // A negative length stops that many elements before the end; i64::MIN means "until the end".
+    emitter.instruction("test rdx, rdx");                                       // non-negative length: clamp below
+    emitter.instruction("jns __rt_array_slice_ref_known_len_x86");
+    emitter.instruction("mov r11, rdx");                                        // detect the until-end sentinel (only i64::MIN doubles to zero)
+    emitter.instruction("add r11, r11");
+    emitter.instruction("jz __rt_array_slice_ref_len_all_x86");
+    emitter.instruction("add rdx, rcx");                                        // remaining + negative length
+    emitter.instruction("jns __rt_array_slice_ref_known_len_x86");
+    emitter.instruction("xor edx, edx");                                        // past the start: nothing
+    emitter.instruction("jmp __rt_array_slice_ref_known_len_x86");
+    emitter.label("__rt_array_slice_ref_len_all_x86");
+    emitter.instruction("mov rdx, rcx");                                        // until the end of the source array
 
     emitter.label("__rt_array_slice_ref_known_len_x86");
     emitter.instruction("cmp rdx, rcx");                                        // clamp the requested slice length so it cannot extend beyond the source indexed-array bounds

@@ -321,10 +321,8 @@ impl<'f> Builder<'f> {
         }
         // `/` and `%` throw `DivisionByZeroError` unless the divisor is a known non-zero constant;
         // the effect keeps passes from hoisting, deduplicating or dropping such a division.
-        let effects = if (matches!(op, Op::IDiv | Op::ISMod | Op::FDiv)
-            && !operands.get(1).is_some_and(|divisor| self.is_nonzero_constant(*divisor)))
-            || (op == Op::MixedNumericBinop
-                && immediate == Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Div)))
+        let effects = if matches!(op, Op::IDiv | Op::ISMod | Op::FDiv)
+            && !operands.get(1).is_some_and(|divisor| self.is_nonzero_constant(*divisor))
         {
             effects | Effects::MAY_THROW
         } else {

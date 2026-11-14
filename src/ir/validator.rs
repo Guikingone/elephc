@@ -279,9 +279,7 @@ fn validate_instruction_effects(
     let expected = inst.op.default_effects();
     // A division whose divisor is not a known non-zero constant may also throw
     // `DivisionByZeroError` (see `Builder::emit_with_effects`).
-    let division_may_throw = (matches!(inst.op, Op::IDiv | Op::ISMod | Op::FDiv)
-        || (inst.op == Op::MixedNumericBinop
-            && inst.immediate == Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Div))))
+    let division_may_throw = matches!(inst.op, Op::IDiv | Op::ISMod | Op::FDiv)
         && inst.effects == expected | Effects::MAY_THROW;
     if !inst.op.allows_effect_refinement() && inst.effects != expected && !division_may_throw {
         return Err(ValidationError::EffectMismatch {
@@ -501,7 +499,7 @@ fn validate_opcode_rules(
         // suffix to append, because neither of its two wordings ends at the runtime type name.
         ThrowCheckedTypeError => check_count(inst_id, inst, 2, "2"),
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
-        | MixedCastString => {
+        | MixedCastString | MixedWidenIntToFloat | DivisionByZeroCheck => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
         }
         ArrayUnion => check_binary(

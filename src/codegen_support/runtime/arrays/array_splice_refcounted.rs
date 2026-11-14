@@ -53,6 +53,16 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     // -- clamp removal length to not exceed array bounds --
     emitter.instruction("ldr x3, [x0]");                                        // load source array length
     emitter.instruction("sub x4, x3, x1");                                      // compute maximum removable length
+    // A negative length stops that many elements before the end; i64::MIN means "until the end".
+    emitter.instruction("tbz x2, #63, __rt_array_splice_ref_len_known");                     // non-negative length: clamp below
+    emitter.instruction("adds x5, x2, x2");                                     // only i64::MIN doubles to zero
+    emitter.instruction("b.eq __rt_array_splice_ref_len_all");
+    emitter.instruction("adds x2, x4, x2");                                     // remaining + negative length
+    emitter.instruction("csel x2, xzr, x2, lt");                                // past the start: nothing
+    emitter.instruction("b __rt_array_splice_ref_len_known");
+    emitter.label("__rt_array_splice_ref_len_all");
+    emitter.instruction("mov x2, x4");                                          // until the end of the source array
+    emitter.label("__rt_array_splice_ref_len_known");
     emitter.instruction("cmp x2, x4");                                          // compare requested length with maximum removable length
     emitter.instruction("csel x2, x4, x2, gt");                                 // clamp length to the remaining number of elements
     emitter.instruction("str x2, [sp, #16]");                                   // save clamped removal length
@@ -77,6 +87,15 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload result array pointer
     emitter.instruction("bl __rt_array_push_refcounted");                       // append retained removed payload into result array
     emitter.instruction("str x0, [sp, #24]");                                   // persist result pointer after possible growth
+    // The source drops the removed payload when it compacts: release its reference (the
+    // result's push retained one), so the payload moves instead of gaining a reference.
+    emitter.instruction("stp x5, x6, [sp, #-32]!");                             // preserve the copy-loop registers across the release
+    emitter.instruction("stp x7, x8, [sp, #16]");
+    emitter.instruction("add x9, x6, x8");                                      // source index of the payload just copied
+    emitter.instruction("ldr x0, [x5, x9, lsl #3]");                            // the removed payload
+    emitter.instruction("bl __rt_decref_any");                                  // release the source's reference
+    emitter.instruction("ldp x7, x8, [sp, #16]");
+    emitter.instruction("ldp x5, x6, [sp], #32");                               // restore the copy-loop registers
     emitter.instruction("add x8, x8, #1");                                      // increment copy-loop index
     emitter.instruction("b __rt_array_splice_ref_copy");                        // continue copying removed elements
 
@@ -131,9 +150,18 @@ fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before clamping the requested removal length
     emitter.instruction("mov rcx, r10");                                        // seed the remaining-window scratch register from the source indexed-array logical length
     emitter.instruction("sub rcx, rsi");                                        // compute the maximum removable refcounted payload count from the requested splice offset
-    emitter.instruction("cmp rdx, -1");                                         // detect the sentinel that means array_splice should remove until the end of the source indexed array
-    emitter.instruction("jne __rt_array_splice_ref_known_len_x86");             // keep the explicit requested removal length when the caller did not use the until-end sentinel
-    emitter.instruction("mov rdx, rcx");                                        // replace the until-end sentinel with the remaining refcounted payload count in the source indexed array
+    // A negative length stops that many elements before the end; i64::MIN means "until the end".
+    emitter.instruction("test rdx, rdx");                                       // non-negative length: clamp below
+    emitter.instruction("jns __rt_array_splice_ref_known_len_x86");
+    emitter.instruction("mov r11, rdx");                                        // detect the until-end sentinel (only i64::MIN doubles to zero)
+    emitter.instruction("add r11, r11");
+    emitter.instruction("jz __rt_array_splice_ref_len_all_x86");
+    emitter.instruction("add rdx, rcx");                                        // remaining + negative length
+    emitter.instruction("jns __rt_array_splice_ref_known_len_x86");
+    emitter.instruction("xor edx, edx");                                        // past the start: nothing
+    emitter.instruction("jmp __rt_array_splice_ref_known_len_x86");
+    emitter.label("__rt_array_splice_ref_len_all_x86");
+    emitter.instruction("mov rdx, rcx");                                        // until the end of the source array
 
     emitter.label("__rt_array_splice_ref_known_len_x86");
     emitter.instruction("cmp rdx, rcx");                                        // clamp the requested removal length so it never extends beyond the source indexed-array bounds
@@ -161,6 +189,12 @@ fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the removed-elements result indexed-array pointer before appending the retained payload
     emitter.instruction("call __rt_array_push_refcounted");                     // append the retained removed payload into the result indexed array
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // persist the possibly-grown removed-elements result indexed-array pointer after the append helper returns
+    // The source drops the removed payload when it compacts: release its reference (the
+    // result's push retained one), so the payload moves instead of gaining a reference.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // source indexed-array pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // source removal cursor
+    emitter.instruction("mov rax, QWORD PTR [r10 + r11 * 8 + 24]");             // the removed payload
+    emitter.instruction("call __rt_decref_any");                                // release the source's reference
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the removal-copy index after helper calls clobbered caller-saved registers
     emitter.instruction("add rcx, 1");                                          // advance the removal-copy index after copying one removed refcounted payload
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // persist the updated removal-copy index across the next append helper call
