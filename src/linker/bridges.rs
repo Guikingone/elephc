@@ -1674,6 +1674,38 @@ mod tests {
         }
     }
 
+    /// Every bridge cross-built by `ci-build-ios.yml` must also be published in its
+    /// artifact file list; a bridge can compile successfully and still be missing from
+    /// every restored iOS link job.
+    #[test]
+    fn every_ios_bridge_build_is_published_in_the_artifact() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".github/workflows/ci-build-ios.yml";
+        let body = std::fs::read_to_string(root.join(rel)).expect("read ci-build-ios workflow");
+        let build_start = body
+            .find("cargo build --locked --target \"$triple\"")
+            .unwrap_or_else(|| panic!("{rel} has no cross-target bridge build"));
+        let build_tail = &body[build_start..];
+        let build_end = build_tail
+            .find("echo \"triple=")
+            .unwrap_or_else(|| panic!("{rel} bridge build has no closing echo"));
+        let build = &build_tail[..build_end];
+        let files_start = body
+            .find("files: |")
+            .unwrap_or_else(|| panic!("{rel} has no iOS artifact file list"));
+        let files = &body[files_start..];
+        for bridge in BRIDGES {
+            if build.contains(&format!("-p {}", bridge.crate_name)) {
+                let archive = format!("lib{}.a", bridge.lib_name);
+                assert!(
+                    files.contains(&archive),
+                    "{rel} builds {} but never publishes `{archive}`",
+                    bridge.crate_name
+                );
+            }
+        }
+    }
+
     /// The workflows that publish an artifact must actually run the packaging probe.
     ///
     /// Every other packaging test here checks one list against the bridge

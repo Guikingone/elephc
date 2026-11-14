@@ -61,6 +61,7 @@ jobs:
           files: |
             target/${{ steps.build.outputs.triple }}/debug/libelephc_curl.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_xml.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_tidy.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_fileinfo.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_gmp.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_tokenizer.a
