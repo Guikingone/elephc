@@ -64,7 +64,8 @@ pub fn allocate_registers_with_safe(
 
     let hints = coalesce_partners(func);
     let precise = precise_liveness(func, &liveness);
-    let mut allocation = scan(&eligible, target, &hints, &precise);
+    let arg_prefs = call_argument_preferences(func, target);
+    let mut allocation = scan(&eligible, target, &hints, &precise, &arg_prefs);
     allocation.set_call_saves(plan_call_saves(
         func,
         &eligible,
@@ -117,6 +118,23 @@ fn plan_call_saves(
                     && call.operands.iter().filter(|operand| **operand == iv.value).count() == 1
             });
             if dies_here && first_call_arg {
+                continue;
+            }
+            // The scalar result of a direct call taking only scalar arguments is written after
+            // the callee returns and nothing (no argument-temporary cleanup) runs afterwards, so
+            // its register needs no save around its own call.
+            let own_scalar_call_result = iv.start == *pos
+                && func.instruction(*inst).is_some_and(|call| {
+                    let scalar = |value: &crate::ir::ValueId| {
+                        func.value(*value)
+                            .is_some_and(|v| matches!(v.ir_type, crate::ir::IrType::I64 | crate::ir::IrType::F64))
+                    };
+                    call.op == Op::Call
+                        && call.result == Some(iv.value)
+                        && scalar(&iv.value)
+                        && call.operands.iter().all(scalar)
+                });
+            if own_scalar_call_result {
                 continue;
             }
             saves.entry(*inst).or_default().push(CallSave {
@@ -319,6 +337,7 @@ fn scan(
     target: Target,
     hints: &HashMap<ValueId, Vec<ValueId>>,
     precise: &PreciseLiveness,
+    arg_prefs: &HashMap<ValueId, &'static str>,
 ) -> Allocation {
     let param_blocks: HashMap<ValueId, crate::ir::BlockId> = precise.param_blocks().clone();
     let mut free = FreePools::new(target);
@@ -338,7 +357,17 @@ fn scan(
             assignments.insert(iv.value, entry.reg);
             continue;
         }
-        let hinted = take_hinted_register(iv.value, pools, hints, &assignments, &mut free);
+        let hinted = take_hinted_register(iv.value, pools, hints, &assignments, &mut free)
+            .or_else(|| {
+                // A value only passed as a call argument prefers that argument's register.
+                let preferred = *arg_prefs.get(&iv.value)?;
+                pools.iter().copied().find_map(|pool| {
+                    let list = free.list_mut(pool);
+                    let index = list.iter().position(|reg| *reg == preferred)?;
+                    list.remove(index);
+                    Some((pool, preferred))
+                })
+            });
         let chosen = match hinted {
             Some(choice) => Some(choice),
             None => pools
@@ -495,6 +524,51 @@ fn partner_closure(value: ValueId, hints: &HashMap<ValueId, Vec<ValueId>>) -> Ve
     }
     seen.remove(0);
     seen
+}
+
+/// Returns, for every integer value used exactly once and only as an argument of a direct
+/// call, the register that argument is passed in, so the allocator can compute it there and the
+/// argument move vanishes. Only arguments preceded by single-register integer arguments are
+/// mapped (a string or tagged argument occupies two registers, a float none).
+fn call_argument_preferences(func: &Function, target: Target) -> HashMap<ValueId, &'static str> {
+    let mut prefs = HashMap::new();
+    if target.arch != crate::codegen::platform::Arch::X86_64 {
+        return prefs;
+    }
+    const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+    let mut uses: HashMap<ValueId, usize> = HashMap::new();
+    for inst in &func.instructions {
+        for operand in &inst.operands {
+            *uses.entry(*operand).or_insert(0) += 1;
+        }
+    }
+    for block in &func.blocks {
+        if let Some(term) = &block.terminator {
+            for value in crate::ir_passes::terminator_uses(term) {
+                *uses.entry(value).or_insert(0) += 1;
+            }
+        }
+    }
+    for inst in &func.instructions {
+        if inst.op != Op::Call {
+            continue;
+        }
+        for (index, operand) in inst.operands.iter().enumerate().take(ARG_REGS.len()) {
+            let single_reg_int = |value: &ValueId| {
+                func.value(*value).is_some_and(|v| {
+                    matches!(v.ir_type, crate::ir::IrType::I64 | crate::ir::IrType::Heap(_))
+                })
+            };
+            if !inst.operands[..=index].iter().all(single_reg_int) {
+                break;
+            }
+            let is_int = func.value(*operand).is_some_and(|v| v.ir_type == crate::ir::IrType::I64);
+            if is_int && uses.get(operand).copied() == Some(1) {
+                prefs.insert(*operand, ARG_REGS[index]);
+            }
+        }
+    }
+    prefs
 }
 
 /// Takes the register already assigned to one of `value`'s coalescing partners when it is

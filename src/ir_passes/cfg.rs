@@ -40,7 +40,7 @@ pub(super) fn has_exception_handlers(func: &Function) -> bool {
 }
 
 /// Returns the successor blocks branched to by a terminator, in branch order.
-pub(super) fn successors(term: &Terminator) -> Vec<BlockId> {
+pub(crate) fn successors(term: &Terminator) -> Vec<BlockId> {
     match term {
         Terminator::Br { target, .. } => vec![*target],
         Terminator::CondBr {

@@ -102,8 +102,37 @@ pub(super) fn emit_array_truthiness(ctx: &mut FunctionContext<'_>, value: ValueI
 /// Lowers static and boxed Mixed null checks into a concrete boolean integer result.
 pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if inst.result.is_some() && ctx.fused_compare_value == inst.result {
+        // Only the block's `cond_br` reads the result: leave the answer in the flags.
+        emit_container_null_flags(ctx, value)?;
+        return Ok(());
+    }
     emit_is_null_result(ctx, value)?;
     store_if_result(ctx, inst)
+}
+
+/// Sets the flags so that "equal" means the loaded container or object pointer is PHP null
+/// (zero, or the in-band null-container sentinel), for a fused `cond_br`.
+fn emit_container_null_flags(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x16", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x16");                             // the null-container sentinel?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // fold the sentinel onto a zero pointer
+            ctx.emitter.instruction("cmp x0, #0");                              // equal: the pointer is PHP null
+            ctx.fused_branch_condition = Some("eq");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rax, r10");                            // the null-container sentinel?
+            ctx.emitter.instruction("mov r10d, 0");                             // zero without touching the flags
+            ctx.emitter.instruction("cmove rax, r10");                          // fold the sentinel onto a zero pointer
+            ctx.emitter.instruction("test rax, rax");                           // equal: the pointer is PHP null
+            ctx.fused_branch_condition = Some("e");
+        }
+    }
+    Ok(())
 }
 
 /// Emits an `is_null` boolean result for static nulls and boxed Mixed payloads.

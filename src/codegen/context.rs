@@ -100,6 +100,9 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) epilogue_label: Option<String>,
     /// `icmp` result consumed only by the next `cond_br`: lowered as flags, not a 0/1 value.
     pub(super) fused_compare_value: Option<ValueId>,
+    /// Values the current block is only reached with when they are not PHP null (its single
+    /// predecessor branched on their `is_null` to get here).
+    pub(super) known_non_null: std::collections::HashSet<ValueId>,
     /// The block emitted right after the current one: a branch to it can fall through.
     pub(super) next_block_id: Option<crate::ir::BlockId>,
     /// Branch conditions `((a ^ r) & (b ^ r)) < 0` of an add `r = a + b`, lowered as the add's
@@ -191,6 +194,7 @@ impl<'a> FunctionContext<'a> {
             gc_stats,
             heap_debug,
             fused_compare_value: None,
+            known_non_null: std::collections::HashSet::new(),
             next_block_id: None,
             fused_add_overflow: HashMap::new(),
             overflow_sums: std::collections::HashSet::new(),

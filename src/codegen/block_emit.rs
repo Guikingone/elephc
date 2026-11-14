@@ -1761,10 +1761,47 @@ fn fusible_compare(
         return None;
     };
     let last = function.instruction(*block.instructions.last()?)?;
-    if !matches!(last.op, Op::ICmp | Op::FCmp) || last.result != Some(*cond) {
+    // `is_null` of a container or object pointer also branches on flags (see `lower_is_null`).
+    let pointer_is_null = last.op == Op::IsNull
+        && last.operands.first().and_then(|operand| function.value(*operand)).is_some_and(|value| {
+            matches!(
+                value.php_type.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_)
+            )
+        });
+    if !(matches!(last.op, Op::ICmp | Op::FCmp) || pointer_is_null) || last.result != Some(*cond) {
         return None;
     }
     (use_counts.get(cond).copied() == Some(1)).then_some(*cond)
+}
+
+/// Returns the values `block` is only entered with when they are not PHP null: its single
+/// predecessor ends in a `cond_br` on `is_null(v)` whose false edge leads here.
+fn known_non_null_values(function: &Function, block: crate::ir::BlockId) -> std::collections::HashSet<ValueId> {
+    let mut known = std::collections::HashSet::new();
+    let predecessors: Vec<&BasicBlock> = function
+        .blocks
+        .iter()
+        .filter(|other| {
+            other.terminator.as_ref().is_some_and(|term| {
+                crate::ir_passes::terminator_successors(term).contains(&block)
+            })
+        })
+        .collect();
+    let [predecessor] = predecessors.as_slice() else {
+        return known;
+    };
+    if let Some(Terminator::CondBr { cond, then_target, else_target, .. }) = &predecessor.terminator {
+        if *else_target == block && *then_target != block {
+            let is_null = predecessor.instructions.iter().filter_map(|id| function.instruction(*id)).find(|inst| {
+                inst.op == Op::IsNull && inst.result == Some(*cond)
+            });
+            if let Some(operand) = is_null.and_then(|inst| inst.operands.first()) {
+                known.insert(*operand);
+            }
+        }
+    }
+    known
 }
 
 /// Emits one EIR basic block.
@@ -1774,8 +1811,24 @@ fn emit_block(
     use_counts: &std::collections::HashMap<ValueId, usize>,
 ) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
-    ctx.emitter
-        .label(&ctx.block_label(&block.name, block.id.as_raw()));
+    // The entry block of a function without exception handlers or generator suspension is
+    // only entered by falling through from the prologue when no terminator targets it: its
+    // label is omitted so the prologue's parameter stores can be forwarded into registers.
+    let unlabeled_entry = block.id == ctx.function.entry
+        && !ctx.function.flags.is_generator
+        && !ctx.function.instructions.iter().any(|inst| {
+            matches!(inst.op, Op::TryPushHandler | Op::CatchCurrent | Op::CatchBind | Op::FinallyEnter)
+        })
+        && !ctx.function.blocks.iter().any(|other| {
+            other.terminator.as_ref().is_some_and(|term| {
+                crate::ir_passes::terminator_successors(term).contains(&block.id)
+            })
+        });
+    if !unlabeled_entry {
+        ctx.emitter
+            .label(&ctx.block_label(&block.name, block.id.as_raw()));
+    }
+    ctx.known_non_null = known_non_null_values(ctx.function, block.id);
     ctx.fused_compare_value = fusible_compare(ctx.function, block, use_counts);
     if let Some(cond) = ctx.fused_compare_value {
         if let Some((lhs, rhs, sum, skipped)) = add_overflow_pattern(ctx.function, cond, use_counts) {

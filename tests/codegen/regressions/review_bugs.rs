@@ -610,3 +610,46 @@ echo $cnt, "\n";
 "#);
     assert_eq!(out, "bool(true)\nbool(false)\nint(-1)\nbool(true)\nbool(true)\nint(1)\nbool(false)\nbool(false)\nint(0)\nbool(true)\nbool(true)\nint(0)\nbool(true)\nbool(false)\nint(-1)\nbool(true)\nbool(true)\nint(1)\nbool(false)\nbool(true)\nint(1)\nbool(false)\nbool(false)\nint(-1)\nbool(false)\nbool(false)\nint(0)\nbool(true)\nbool(true)\nint(0)\nbool(true)\nint(-1)\nbool(false)\nint(0)\nbool(true)\nint(-1)\n1\n");
 }
+
+/// A method call on a list element, a nullsafe call and a nullable parameter branch on the
+/// receiver's null test directly: null receivers still raise PHP's Error and missing elements
+/// still read as null.
+#[test]
+fn test_null_receiver_checks_branch_on_pointer_null_test() {
+    let out = compile_and_run(r#"<?php
+class A { public function m() { return 1; } }
+$list = [new A(), null];
+try { echo $list[0]->m(), "\n"; echo $list[1]->m(), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo $list[1]?->m() ?? "nul", "\n";
+$arr = [1 => new A()];
+function g(?A $a) { return $a === null ? "n" : $a->m(); }
+echo g(null), g(new A()), "\n";
+$objs = [new A()];
+try { echo @$objs[3]->m(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out, "1\nError: Call to a member function m() on null\nnul\nn1\nCall to a member function m() on null\n");
+}
+
+/// Repeated reads of a local or a scalar property in one block are shared only while nothing
+/// can change them: a property write (through any object), a method call, a reference and a
+/// by-reference closure capture all force a fresh read.
+#[test]
+fn test_repeated_local_and_property_reads_see_intervening_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class P {
+  public int $x = 1; public float $f = 1.5; public ?int $n = null;
+  function a() { $s = $this->x; $this->x = 5; return $s + $this->x; }
+  function b() { $s = $this->x; $this->bump(); return $s + $this->x; }
+  function bump() { $this->x += 10; }
+  function c(P $o) { $s = $this->x; $o->x = 7; return $s + $this->x; }
+  function d() { $s = $this->f * $this->f; $this->f = 2.0; return $s + $this->f * $this->f; }
+  function e() { $r = &$this->x; $s = $this->x; $r = 100; return $s + $this->x; }
+}
+$p = new P(); echo $p->a(), " ", $p->b(), " ", $p->c($p), " ", $p->d(), " ", $p->e(), "\n";
+function loc() { $a = 3; $b = $a; $a = 4; $c = $a + $b; $g = function() use (&$a) { $a = 9; }; $g(); return $c + $a; }
+echo loc(), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "6 20 22 6.25 107\n16\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

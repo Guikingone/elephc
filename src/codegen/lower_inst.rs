@@ -3728,6 +3728,10 @@ fn guard_static_method_receiver(
     object: ValueId,
     method_name: &str,
 ) -> Result<()> {
+    if ctx.known_non_null.contains(&object) {
+        // The block is only reached after the receiver's own null test failed.
+        return Ok(());
+    }
     let receiver_reg = abi::symbol_scratch_reg(ctx.emitter);
     let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
     let null_label = ctx.next_label("static_method_receiver_null");

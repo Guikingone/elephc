@@ -37,6 +37,7 @@ mod loops;
 mod peephole;
 mod regalloc;
 mod remat;
+mod redundant_loads;
 mod rewrite;
 
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub use driver::optimize_module;
 pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
 pub(crate) use liveness::terminator_uses;
+pub(crate) use cfg::successors as terminator_successors;
 pub use loops::{compute_loops, LoopInfo, NaturalLoop};
 pub use regalloc::{allocate_registers, allocate_registers_with_safe};
 pub use remat::{rematerialized_consts, RematerializedConsts};
