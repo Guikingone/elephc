@@ -41,10 +41,12 @@ pub const PRINTF_PRELUDE_FUNCTIONS: &[&str] = &[
     "__elephc_array_min",
     "__elephc_array_max_empty",
     "__elephc_array_min_empty",
+    "__elephc_var_dump",
 ];
 
 /// Prelude entry points that do not need the shared formatter helpers.
 const STANDALONE_ENTRY_POINTS: &[&str] = &[
+    "__elephc_var_dump",
     "__elephc_explode_limit",
     "__elephc_array_max",
     "__elephc_array_min",
@@ -385,6 +387,35 @@ function __elephc_printf_format(string $format, array $args, bool $array_form): 
 /// Entry points, each injected only when a rewritten call targets it (an unused
 /// `fprintf` body would otherwise be checked without any call site to type its stream).
 const PRINTF_ENTRY_POINTS: &[(&str, &str)] = &[
+    (
+        // `var_dump()`: arrays are walked here (any nesting, PHP's two-space indentation and
+        // `[int]=>` / `["string"]=>` keys); every other value, nested or not, is printed by the
+        // native `var_dump` after the indentation (prelude bodies are not name-resolved, so
+        // that inner call stays on the builtin).
+        "__elephc_var_dump",
+        r#"function __elephc_var_dump_value(mixed $v, string $ind): void {
+    if (!is_array($v)) {
+        echo $ind;
+        var_dump($v);
+        return;
+    }
+    echo $ind, 'array(', count($v), ") {\n";
+    foreach ($v as $k => $item) {
+        if (is_int($k)) {
+            echo $ind, '  [', $k, "]=>\n";
+        } else {
+            echo $ind, '  ["', $k, "\"]=>\n";
+        }
+        __elephc_var_dump_value($item, $ind . '  ');
+    }
+    echo $ind, "}\n";
+}
+function __elephc_var_dump(mixed ...$values): void {
+    foreach ($values as $v) {
+        __elephc_var_dump_value($v, '');
+    }
+}"#,
+    ),
     (
         "__elephc_sprintf_all",
         r#"function __elephc_sprintf_all(array $all): string {

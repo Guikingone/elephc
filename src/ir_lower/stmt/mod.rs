@@ -1480,7 +1480,16 @@ fn apply_condition_else_narrowing(ctx: &mut LoweringContext<'_, '_>, condition: 
             // `test_negated_is_array_guard_narrows_null_coalesce_assignment_target`); the concrete
             // array keeps that by-ref store-back refcount-balanced, so it is intentionally not
             // widened to the Mixed-dispatch union.
-            ctx.set_local_logical_type(var, PhpType::Array(Box::new(PhpType::Mixed)));
+            //
+            // A local already held as a boxed `mixed` value may carry an associative payload
+            // (`if (!is_array($v)) { return; } count($v);`): it keeps the Mixed-dispatch union so
+            // reads dispatch on the runtime tag instead of reinterpreting the box as a list.
+            let narrowed = if ctx.local_type(var).codegen_repr() == PhpType::Mixed {
+                is_array_narrowed_type()
+            } else {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            };
+            ctx.set_local_logical_type(var, narrowed);
             return;
         }
         if let ExprKind::Variable(var) = &inner.kind {

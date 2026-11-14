@@ -36,6 +36,14 @@ pub(super) fn printf_prelude_target(function_name: &str, args: &[Expr]) -> Optio
             _ => None,
         };
     }
+    // `var_dump(...)`: nested arrays are walked by the prelude (the native walkers print
+    // scalar elements only).
+    if lower == "var_dump"
+        && !args.is_empty()
+        && !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+    {
+        return Some(PrintfRoute::Rename("__elephc_var_dump"));
+    }
     // `explode($separator, $string, $limit)`: the native splitter takes no limit, so the
     // limited form is the prelude's elephc-PHP wrapper around it.
     if lower == "explode"

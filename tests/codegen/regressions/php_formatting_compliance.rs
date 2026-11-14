@@ -503,3 +503,22 @@ echo dechex($n), " ", count(array_fill(0, $n, 0)), " ", number_format($n), " ", 
     assert_eq!(out.stdout, "int(5)\nfloat(0.25)\nfloat(3.75)\nint(1)\nint(0)\nint(2)\nfloat(1.5)\nDivision by zero\nno g: Division by zero\nModulo by zero\nfloat(2)\nfloat(4)\nfloat(4)\n2,3,1.5\n3 3 3 ababab\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `var_dump` walks nested arrays at any depth (lists and hashes, from typed and `mixed`
+/// values) with PHP's indentation and key spelling; a `mixed` local proven to be an array by an
+/// early `if (!is_array($v)) return;` keeps dispatching on its runtime (list or hash) layout.
+#[test]
+fn test_var_dump_prints_nested_arrays() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$cases = [[[1, 2], [3]], ["x" => [1], "y" => "s"], [1, [2, "a"]], ["a" => 1.5, "b" => [true, null, 0.1 + 0.2]], [], [[]], ["é" => ["z" => [1 => -1]]], [5 => "a", "5x" => [-1.0]]];
+foreach ($cases as $c) { var_dump($c); }
+var_dump(3, "str", null, 1e25, [1, 2], ["k" => "v"]);
+$a = [[1,2],[3]]; var_dump($a);
+$m = ["a" => 1, "arr" => [1, 2]]; var_dump($m); var_dump($m["arr"]);
+function f(array $x) { var_dump($x); } f(["q" => [1]]);
+$x = 5; var_dump($x); var_dump(1.5); var_dump(true);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "array(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n  [1]=>\n  array(1) {\n    [0]=>\n    int(3)\n  }\n}\narray(2) {\n  [\"x\"]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n  [\"y\"]=>\n  string(1) \"s\"\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  array(2) {\n    [0]=>\n    int(2)\n    [1]=>\n    string(1) \"a\"\n  }\n}\narray(2) {\n  [\"a\"]=>\n  float(1.5)\n  [\"b\"]=>\n  array(3) {\n    [0]=>\n    bool(true)\n    [1]=>\n    NULL\n    [2]=>\n    float(0.30000000000000004)\n  }\n}\narray(0) {\n}\narray(1) {\n  [0]=>\n  array(0) {\n  }\n}\narray(1) {\n  [\"é\"]=>\n  array(1) {\n    [\"z\"]=>\n    array(1) {\n      [1]=>\n      int(-1)\n    }\n  }\n}\narray(2) {\n  [5]=>\n  string(1) \"a\"\n  [\"5x\"]=>\n  array(1) {\n    [0]=>\n    float(-1)\n  }\n}\nint(3)\nstring(3) \"str\"\nNULL\nfloat(1.0E+25)\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\narray(1) {\n  [\"k\"]=>\n  string(1) \"v\"\n}\narray(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n  [1]=>\n  array(1) {\n    [0]=>\n    int(3)\n  }\n}\narray(2) {\n  [\"a\"]=>\n  int(1)\n  [\"arr\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\narray(1) {\n  [\"q\"]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n}\nint(5)\nfloat(1.5)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
