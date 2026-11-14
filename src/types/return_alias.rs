@@ -726,6 +726,18 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
         | ExprKind::ClassConstant { .. }
         | ExprKind::ObjectClassName { .. }
         | ExprKind::MagicConstant(_) => ReturnArgAlias::None,
+        // Arithmetic (other than `+`, which is also array union), bitwise and comparison
+        // operators yield a fresh scalar.
+        ExprKind::BinaryOp { op, .. }
+            if !matches!(
+                op,
+                crate::parser::ast::BinOp::Add
+                    | crate::parser::ast::BinOp::Concat
+                    | crate::parser::ast::BinOp::NullCoalesce
+            ) =>
+        {
+            ReturnArgAlias::None
+        }
         _ => ReturnArgAlias::Unknown,
     }
 }

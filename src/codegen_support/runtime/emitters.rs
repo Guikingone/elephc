@@ -303,6 +303,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_add_int(emitter);
     arrays::emit_array_fetch_dim_w(emitter);
     arrays::emit_int_div_checked(emitter);
+    arrays::emit_array_mixed_to_scalar(emitter);
     arrays::emit_hash_iter(emitter);
     arrays::emit_hash_union(emitter);
     arrays::emit_hash_replace_into(emitter);
@@ -432,6 +433,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
+    arrays::emit_mixed_numeric_div(emitter);
     arrays::emit_mixed_bitwise(emitter);
     arrays::emit_mixed_bitwise_not(emitter);
     arrays::emit_int_checked_binops(emitter);

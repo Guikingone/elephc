@@ -217,6 +217,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashAddInt => hashes::lower_hash_add_int(ctx, &inst),
         Op::ArrayFetchDimW => arrays::lower_array_fetch_dim_w(ctx, &inst),
         Op::ArrayStoreElemRaw => arrays::lower_array_store_elem_raw(ctx, &inst),
+        Op::ArrayMixedToScalar => arrays::lower_array_mixed_to_scalar(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),

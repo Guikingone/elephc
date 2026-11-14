@@ -243,7 +243,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::BinaryOp { left, op, right }
             if matches!(op, crate::parser::ast::BinOp::Div | crate::parser::ast::BinOp::Mod)
                 && !matches!(&right.kind, ExprKind::IntLiteral(n) if *n != 0)
-                && !matches!(&right.kind, ExprKind::FloatLiteral(f) if *f != 0.0) =>
+                && !matches!(&right.kind, ExprKind::FloatLiteral(f)
+                    if (matches!(op, crate::parser::ast::BinOp::Div) && *f != 0.0)
+                        // `%` truncates its float divisor to int first (`5 % 0.3` throws).
+                        || f.trunc() != 0.0) =>
         {
             expr_effect(left).combine(expr_effect(right)).with_may_throw()
         }

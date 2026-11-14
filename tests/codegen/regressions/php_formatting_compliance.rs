@@ -473,3 +473,33 @@ foreach ([0, 2] as $z) {
     assert_eq!(out.stdout, "int(5)\nfloat(2.5)\nint(1)\nint(-3)\nfloat(9.223372036854776E+18)\nint(4)\nint(3)\nfloat(2.4)\nfloat(3)\nint(0)\nfloat(29.4)\n0.03125 1\nfloat(3.0744573456182584E+18)\nDivisionByZeroError: Division by zero\nDivision by zero\nModulo by zero\nDivision by zero\nDivision by zero\nfloat(0.5)\nfloat(0.75)\nint(1)\nint(3)\nfloat(2.5)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `/` with untyped (`mixed`) operands is an int when both hold ints and the division is exact;
+/// an int-valued float speculation never yields `-0.0`, never evaluates a call after a throwing
+/// division, `5 % 0.3` throws, class constants fold `6 / 3`, and an int quotient widens to a
+/// declared `float`/`?float` property or parameter and to a `float` variadic, and unboxes for
+/// builtins taking an `int`.
+#[test]
+fn test_mixed_division_and_int_quotient_contexts() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function q($a, $b) { return $a / $b; }
+function g() { echo "g\n"; return 2; }
+class C { const A = 6 / 3; public float $f = 0.0; public ?float $g = null; }
+function nf(?float $x) { var_dump($x); }
+function vf(float ...$xs) { echo implode(",", $xs), "\n"; }
+function e($a, $b) { return $a / $b; }
+var_dump(q(10, 2), q(1, 4), q(7.5, 2), q(true, 1), q(0, -5), C::A);
+var_dump(1.5 + e(0, -5));
+function qz($a, $b) { try { return $a / $b; } catch (DivisionByZeroError $e) { return $e->getMessage(); } }
+echo qz(1, 0), "\n";
+try { $r = 1.0 + 4 / 0 * g(); } catch (DivisionByZeroError $e) { echo "no g: ", $e->getMessage(), "\n"; }
+try { $x = 5 % 0.3; } catch (DivisionByZeroError $e) { echo $e->getMessage(), "\n"; }
+$k = new C; $k->f = 6 / 3; $k->g = 4; var_dump($k->f, $k->g);
+nf(8 / 2); vf(4 / 2, 3, 1.5);
+$n = q(6, 2);
+echo dechex($n), " ", count(array_fill(0, $n, 0)), " ", number_format($n), " ", str_repeat("ab", $n), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(5)\nfloat(0.25)\nfloat(3.75)\nint(1)\nint(0)\nint(2)\nfloat(1.5)\nDivision by zero\nno g: Division by zero\nModulo by zero\nfloat(2)\nfloat(4)\nfloat(4)\n2,3,1.5\n3 3 3 ababab\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

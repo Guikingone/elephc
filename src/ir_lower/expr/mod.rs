@@ -348,8 +348,12 @@ fn lower_numeric_binary(
     // `1.0 / ($n * ($n + 1) / 2 + $i + 1)`: an int arithmetic tree containing `/` is `int|float`
     // and would box every intermediate; when the other operand is a float, only its float value
     // matters, so compute it speculatively in float (see `lower_int_tree_as_float`).
-    let rhs = if lhs.ir_type == IrType::F64 && int_tree_with_division(right) {
-        lower_int_tree_as_float(ctx, right)
+    let rhs = if lhs.ir_type == IrType::F64
+        && int_tree_with_division(right)
+        && int_tree_leaves_are_plain(right)
+    {
+        // As a divisor, a zero result throws whatever its sign.
+        lower_int_tree_as_float(ctx, right, !matches!(op, BinOp::Div))
     } else {
         lower_expr(ctx, right)
     };
@@ -373,6 +377,20 @@ fn int_tree_with_division(expr: &Expr) -> bool {
     }
     let mut has_div = false;
     matches!(&expr.kind, ExprKind::BinaryOp { .. }) && walk(expr, &mut has_div) && has_div
+}
+
+/// Returns whether every leaf of a `+ - * /` tree is a variable or a literal: evaluating them up
+/// front cannot run code, warn or throw, so the speculation keeps PHP's evaluation order (a call
+/// or `%` leaf after a throwing division must not run).
+fn int_tree_leaves_are_plain(expr: &Expr) -> bool {
+    let mut leaves = Vec::new();
+    int_tree_leaves(expr, &mut leaves);
+    leaves.iter().all(|leaf| {
+        matches!(
+            leaf.kind,
+            ExprKind::Variable(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        )
+    })
 }
 
 /// Collects the maximal non-arithmetic subexpressions of a `+ - * /` tree in evaluation order.
@@ -414,7 +432,11 @@ fn int_tree_bound(expr: &Expr, bound: f64) -> f64 {
 /// by floating-point division, so evaluating the tree in floating point yields exactly
 /// `(float)` of the PHP result. Otherwise (a larger leaf, or a non-int leaf) the ordinary
 /// `int|float` evaluation runs on the already evaluated leaves and is converted to float.
-fn lower_int_tree_as_float(ctx: &mut LoweringContext<'_, '_>, tree: &Expr) -> LoweredValue {
+fn lower_int_tree_as_float(
+    ctx: &mut LoweringContext<'_, '_>,
+    tree: &Expr,
+    zero_sign_matters: bool,
+) -> LoweredValue {
     let mut leaf_exprs = Vec::new();
     int_tree_leaves(tree, &mut leaf_exprs);
     let leaves: Vec<LoweredValue> = leaf_exprs.iter().map(|leaf| lower_expr(ctx, leaf)).collect();
@@ -432,9 +454,10 @@ fn lower_int_tree_as_float(ctx: &mut LoweringContext<'_, '_>, tree: &Expr) -> Lo
     }
     let span = Some(tree.span);
     let bound = 1i64 << bound_bits;
-    // |v| <= bound  <=>  -bound <= v && v <= bound, for every leaf.
-    let mut ok: Option<LoweredValue> = None;
-    let mut guarded: Vec<crate::ir::ValueId> = Vec::new();
+    let slow = ctx.builder.create_named_block("int_tree_float.slow", Vec::new());
+    let merge = ctx.builder.create_named_block("int_tree_float.merge", vec![(IrType::F64, PhpType::Float)]);
+    // `-bound <= v && v <= bound` for every leaf, as a chain of compare-and-branch guards.
+    let mut guarded: Vec<Result<crate::ir::ValueId, &str>> = Vec::new();
     for (leaf, leaf_expr) in leaves.iter().zip(&leaf_exprs) {
         // Literal leaves are checked statically; a value used twice is guarded once.
         if let ExprKind::IntLiteral(n) = &leaf_expr.kind {
@@ -442,53 +465,102 @@ fn lower_int_tree_as_float(ctx: &mut LoweringContext<'_, '_>, tree: &Expr) -> Lo
                 continue;
             }
         }
-        if guarded.contains(&leaf.value) {
+        // Leaves are plain variables, so two reads of one variable see the same value.
+        let key = match &leaf_expr.kind {
+            ExprKind::Variable(name) => Err(name.as_str()),
+            _ => Ok(leaf.value),
+        };
+        if guarded.contains(&key) {
             continue;
         }
-        guarded.push(leaf.value);
-        let lo = lower_int_literal(ctx, -bound, tree);
-        let hi = lower_int_literal(ctx, bound, tree);
-        let ge = ctx.emit_value(Op::ICmp, vec![leaf.value, lo.value], Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Sge)), PhpType::Bool, Op::ICmp.default_effects(), span);
-        let le = ctx.emit_value(Op::ICmp, vec![leaf.value, hi.value], Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Sle)), PhpType::Bool, Op::ICmp.default_effects(), span);
-        let both = ctx.emit_value(Op::IBitAnd, vec![ge.value, le.value], None, PhpType::Bool, Op::IBitAnd.default_effects(), span);
-        ok = Some(match ok {
-            None => both,
-            Some(prev) => ctx.emit_value(Op::IBitAnd, vec![prev.value, both.value], None, PhpType::Bool, Op::IBitAnd.default_effects(), span),
-        });
+        guarded.push(key);
+        for (limit, predicate) in [(-bound, crate::ir::CmpPredicate::Sge), (bound, crate::ir::CmpPredicate::Sle)] {
+            let limit = lower_int_literal(ctx, limit, tree);
+            let ok = ctx.emit_value(Op::ICmp, vec![leaf.value, limit.value], Some(Immediate::CmpPredicate(predicate)), PhpType::Bool, Op::ICmp.default_effects(), span);
+            let next = ctx.builder.create_named_block("int_tree_float.guard", Vec::new());
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: ok.value,
+                then_target: next,
+                then_args: Vec::new(),
+                else_target: slow,
+                else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(next);
+        }
     }
-    let ok = match ok {
-        Some(ok) => ok,
-        // Every leaf is a small literal: the fast path always applies.
-        None => lower_bool_literal(ctx, true, tree),
-    };
     let fast = ctx.builder.create_named_block("int_tree_float.fast", Vec::new());
-    let slow = ctx.builder.create_named_block("int_tree_float.slow", Vec::new());
-    let merge = ctx.builder.create_named_block("int_tree_float.merge", vec![(IrType::F64, PhpType::Float)]);
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: ok.value,
-        then_target: fast,
-        then_args: Vec::new(),
-        else_target: slow,
-        else_args: Vec::new(),
-    });
+    ctx.builder.terminate(Terminator::Br { target: fast, args: Vec::new() });
 
     ctx.builder.position_at_end(fast);
+    // Literal leaves are rematerialized on each path so they do not live across the guards.
     let float_leaves: Vec<LoweredValue> = leaves
         .iter()
-        .map(|leaf| ctx.emit_value(Op::IToF, vec![leaf.value], None, PhpType::Float, Op::IToF.default_effects(), span))
+        .zip(&leaf_exprs)
+        .map(|(leaf, leaf_expr)| match &leaf_expr.kind {
+            ExprKind::IntLiteral(n) => ctx.emit_value(Op::ConstF64, Vec::new(), Some(Immediate::F64(*n as f64)), PhpType::Float, Op::ConstF64.default_effects(), span),
+            _ => ctx.emit_value(Op::IToF, vec![leaf.value], None, PhpType::Float, Op::IToF.default_effects(), span),
+        })
         .collect();
     let mut next = 0;
     let fast_value = float_tree_from_leaves(ctx, tree, &float_leaves, &mut next);
+    if !zero_sign_matters {
+        ctx.builder.terminate(Terminator::Br { target: merge, args: vec![fast_value.value] });
+        ctx.builder.position_at_end(slow);
+        let mut next = 0;
+        let slow_leaves = rematerialize_literal_leaves(ctx, &leaves, &leaf_exprs);
+        let slow_value = lower_tree_from_leaves(ctx, tree, &slow_leaves, &mut next);
+        let slow_value = coerce_to_float(ctx, slow_value, tree);
+        ctx.builder.terminate(Terminator::Br { target: merge, args: vec![slow_value.value] });
+        ctx.builder.position_at_end(merge);
+        return LoweredValue { value: ctx.builder.block_param(merge, 0), ir_type: IrType::F64 };
+    }
+    // A zero result may carry a sign PHP's int arithmetic would not produce (`0 / -5` is int 0,
+    // but `0.0 / -5.0` is -0.0): recompute it on the exact path.
+    let zero = ctx.emit_value(Op::ConstF64, Vec::new(), Some(Immediate::F64(0.0)), PhpType::Float, Op::ConstF64.default_effects(), Some(tree.span));
+    let is_zero = ctx.emit_value(
+        Op::FCmp,
+        vec![fast_value.value, zero.value],
+        Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::FCmp.default_effects(),
+        Some(tree.span),
+    );
+    let fast_done = ctx.builder.create_named_block("int_tree_float.fast_done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_zero.value,
+        then_target: slow,
+        then_args: Vec::new(),
+        else_target: fast_done,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(fast_done);
     ctx.builder.terminate(Terminator::Br { target: merge, args: vec![fast_value.value] });
 
     ctx.builder.position_at_end(slow);
     let mut next = 0;
-    let slow_value = lower_tree_from_leaves(ctx, tree, &leaves, &mut next);
+    let slow_leaves = rematerialize_literal_leaves(ctx, &leaves, &leaf_exprs);
+        let slow_value = lower_tree_from_leaves(ctx, tree, &slow_leaves, &mut next);
     let slow_value = coerce_to_float(ctx, slow_value, tree);
     ctx.builder.terminate(Terminator::Br { target: merge, args: vec![slow_value.value] });
 
     ctx.builder.position_at_end(merge);
     LoweredValue { value: ctx.builder.block_param(merge, 0), ir_type: IrType::F64 }
+}
+
+/// Returns the leaves with every integer literal lowered again at the current position.
+fn rematerialize_literal_leaves(
+    ctx: &mut LoweringContext<'_, '_>,
+    leaves: &[LoweredValue],
+    leaf_exprs: &[&Expr],
+) -> Vec<LoweredValue> {
+    leaves
+        .iter()
+        .zip(leaf_exprs)
+        .map(|(leaf, leaf_expr)| match &leaf_expr.kind {
+            ExprKind::IntLiteral(n) => lower_int_literal(ctx, *n, leaf_expr),
+            _ => *leaf,
+        })
+        .collect()
 }
 
 /// Recomputes a `+ - * /` tree with the ordinary PHP semantics from pre-evaluated leaves.
@@ -778,6 +850,19 @@ fn lower_numeric_binary_values(
         };
         return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
     }
+    if matches!(op, BinOp::Div)
+        && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64)
+        && [lhs, rhs].iter().all(|operand| {
+            matches!(
+                ctx.builder.value_php_type(operand.value).codegen_repr(),
+                PhpType::Int | PhpType::Mixed
+            ) && matches!(operand.ir_type, IrType::I64 | IrType::Heap(IrHeapKind::Mixed))
+        })
+    {
+        // A dynamic operand may hold an int: the runtime decides between an exact int quotient
+        // and a float.
+        return lower_mixed_numeric_binary(ctx, lhs, rhs, MixedNumericOp::Div, expr);
+    }
     if matches!(op, BinOp::Div) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64) {
         let lhs = coerce_to_float(ctx, lhs, left);
         let rhs = coerce_to_float(ctx, rhs, right);
@@ -846,14 +931,12 @@ fn lower_numeric_binary_values(
                     );
                 }
                 PhpType::Int => {
-                    return ctx.emit_value(
-                        Op::ISDiv,
-                        vec![lhs.value, rhs.value],
-                        None,
-                        PhpType::Int,
-                        Op::ISDiv.default_effects(),
-                        Some(expr.span),
-                    );
+                    // Only two literals dividing exactly are typed `int`: emit the quotient.
+                    if let (ExprKind::IntLiteral(a), ExprKind::IntLiteral(b)) = (&left.kind, &right.kind) {
+                        if let Some(quotient) = a.checked_div(*b) {
+                            return lower_int_literal(ctx, quotient, expr);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -2858,6 +2941,68 @@ fn registry_builtin_result_type(
     Some(normalize_value_php_type(resolved))
 }
 
+/// Converts boxed `mixed` operands reaching a registry builtin's `int`/`float` parameter with
+/// PHP's numeric conversion (`number_format($a / $b)`): the runtime op reads the raw scalar.
+fn unbox_mixed_operands_for_scalar_params(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    mut operands: Vec<crate::ir::ValueId>,
+) -> Vec<crate::ir::ValueId> {
+    let limit = operands.len().min(crate::types::call_args::regular_param_count(sig));
+    for index in 0..limit {
+        if sig.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some((_, param_ty)) = sig.params.get(index) else {
+            continue;
+        };
+        let param_ty = param_ty.codegen_repr();
+        let value = operands[index];
+        if !matches!(param_ty, PhpType::Int | PhpType::Float)
+            || ctx.builder.value_type(value) != IrType::Heap(IrHeapKind::Mixed)
+        {
+            continue;
+        }
+        let lowered = LoweredValue { value, ir_type: IrType::Heap(IrHeapKind::Mixed) };
+        operands[index] = if param_ty == PhpType::Int {
+            coerce_to_int_at_span(ctx, lowered, None).value
+        } else {
+            coerce_to_float_at_span(ctx, lowered, None).value
+        };
+    }
+    operands
+}
+
+/// Returns the operand positions PHP declares `int` for builtins whose descriptors accept `mixed`
+/// there (their backends read the raw int payload).
+fn builtin_int_operand_positions(name: &str) -> &'static [usize] {
+    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "dechex" | "decoct" | "decbin" => &[0],
+        "array_fill" => &[0, 1],
+        "array_pad" => &[1],
+        _ => &[],
+    }
+}
+
+/// Converts boxed `mixed` operands at a builtin's `int` positions with PHP's int conversion.
+fn unbox_builtin_int_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    mut operands: Vec<crate::ir::ValueId>,
+    span: Span,
+) -> Vec<crate::ir::ValueId> {
+    for &index in builtin_int_operand_positions(name) {
+        let Some(&value) = operands.get(index) else {
+            continue;
+        };
+        if ctx.builder.value_type(value) == IrType::Heap(IrHeapKind::Mixed) {
+            let lowered = LoweredValue { value, ir_type: IrType::Heap(IrHeapKind::Mixed) };
+            operands[index] = coerce_to_int_at_span(ctx, lowered, Some(span)).value;
+        }
+    }
+    operands
+}
+
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 fn emit_builtin_call_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -2867,6 +3012,11 @@ fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
+    let operands = if eval_literal.is_none() {
+        unbox_builtin_int_operands(ctx, name, operands, span)
+    } else {
+        operands
+    };
     if eval_literal.is_none()
         && operands.len() > 2
         && php_symbol_key(name.trim_start_matches('\\')) == "array_merge"
@@ -2909,7 +3059,9 @@ fn emit_builtin_call_value(
             let registry_signature = crate::builtins::registry::function_sig(name);
             let operands = match registry_signature.as_ref() {
                 Some(reg_sig) => {
-                    coerce_operands_to_params(ctx, reg_sig, operands, CalleeLabel::Named(name))
+                    let operands =
+                        coerce_operands_to_params(ctx, reg_sig, operands, CalleeLabel::Named(name));
+                    unbox_mixed_operands_for_scalar_params(ctx, reg_sig, operands)
                 }
                 None => operands,
             };
@@ -6908,6 +7060,13 @@ fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
+    // `?float`/`float|string` parameters widen an int argument to float (PHP coercive typing).
+    if value.ir_type == IrType::I64
+        && ctx.builder.value_php_type(value.value) == PhpType::Int
+        && crate::ir_lower::stmt::declared_type_widens_int_to_float(param_ty)
+    {
+        return coerce_to_float(ctx, value, arg);
+    }
     let param_ty = param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
@@ -7069,6 +7228,15 @@ fn convert_container_arg_to_param(
             if is_mixed(target) && !is_mixed(element) =>
         {
             steps.push((Op::ArrayToMixed, PhpType::Array(Box::new(PhpType::Mixed))));
+        }
+        // A list of boxed elements passed to a parameter the checker specialized to scalar
+        // elements (an untyped caller parameter keeps a `mixed` EIR contract while the checker
+        // typed it from its call sites): unbox every element into a scalar list.
+        (PhpType::Array(element), PhpType::Array(target))
+            if is_mixed(element)
+                && matches!(target.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool) =>
+        {
+            steps.push((Op::ArrayMixedToScalar, PhpType::Array(Box::new(target.codegen_repr()))));
         }
         (PhpType::Array(element), PhpType::AssocArray { key, value: target }) => {
             steps.push((
@@ -8706,6 +8874,10 @@ fn coerce_variadic_tail_value(
     let PhpType::Array(elem_ty) = array_ty.codegen_repr() else {
         return value;
     };
+    if elem_ty.codegen_repr() == PhpType::Float && value.ir_type == IrType::I64 {
+        // `float ...$xs` widens each int argument (the slot holds float bits).
+        return coerce_to_float_at_span(ctx, value, Some(span));
+    }
     if elem_ty.codegen_repr() != PhpType::Mixed {
         return value;
     }
@@ -18467,7 +18639,7 @@ fn coerce_to_float(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr:
 }
 
 /// Coerces a value to float storage using an explicit source span.
-fn coerce_to_float_at_span(
+pub(crate) fn coerce_to_float_at_span(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<crate::span::Span>,

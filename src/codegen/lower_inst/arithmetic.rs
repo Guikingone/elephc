@@ -763,6 +763,9 @@ pub(in crate::codegen) fn mixed_numeric_int_fast_path_applies(
 ) -> Result<bool> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
+    if expect_mixed_numeric_op(inst)? == MixedNumericOp::Div {
+        return Ok(false);
+    }
     let lhs_ty = ctx.value_php_type(lhs)?.codegen_repr();
     let rhs_ty = ctx.value_php_type(rhs)?.codegen_repr();
     Ok(int_probe_operand_type(&lhs_ty)
@@ -798,12 +801,16 @@ fn emit_mixed_numeric_int_fast_path(
                 ctx.emitter.instruction("cmp x11, x9, asr #63");                // does the high half only extend the sign?
                 ctx.emitter.instruction(&format!("b.ne {}", slow));             // overflow: generic path (float result)
             }
+            MixedNumericOp::Div => {
+                ctx.emitter.instruction(&format!("b {}", slow));                // division always takes the runtime helper
+            }
         },
         Arch::X86_64 => {
             match op {
                 MixedNumericOp::Add => ctx.emitter.instruction("add rax, rcx"), // native add
                 MixedNumericOp::Sub => ctx.emitter.instruction("sub rax, rcx"), // native subtract
                 MixedNumericOp::Mul => ctx.emitter.instruction("imul rax, rcx"), // native multiply
+                MixedNumericOp::Div => ctx.emitter.instruction(&format!("jmp {}", slow)), // division always takes the runtime helper
             }
             ctx.emitter.instruction(&format!("jo {}", slow));                   // overflow: generic path (float result)
         }
@@ -930,6 +937,11 @@ fn emit_mixed_numeric_generic(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if op == MixedNumericOp::Div {
+        // The division helper returns no box for a zero divisor.
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        emit_int_zero_divisor_throw(ctx, result_reg, "Division by zero");
+    }
     Ok(())
 }
 
@@ -1088,6 +1100,7 @@ fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
         MixedNumericOp::Add => "__rt_mixed_numeric_add",
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
+        MixedNumericOp::Div => "__rt_mixed_numeric_div",
     }
 }
 

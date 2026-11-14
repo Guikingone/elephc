@@ -23,7 +23,8 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
+    array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_float_at_span,
+    coerce_to_int_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_callable_array_for_assignment, lower_array_literal_with_expected_type,
     lower_closure_for_assignment, lower_expr,
@@ -5777,6 +5778,16 @@ fn lower_property_assign(
     // catchable `TypeError` when the value does not fit, so an ancestor-typed value reaching a
     // narrower slot is guarded here rather than refused at compile time. A no-op for every flow the
     // checker already proved sound (see `emit_checked_downcast`'s PHASE 0).
+    // PHP widens an `int` assigned to a `float` property (`$p->f = 6 / 3` stores `float(2)`).
+    let value = if value.ir_type == IrType::I64
+        && ctx.builder.value_php_type(value.value) == PhpType::Int
+        && raw_object_property_type(ctx, object.value, property)
+            .is_some_and(|ty| declared_type_widens_int_to_float(&ty))
+    {
+        coerce_to_float_at_span(ctx, value, Some(span))
+    } else {
+        value
+    };
     let stored = guarded_property_store_value(ctx, object.value, property, value, span);
     let data = ctx.intern_string(property);
     ctx.emit_void(
@@ -6458,6 +6469,18 @@ fn static_property_may_be_eval_dynamic(
         && !ctx
             .classes
             .contains_key(class_name.as_str().trim_start_matches('\\'))
+}
+
+/// Returns whether a declared `float`, `?float` or other union accepting `float` but not `int`
+/// converts an assigned `int` to `float` (PHP's coercive typing).
+pub(crate) fn declared_type_widens_int_to_float(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Float => true,
+        PhpType::Union(members) => {
+            members.contains(&PhpType::Float) && !members.contains(&PhpType::Int)
+        }
+        _ => false,
+    }
 }
 
 /// Lowers `$object->prop[] = value` (array append onto an object property).

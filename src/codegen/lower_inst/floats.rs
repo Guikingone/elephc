@@ -24,16 +24,33 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers a floating-point constant into the canonical float result register and slot.
 pub(super) fn lower_const_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_f64(inst)?;
-    let label = ctx.data.add_float(value);
-    let scratch = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, scratch, &label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}]", abi::float_result_reg(ctx.emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
+    // Load straight into the value's register when it has one (no extra move).
+    let target = inst
+        .result
+        .and_then(|result| ctx.allocation.register_of(result))
+        .map(str::to_string);
+    let dest = target.clone().unwrap_or_else(|| abi::float_result_reg(ctx.emitter).to_string());
+    if value.to_bits() == 0 {
+        // +0.0 needs no memory load.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("fmov {}, xzr", dest)), // +0.0
+            Arch::X86_64 => ctx.emitter.instruction(&format!("xorpd {}, {}", dest, dest)), // +0.0
         }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", abi::float_result_reg(ctx.emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
+    } else {
+        let label = ctx.data.add_float(value);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                let scratch = abi::symbol_scratch_reg(ctx.emitter);
+                abi::emit_symbol_address(ctx.emitter, scratch, &label);
+                ctx.emitter.instruction(&format!("ldr {}, [{}]", dest, scratch)); // load the 64-bit float literal through the symbol scratch register
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [rip + {}]", dest, label)); // load the 64-bit float literal RIP-relative
+            }
         }
+    }
+    if target.is_some() {
+        return Ok(());
     }
     store_if_result(ctx, inst)
 }

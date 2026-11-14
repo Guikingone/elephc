@@ -537,6 +537,24 @@ pub(super) fn lower_array_fetch_dim_w(ctx: &mut FunctionContext<'_>, inst: &Inst
     store_if_result(ctx, inst)
 }
 
+/// Lowers `ArrayMixedToScalar` through `__rt_array_mixed_to_scalar`, passing the runtime value
+/// tag of the result's element type.
+pub(super) fn lower_array_mixed_to_scalar(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let PhpType::Array(element) = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::invalid_module("array_mixed_to_scalar result must be an indexed array"));
+    };
+    let tag = crate::codegen::runtime_value_tag(&element.codegen_repr()) as i64;
+    let (array_reg, tag_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    ctx.load_value_to_reg(array, array_reg)?;
+    abi::emit_load_int_immediate(ctx.emitter, tag_reg, tag);
+    abi::emit_call_label(ctx.emitter, "__rt_array_mixed_to_scalar");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ArrayStoreElemRaw`: stores a child array pointer into a parent indexed-array slot with
 /// no refcount change (the fetch-for-write already moved the parent's reference to it).
 pub(super) fn lower_array_store_elem_raw(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

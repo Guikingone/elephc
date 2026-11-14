@@ -117,6 +117,7 @@ mod hash_clone_shallow;
 mod hash_fnv1a;
 mod hash_free_deep;
 mod array_fetch_dim_w;
+mod array_mixed_to_scalar;
 mod hash_add_int;
 mod int_div_checked;
 mod hash_get;
@@ -170,6 +171,7 @@ mod mixed_free_deep;
 mod mixed_count;
 mod mixed_is_empty;
 mod mixed_numeric_binops;
+mod mixed_numeric_div;
 mod mixed_bitwise;
 mod int_checked_binops;
 mod mixed_strict_eq;
@@ -390,6 +392,7 @@ pub use hash_fnv1a::emit_hash_fnv1a;
 pub use hash_free_deep::emit_hash_free_deep;
 /// Emit deep hash free helper.
 pub use array_fetch_dim_w::emit_array_fetch_dim_w;
+pub use array_mixed_to_scalar::emit_array_mixed_to_scalar;
 pub use hash_add_int::emit_hash_add_int;
 pub use int_div_checked::emit_int_div_checked;
 pub use hash_get::emit_hash_get;
@@ -480,6 +483,7 @@ pub use mixed_free_deep::emit_mixed_free_deep;
 pub use mixed_is_empty::emit_mixed_is_empty;
 /// Emit Mixed emptiness check helper.
 pub use mixed_numeric_binops::emit_mixed_numeric_binops;
+pub use mixed_numeric_div::emit_mixed_numeric_div;
 pub use mixed_bitwise::emit_mixed_bitwise;
 /// Emit Mixed unary bitwise NOT helper.
 pub use mixed_bitwise::emit_mixed_bitwise_not;

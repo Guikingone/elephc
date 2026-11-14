@@ -284,3 +284,19 @@ run();
     assert_eq!(out.stdout, "5 2\n92\n2.25\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// An `array` parameter the checker specialized to scalar elements from one call site still
+/// accepts a list built from an untyped caller parameter (boxed elements): the call converts the
+/// list to the scalar layout instead of handing boxes to code that reads raw ints.
+#[test]
+fn test_scalar_array_param_accepts_list_of_boxed_elements() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(array $a) { return implode(",", $a); }
+function s(array $a) { sort($a); return implode(",", $a); }
+function run($m) { echo f([$m, 2]), "|", f([1, 2]), "|", s([3 * $m, 1, 2]), "|", s([5, 4]), "\n"; }
+run(7);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7,2|1,2|1,2,21|4,5\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

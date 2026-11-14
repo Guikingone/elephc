@@ -58,6 +58,11 @@ fn dirties_scratch(function: &Function, inst: &Instruction) -> bool {
         Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent
     ) {
         inst.effects - Effects::MAY_WARN
+    } else if matches!(inst.op, Op::IDiv | Op::ISMod | Op::FDiv | Op::ICheckedDiv) {
+        // A division only throws `DivisionByZeroError` (a heap object with a static message),
+        // and a throw leaves this function (it has no handlers): a normal successor never sees
+        // the scratch offset moved.
+        inst.effects - Effects::MAY_THROW
     } else {
         inst.effects
     };

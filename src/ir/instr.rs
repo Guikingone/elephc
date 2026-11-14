@@ -162,6 +162,9 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+    /// PHP `/`: an int when both operands are int-like and the division is exact, a float
+    /// otherwise; throws `DivisionByZeroError` on a zero divisor.
+    Div,
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -202,6 +205,7 @@ impl MixedNumericOp {
             MixedNumericOp::Add => "add",
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
+            MixedNumericOp::Div => "div",
         }
     }
 }
@@ -496,6 +500,9 @@ pub enum Op {
     /// without refcount changes: the pair `ArrayFetchDimW` / in-place write already balanced the
     /// parent's reference. Operands: parent array, int index, child array.
     ArrayStoreElemRaw,
+    /// Converts an indexed array of boxed `mixed` elements into a fresh int/float/bool array
+    /// (the result type names the element type); consumes its input like the widening conversions.
+    ArrayMixedToScalar,
     ArrayElemAddr,
     ArraySet,
     HashSet,
@@ -872,6 +879,7 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
             ArrayStoreElemRaw => E::WRITES_HEAP,
+            ArrayMixedToScalar => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -1119,6 +1127,7 @@ impl Op {
             HashAddInt => "hash_add_int",
             ArrayFetchDimW => "array_fetch_dim_w",
             ArrayStoreElemRaw => "array_store_elem_raw",
+            ArrayMixedToScalar => "array_mixed_to_scalar",
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",

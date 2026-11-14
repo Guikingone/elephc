@@ -2177,6 +2177,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ResourceToStr
                     | Op::MixedBox
                     | Op::ArrayToMixed
+                    | Op::ArrayMixedToScalar
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop

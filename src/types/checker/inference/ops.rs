@@ -127,6 +127,12 @@ impl Checker {
                 // (`10 / 2` → int(5), `10 / 4` → float(2.5)); any other operand mix is a float.
                 if *op == BinOp::Div && lt == PhpType::Int && rt == PhpType::Int {
                     Ok(int_division_type(left, right))
+                } else if *op == BinOp::Div
+                    && (lt == PhpType::Int || uses_mixed_numeric_dispatch(&lt))
+                    && (rt == PhpType::Int || uses_mixed_numeric_dispatch(&rt))
+                {
+                    // A dynamic operand may hold an int: the quotient is `int|float`.
+                    Ok(PhpType::Mixed)
                 } else if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {

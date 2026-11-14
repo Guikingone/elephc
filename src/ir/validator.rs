@@ -279,7 +279,9 @@ fn validate_instruction_effects(
     let expected = inst.op.default_effects();
     // A division whose divisor is not a known non-zero constant may also throw
     // `DivisionByZeroError` (see `Builder::emit_with_effects`).
-    let division_may_throw = matches!(inst.op, Op::IDiv | Op::ISMod | Op::FDiv)
+    let division_may_throw = (matches!(inst.op, Op::IDiv | Op::ISMod | Op::FDiv)
+        || (inst.op == Op::MixedNumericBinop
+            && inst.immediate == Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Div))))
         && inst.effects == expected | Effects::MAY_THROW;
     if !inst.op.allows_effect_refinement() && inst.effects != expected && !division_may_throw {
         return Err(ValidationError::EffectMismatch {
@@ -519,7 +521,7 @@ fn validate_opcode_rules(
         ArrayHashUnion => check_array_hash_union(function, inst_id, inst),
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
-        ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayFetchDimW | ArrayStoreElemRaw | ArrayEnsureUnique
+        ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayFetchDimW | ArrayStoreElemRaw | ArrayMixedToScalar | ArrayEnsureUnique
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
