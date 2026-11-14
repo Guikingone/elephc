@@ -304,9 +304,10 @@ pub(super) fn lower_float_neg(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ctx.emitter.instruction("fneg d0, d0");                             // negate the loaded floating-point operand
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for subtraction
-            ctx.emitter.instruction("subsd xmm1, xmm0");                        // compute 0.0 - operand as floating-point negation
-            ctx.emitter.instruction("movapd xmm0, xmm1");                       // move the negated float back to the result register
+            // Flip the sign bit (`0.0 - x` would turn `-0.0` into `+0.0` instead of negating it).
+            ctx.emitter.instruction("movq r11, xmm0");                          // the operand's bits
+            ctx.emitter.instruction("btc r11, 63");                             // flip the sign bit
+            ctx.emitter.instruction("movq xmm0, r11");                          // the negated float
         }
     }
     store_if_result(ctx, inst)

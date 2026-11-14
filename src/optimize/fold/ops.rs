@@ -160,7 +160,8 @@ fn try_fold_int_mod(left: &Expr, right: &Expr) -> Option<ExprKind> {
     if right == 0 {
         None
     } else {
-        Some(ExprKind::IntLiteral(left % right))
+        // `PHP_INT_MIN % -1` is 0 in PHP (Rust's `%` would overflow).
+        Some(ExprKind::IntLiteral(left.wrapping_rem(right)))
     }
 }
 

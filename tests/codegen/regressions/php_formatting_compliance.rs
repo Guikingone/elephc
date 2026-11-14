@@ -595,3 +595,20 @@ $e = [[1],[2],[3],[4]]; $r = array_splice($e, 1, -1); echo count($r), count($e),
     assert_eq!(out.stdout, "array(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n  [2]=>\n  int(4)\n}\narray(2) {\n  [0]=>\n  int(4)\n  [1]=>\n  int(5)\n}\narray(0) {\n}\narray(2) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(4)\n}\narray(3) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(4)\n  [2]=>\n  int(5)\n}\narray(0) {\n}\narray(0) {\n}\n21\narray(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(3)\n  [2]=>\n  int(4)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(5)\n}\narray(0) {\n}\narray(5) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n  [3]=>\n  int(4)\n  [4]=>\n  int(5)\n}\narray(3) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(4)\n  [2]=>\n  int(5)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n22\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// Float negation flips the sign bit (`-(0.0)` is `-0.0`, and `-$f * $q` keeps PHP's zero sign on
+/// x86_64), `PHP_INT_MIN % -1` folds to 0 without a compiler panic, and an int assigned to a
+/// `float` / `?float` static property widens to float.
+#[test]
+fn test_float_negation_sign_int_min_mod_fold_and_static_float_widening() {
+    let out = compile_and_run(r#"<?php
+function show($v) { var_dump($v); }
+function b(float $f, int $n, int $i) { show(-$f * ($n / $i)); }
+b(0.0, -9, 1 << 62);
+$z = 0.0; var_dump(-$z, -(-2.5));
+var_dump(PHP_INT_MIN % -1);
+class P { public static float $sf = 1.0; public static ?float $snf = null; }
+P::$sf = 3; P::$snf = 4; var_dump(P::$sf, P::$snf);
+"#);
+    assert_eq!(out, "float(0)\nfloat(-0)\nfloat(2.5)\nint(0)\nfloat(3)\nfloat(4)\n");
+}

@@ -6071,6 +6071,11 @@ fn lower_static_property_assign(
     span: Span,
 ) {
     let value = lower_expr(ctx, value);
+    // PHP widens an `int` assigned to a `float`/`?float` static property.
+    let value = match raw_static_property_type(ctx, receiver, property) {
+        Some(declared) => widen_int_value_for_declared_type(ctx, value, &declared, Some(span)),
+        None => value,
+    };
     let value = coerce_mixed_static_property_store_value(ctx, receiver, property, value, span);
     if static_property_store_retains_independent_value(ctx, receiver, property, value) {
         store_static_property(ctx, receiver, property, value.value, span);
