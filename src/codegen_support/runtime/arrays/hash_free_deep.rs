@@ -67,16 +67,14 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
     emitter.instruction("mov x10, #1");                                         // ordinary deep-free walks suppress nested collector runs
     emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
-    emitter.instruction("ldr x9, [x0, #8]");                                    // load table capacity
-    emitter.instruction("str x9, [sp, #8]");                                    // save capacity for the loop
-    emitter.instruction("str xzr, [sp, #24]");                                  // loop index = 0
+    emitter.instruction("ldr x9, [x0, #24]");                                   // the insertion-order head index (-1 when empty)
+    emitter.instruction("str x9, [sp, #24]");                                   // the current entry index survives nested helper calls
 
-    // -- iterate all slots and free occupied entries --
+    // -- walk the insertion-order chain (the live entries only) and free each entry --
     emitter.label("__rt_hash_free_deep_loop");
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload loop index
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload capacity
-    emitter.instruction("cmp x11, x10");                                        // are we done scanning all slots?
-    emitter.instruction("b.ge __rt_hash_free_deep_struct");                     // finish once index reaches capacity
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the current entry index
+    emitter.instruction("cmn x11, #1");                                         // end of the insertion-order chain?
+    emitter.instruction("b.eq __rt_hash_free_deep_struct");                     // every live entry has been released
 
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer
     emitter.instruction("mov x12, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
@@ -112,6 +110,8 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x13, #40]");                                 // reload this entry's runtime value_tag
     emitter.instruction("cmp x14, #1");                                         // is the entry value heap-backed at all?
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // strings release through the uniform dispatch helper
+    emitter.instruction("cmp x14, #3");                                         // int (0), float (2) and bool (3) payloads own no heap storage
+    emitter.instruction("b.ls __rt_hash_free_deep_next");                       // nothing to release for a scalar payload
     emitter.instruction("cmp x14, #4");                                         // is this a nested indexed array?
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // arrays release through the uniform dispatch helper
     emitter.instruction("cmp x14, #5");                                         // is this a nested associative array?
@@ -140,9 +140,12 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after descriptor release
 
     emitter.label("__rt_hash_free_deep_next");
-    emitter.instruction("add x11, x11, #1");                                    // advance to the next slot
-    emitter.instruction("str x11, [sp, #24]");                                  // save updated loop index
-    emitter.instruction("b __rt_hash_free_deep_loop");                          // continue scanning entries
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the current entry index after any helper call
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer
+    emitter.instruction("add x13, x9, x11, lsl #6");                            // advance to the selected entry block (before the 40-byte header skip)
+    emitter.instruction("ldr x11, [x13, #96]");                                 // the entry's insertion-order next index (header 40 + next field 56)
+    emitter.instruction("str x11, [sp, #24]");                                  // move on to the next live entry
+    emitter.instruction("b __rt_hash_free_deep_loop");                          // continue until the chain ends
 
     // -- free the hash table struct itself --
     emitter.label("__rt_hash_free_deep_struct");
