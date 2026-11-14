@@ -463,7 +463,9 @@ Each instruction has:
 | `INeg`, `IBitNot` | `I64` | `I64` | pure |
 | `IBitAnd`, `IBitOr`, `IBitXor`, `IShl`, `IShrA` | `I64`, `I64` | `I64` | pure |
 | `FAdd`, `FSub`, `FMul`, `FDiv`, `FPow`, `FNeg` | `F64` operands | `F64` | pure or libcall |
-| `MixedNumericBinop(add\|sub\|mul)` | mixed/union operands | mixed/scalar | `reads_heap`, maybe `alloc_heap`, `may_warn`, `may_fatal`, `may_deopt` |
+| `MixedNumericBinop(add\|sub\|mul\|div)` | mixed/union operands | mixed/scalar | `reads_heap`, maybe `alloc_heap`, `may_warn`, `may_fatal`, `may_deopt` |
+| `ICheckedDiv` | `I64`, `I64` | `Heap(Mixed)` (int when exact, float otherwise) | `reads_heap`, `alloc_heap`, `may_throw` |
+| `DivisionByZeroCheck` | `Heap(Mixed)` result of a mixed `div` | — | `may_throw`: throws `DivisionByZeroError` when the division returned no box (zero divisor); emitted after the division's operand releases |
 
 `BinOp::Div` follows PHP division behavior and may produce float. `BinOp::Pow`
 preserves PHP exponentiation result rules.
@@ -496,6 +498,8 @@ preserves PHP exponentiation result rules.
 | `MixedTagOf` | `Heap(Mixed)` | `I64` | `reads_heap` |
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
+| `MixedWidenIntToFloat` | `Heap(Mixed)` (borrowed) | owned `Heap(Mixed)` | `reads_heap`, `alloc_heap`, `refcount_op`: an int payload becomes a fresh float box (PHP's int-to-float widening for `?float`/`float\|X` targets); anything else is retained |
+| `ArrayMixedToScalar` | `Heap(Array)` of boxed elements | `Heap(Array)` of int/float/bool | `reads_heap`, `alloc_heap`, `refcount_op`; consumes its input |
 
 ### Strings
 
