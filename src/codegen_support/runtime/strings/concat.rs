@@ -170,27 +170,10 @@ fn emit_copy_aarch64(emitter: &mut Emitter, src: &str, len: &str, label: &str) {
     emitter.label(&format!("{}_end", label));
 }
 
-/// Copies r9 bytes from r8 to the destination cursor r10, eight bytes at a time and then byte
-/// by byte; r8, r9, r10 and r11 are clobbered.
+/// Copies r9 bytes from r8 to the destination cursor r10, eight bytes at a time and then a
+/// 4/2/1-byte tail; r8, r9, r10 and r11 are clobbered.
 fn emit_copy_x86_64(emitter: &mut Emitter, label: &str) {
-    emitter.label(&format!("{}_words", label));
-    emitter.instruction("cmp r9, 8");                                           // at least one whole word left?
-    emitter.instruction(&format!("jb {}", label));                            // no: finish byte by byte
-    emitter.instruction("mov r11, QWORD PTR [r8]");                             // load eight source bytes
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // store them at the destination cursor
-    emitter.instruction("add r8, 8");                                           // advance the source pointer
-    emitter.instruction("add r10, 8");                                          // advance the destination cursor
-    emitter.instruction("sub r9, 8");                                           // eight bytes fewer
-    emitter.instruction(&format!("jmp {}_words", label));                     // continue with the next word
-    emitter.label(label);
-    emitter.instruction("test r9, r9");                                         // every byte copied?
-    emitter.instruction(&format!("je {}_end", label));                        // yes
-    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one source byte
-    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store it at the destination cursor
-    emitter.instruction("add r8, 1");                                           // advance the source pointer
-    emitter.instruction("add r10, 1");                                          // advance the destination cursor
-    emitter.instruction("sub r9, 1");                                           // one byte fewer
-    emitter.instruction(&format!("jmp {}", label));                           // continue copying bytes
+    super::copy_bytes::emit_copy_bytes_x86_64(emitter, "r8", "r10", "r9", "r11", label);
     emitter.label(&format!("{}_end", label));
 }
 
@@ -210,7 +193,7 @@ mod tests {
 
         assert!(asm.contains("__rt_concat:\n"));
         assert!(asm.contains("mov QWORD PTR [rbp - 8], rax\n"));
-        assert!(asm.contains("mov r11b, BYTE PTR [r8]\n"));
+        assert!(asm.contains("mov r11, QWORD PTR [r8]\n"));
         assert!(asm.contains("mov rax, QWORD PTR [rbp - 48]\n"));
     }
 }

@@ -189,15 +189,8 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the glue string length before copying the separator bytes
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor before copying the separator bytes
 
-    emitter.label("__rt_implode_glue");
-    emitter.instruction("test r9, r9");                                         // check whether every glue byte has already been copied into the concat buffer
-    emitter.instruction("jz __rt_implode_glue_done");                           // continue with the array element once the glue string has been fully copied
-    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one byte from the glue string before advancing the source pointer
-    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store one separator byte into the concat buffer before advancing the destination pointer
-    emitter.instruction("add r8, 1");                                           // advance the glue string source pointer after copying one separator byte
-    emitter.instruction("add r10, 1");                                          // advance the concat-buffer destination pointer after storing one separator byte
-    emitter.instruction("sub r9, 1");                                           // decrement the remaining glue byte count after copying one separator byte
-    emitter.instruction("jmp __rt_implode_glue");                               // continue copying separator bytes until the glue string is exhausted
+    // copy the glue bytes into the concat buffer
+    super::copy_bytes::emit_copy_bytes_x86_64(emitter, "r8", "r10", "r9", "r11", "__rt_implode_glue");
 
     emitter.label("__rt_implode_glue_done");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the concat-buffer destination cursor after copying the separator bytes
@@ -237,14 +230,8 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after casting
 
     emitter.label("__rt_implode_copy");
-    emitter.instruction("test r9, r9");                                         // check whether every element byte has already been copied into the concat buffer
-    emitter.instruction("jz __rt_implode_next");                                // advance to the next indexed-array element once the current string is fully copied
-    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one byte from the current indexed-array string before advancing the source pointer
-    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store one byte from the current indexed-array string into the concat buffer
-    emitter.instruction("add r8, 1");                                           // advance the current indexed-array string source pointer after copying one byte
-    emitter.instruction("add r10, 1");                                          // advance the concat-buffer destination pointer after storing one byte
-    emitter.instruction("sub r9, 1");                                           // decrement the remaining current string byte count after copying one byte
-    emitter.instruction("jmp __rt_implode_copy");                               // continue copying bytes from the current indexed-array string until it is exhausted
+    // copy the element bytes into the concat buffer
+    super::copy_bytes::emit_copy_bytes_x86_64(emitter, "r8", "r10", "r9", "r11", "__rt_implode_elem_copy");
 
     emitter.label("__rt_implode_next");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the concat-buffer destination cursor after copying the current indexed-array element

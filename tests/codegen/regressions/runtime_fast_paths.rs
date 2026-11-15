@@ -794,3 +794,45 @@ run(3, [1, 1, 1]);
     assert_eq!(out.stdout, "int(437)\nfloat(9.223372036854776E+18)\nfloat(9.223372036854776E+19)\nfloat(32.5)\nbool(false)\nint(457)\nint(18)\nfloat(9.223372036854776E+18)\nfloat(2.7670116110564327E+19)\nfloat(11.5)\nbool(false)\nint(24)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `implode()` copies glue and element bytes of every length (empty, under and over eight bytes, mixed casts).
+#[test]
+fn test_implode_copies_glue_and_elements_of_every_length() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+foreach ([[], [""], ["a"], ["ab", "cd"], ["abcdefgh", "ij"], ["0123456789abcdef", "x", "yz", "12345678901234567"], [1, 2.5, true, null, "s"]] as $a) {
+  foreach (["", ",", "--", "<sep-long-glue>"] as $g) { echo strlen(implode($g, $a)), ":", implode($g, $a), "\n"; }
+}
+$big = array_fill(0, 50, "word"); echo strlen(implode(" ", $big)), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0:\n0:\n0:\n0:\n0:\n0:\n0:\n0:\n1:a\n1:a\n1:a\n1:a\n4:abcd\n5:ab,cd\n6:ab--cd\n19:ab<sep-long-glue>cd\n10:abcdefghij\n11:abcdefgh,ij\n12:abcdefgh--ij\n25:abcdefgh<sep-long-glue>ij\n36:0123456789abcdefxyz12345678901234567\n39:0123456789abcdef,x,yz,12345678901234567\n42:0123456789abcdef--x--yz--12345678901234567\n81:0123456789abcdef<sep-long-glue>x<sep-long-glue>yz<sep-long-glue>12345678901234567\n6:12.51s\n10:1,2.5,1,,s\n14:1--2.5--1----s\n66:1<sep-long-glue>2.5<sep-long-glue>1<sep-long-glue><sep-long-glue>s\n249\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// Concatenation, persisted strings and array keys copy strings of every length.
+#[test]
+fn test_string_concat_and_persist_copy_every_length() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = ""; for ($i = 0; $i < 40; $i++) { $s .= chr(65 + $i % 26); $t = $s . "|" . substr($s, 0, $i % 9); if ($i % 7 == 0) echo strlen($t), ":", $t, "\n"; }
+$parts = []; foreach (["", "a", "abcdefg", "abcdefgh", "abcdefghi", str_repeat("xy", 13)] as $p) { $parts[] = $p . $p; }
+echo implode(",", $parts), "\n", strtoupper(implode("", $parts)), "\n";
+$arr = ["k" . 1 => "v" . 2, "longer-key-name" => "value with spaces"]; echo json_encode($arr), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:A|\n16:ABCDEFGH|ABCDEFG\n21:ABCDEFGHIJKLMNO|ABCDE\n26:ABCDEFGHIJKLMNOPQRSTUV|ABC\n31:ABCDEFGHIJKLMNOPQRSTUVWXYZABC|A\n45:ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJ|ABCDEFGH\n,aa,abcdefgabcdefg,abcdefghabcdefgh,abcdefghiabcdefghi,xyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxyxy\nAAABCDEFGABCDEFGABCDEFGHABCDEFGHABCDEFGHIABCDEFGHIXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXYXY\n{\"k1\":\"v2\",\"longer-key-name\":\"value with spaces\"}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}
+
+/// `.=` appends in place, grows (including `$s .= $s`) and keeps copies independent.
+#[test]
+fn test_string_append_in_place_and_grow_copies_bytes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "";
+for ($i = 0; $i < 300; $i++) { $s .= "ab" . ($i % 10); if ($i % 50 == 0) { $s .= $s; } }
+echo strlen($s), " ", substr($s, 0, 30), " ", substr($s, -30), "\n";
+$t = "x"; $u = $t; $u .= "yz"; echo $t, $u, "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "9639 ab0ab0ab1ab2ab3ab4ab5ab6ab7ab8 ab0ab1ab2ab3ab4ab5ab6ab7ab8ab9\nxxyz\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

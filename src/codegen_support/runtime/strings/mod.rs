@@ -11,6 +11,7 @@
 mod itoa;
 mod dval_to_lval;
 mod concat;
+pub(crate) mod copy_bytes;
 mod str_bitwise;
 mod string_offset_set;
 mod ftoa;

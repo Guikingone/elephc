@@ -149,7 +149,7 @@ fn emit_str_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_str_append_grow");                             // no: reallocate
     emitter.instruction("add rdi, rsi");                                        // write position = current end
     emitter.instruction("mov rsi, rdx");                                        // source = appended bytes
-    emitter.instruction("rep movsb");                                           // append in place (rcx = appended length)
+    super::copy_bytes::emit_copy_bytes_x86_64(emitter, "rsi", "rdi", "rcx", "r11", "__rt_str_append_inplace_copy"); // append in place
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // same pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // new length
     emitter.instruction("jmp __rt_str_append_ret");                             // done
@@ -167,10 +167,10 @@ fn emit_str_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // destination
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // source = current string
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // prefix length
-    emitter.instruction("rep movsb");                                           // copy the prefix (rdi advances)
+    super::copy_bytes::emit_copy_bytes_x86_64(emitter, "rsi", "rdi", "rcx", "r11", "__rt_str_append_prefix_copy"); // copy the prefix (rdi advances)
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // source = appended string
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // appended length
-    emitter.instruction("rep movsb");                                           // copy the appended bytes
+    super::copy_bytes::emit_copy_bytes_x86_64(emitter, "rsi", "rdi", "rcx", "r11", "__rt_str_append_tail_copy"); // copy the appended bytes
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // old string
     emitter.instruction("call __rt_decref_any");                                // release the slot's old reference
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // new pointer

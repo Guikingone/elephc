@@ -130,13 +130,8 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the source byte length after the allocator helper returns
 
     // -- copy the source bytes into the owned heap allocation --
-    emitter.instruction("push rsi");                                            // preserve rsi, which callers may still hold live across this helper
-    emitter.instruction("push rdi");                                            // preserve rdi, which callers may still hold live across this helper
-    emitter.instruction("mov rdi, r8");                                         // rdi = destination payload
-    emitter.instruction("mov rsi, r9");                                         // rsi = source payload
-    emitter.instruction("rep movsb");                                           // copy rcx bytes into the owned allocation
-    emitter.instruction("pop rdi");                                             // restore the caller's rdi
-    emitter.instruction("pop rsi");                                             // restore the caller's rsi
+    emitter.instruction("mov r10, r8");                                         // destination cursor (r8 keeps the payload start)
+    super::copy_bytes::emit_copy_bytes_x86_64(emitter, "r9", "r10", "rcx", "r11", "__rt_str_persist_copy");
 
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the original string length for the x86_64 string result pair
     emitter.instruction("mov rax, r8");                                         // return the owned string pointer in the x86_64 string result register

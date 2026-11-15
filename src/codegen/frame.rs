@@ -233,10 +233,16 @@ pub(super) fn emit_function_prologue_with_label(
 
     // Save every incoming argument before any parameter post-processing can call
     // a runtime helper and clobber caller-saved argument registers.
+    let direct = direct_register_params(ctx);
     let mut incoming_args = abi::IncomingArgCursor::for_target(ctx.emitter.target, 0);
     for (index, param) in ctx.function.params.iter().enumerate() {
         let slot = LocalSlotId::from_raw(index as u32);
         let offset = ctx.local_offset(slot)?;
+        if direct.iter().any(|(param_index, _, _)| *param_index == index) {
+            // Kept in its register (moved below): only advance past its argument register.
+            incoming_args.int_reg_idx += 1;
+            continue;
+        }
         abi::emit_store_incoming_param(
             ctx.emitter,
             &param.name,
@@ -245,6 +251,16 @@ pub(super) fn emit_function_prologue_with_label(
             param.by_ref,
             &mut incoming_args,
         );
+    }
+
+    // Parameters read once at entry straight into a register skip their frame slot. Their
+    // destination is never another parameter's incoming register, so the moves cannot clobber.
+    for (index, load, reg) in &direct {
+        let source = abi::int_arg_reg_name(ctx.emitter.target, *index);
+        let name = &ctx.function.params[*index].name;
+        ctx.emitter.comment(&format!("param ${} from {} (kept in {})", name, source, reg));
+        abi::emit_reg_move(ctx.emitter, reg, source);
+        ctx.prologue_loaded.insert(*load);
     }
 
     // Once all ABI inputs are safe in their frame slots, materialize any widened
@@ -272,6 +288,72 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
     Ok(())
+}
+
+/// Returns the integer parameters (index, entry `load_local`, register) whose frame slot is
+/// only read once, by a register-allocated `load_local` at the very start of the entry block:
+/// the prologue moves them from their argument register straight into that register.
+/// Every parameter up to each candidate must be a by-value int/bool (one integer argument
+/// register each), and a destination may not be any parameter's incoming register.
+fn direct_register_params(ctx: &FunctionContext<'_>) -> Vec<(usize, crate::ir::InstId, &'static str)> {
+    let function = ctx.function;
+    let mut direct = Vec::new();
+    // `eval` code reads parameters from their frame slots by name.
+    if function.flags.is_generator
+        || ctx.is_main
+        || function.instructions.iter().any(|inst| inst.op.name().contains("eval"))
+    {
+        return direct;
+    }
+    let int_limit = match ctx.emitter.target.arch {
+        Arch::X86_64 => 6,
+        Arch::AArch64 => 8,
+    };
+    let simple = |index: usize| {
+        function.params.get(index).is_some_and(|param| {
+            !param.by_ref && matches!(param.php_type.codegen_repr(), PhpType::Int | PhpType::Bool)
+        })
+    };
+    let incoming: Vec<&'static str> = (0..function.params.len().min(int_limit))
+        .take_while(|index| simple(*index))
+        .map(|index| abi::int_arg_reg_name(ctx.emitter.target, index))
+        .collect();
+    // References to each slot, and the entry block's leading run of loads.
+    let mut references: std::collections::HashMap<LocalSlotId, usize> = std::collections::HashMap::new();
+    for inst in &function.instructions {
+        if let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate {
+            *references.entry(slot).or_insert(0) += 1;
+        }
+    }
+    let Some(entry) = function.block(function.entry) else {
+        return direct;
+    };
+    for inst_id in &entry.instructions {
+        let Some(inst) = function.instruction(*inst_id) else {
+            break;
+        };
+        if inst.op != crate::ir::Op::LoadLocal {
+            break;
+        }
+        let (Some(crate::ir::Immediate::LocalSlot(slot)), Some(result)) = (inst.immediate.clone(), inst.result) else {
+            break;
+        };
+        let index = slot.as_raw() as usize;
+        if index >= incoming.len() || references.get(&slot).copied() != Some(1) {
+            continue;
+        }
+        let local_matches = ctx
+            .local_php_type(slot)
+            .is_ok_and(|ty| ty.codegen_repr() == function.params[index].php_type.codegen_repr())
+            && !ctx.owns_parameter_slot(slot);
+        let Some(reg) = ctx.allocation.register_of(result) else {
+            continue;
+        };
+        if local_matches && !incoming.iter().enumerate().any(|(other, source)| other != index && *source == reg) {
+            direct.push((index, *inst_id, reg));
+        }
+    }
+    direct
 }
 
 /// Retains a mutable by-value parameter so its frame slot has one callee-owned reference.
