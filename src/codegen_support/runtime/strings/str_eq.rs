@@ -25,20 +25,53 @@ pub fn emit_str_eq(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_eq ---");
     emitter.label_global("__rt_str_eq");
 
-    // -- quick length check: different lengths means not equal --
+    // -- lengths first, then overlapping word compares (never reading past either string) --
     emitter.instruction("cmp x2, x4");                                          // compare lengths of both strings
-    emitter.instruction("b.ne __rt_str_eq_false");                              // if lengths differ, strings can't be equal
-
-    // -- byte-by-byte comparison --
-    emitter.instruction("cbz x2, __rt_str_eq_true");                            // if both empty (len=0), they're equal
+    emitter.instruction("b.ne __rt_str_eq_false");                              // if lengths differ, strings are not equal
+    emitter.instruction("cmp x1, x3");                                          // the same bytes?
+    emitter.instruction("b.eq __rt_str_eq_true");                               // identical pointers are equal
+    emitter.instruction("cbz x2, __rt_str_eq_true");                            // two empty strings are equal
+    emitter.instruction("cmp x2, #8");                                          // at least one full word?
+    emitter.instruction("b.lo __rt_str_eq_small");                              // 1..7 bytes use 4/2/1-byte compares
+    emitter.instruction("sub x2, x2, #8");                                      // bytes before the final word
+    emitter.instruction("ldr x5, [x1, x2]");                                    // final (possibly overlapping) word of A
+    emitter.instruction("ldr x6, [x3, x2]");                                    // final (possibly overlapping) word of B
+    emitter.instruction("cmp x5, x6");                                          // compare the final words
+    emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch
     emitter.label("__rt_str_eq_loop");
-    emitter.instruction("ldrb w5, [x1], #1");                                   // load byte from string A, advance pointer
-    emitter.instruction("ldrb w6, [x3], #1");                                   // load byte from string B, advance pointer
-    emitter.instruction("cmp w5, w6");                                          // compare the two bytes
-    emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch found, strings not equal
-    emitter.instruction("sub x2, x2, #1");                                      // decrement remaining byte count
-    emitter.instruction("cbnz x2, __rt_str_eq_loop");                           // if bytes remain, continue comparing
-
+    emitter.instruction("cmp x2, #0");                                          // any leading words left?
+    emitter.instruction("b.le __rt_str_eq_true");                               // all words matched
+    emitter.instruction("ldr x5, [x1], #8");                                    // next word of A
+    emitter.instruction("ldr x6, [x3], #8");                                    // next word of B
+    emitter.instruction("cmp x5, x6");                                          // compare the words
+    emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch
+    emitter.instruction("sub x2, x2, #8");                                      // eight fewer leading bytes
+    emitter.instruction("b __rt_str_eq_loop");                                  // continue with the next word
+    emitter.label("__rt_str_eq_small");
+    emitter.instruction("cmp x2, #4");                                          // at least four bytes?
+    emitter.instruction("b.lo __rt_str_eq_tiny");                               // 1..3 bytes
+    emitter.instruction("ldr w5, [x1]");                                        // first four bytes of A
+    emitter.instruction("ldr w6, [x3]");                                        // first four bytes of B
+    emitter.instruction("cmp w5, w6");                                          // compare them
+    emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch
+    emitter.instruction("sub x2, x2, #4");                                      // offset of the last four bytes
+    emitter.instruction("ldr w5, [x1, x2]");                                    // last four bytes of A
+    emitter.instruction("ldr w6, [x3, x2]");                                    // last four bytes of B
+    emitter.instruction("cmp w5, w6");                                          // compare them
+    emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch
+    emitter.instruction("b __rt_str_eq_true");                                  // equal
+    emitter.label("__rt_str_eq_tiny");
+    emitter.instruction("ldrb w5, [x1]");                                       // first byte of A
+    emitter.instruction("ldrb w6, [x3]");                                       // first byte of B
+    emitter.instruction("cmp w5, w6");                                          // compare them
+    emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch
+    emitter.instruction("cmp x2, #1");                                          // a single byte?
+    emitter.instruction("b.eq __rt_str_eq_true");                               // equal
+    emitter.instruction("sub x2, x2, #2");                                      // offset of the last two bytes
+    emitter.instruction("ldrh w5, [x1, x2]");                                   // last two bytes of A
+    emitter.instruction("ldrh w6, [x3, x2]");                                   // last two bytes of B
+    emitter.instruction("cmp w5, w6");                                          // compare them
+    emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch
     // -- strings are equal --
     emitter.label("__rt_str_eq_true");
     emitter.instruction("mov x0, #1");                                          // return 1 (true: strings are equal)
@@ -52,27 +85,53 @@ pub fn emit_str_eq(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux variant of `__rt_str_eq`.
 /// ABI: System V AMD64 — rdi=ptr_a, rsi=len_a, rdx=ptr_b, rcx=len_b → rax=result (1=equal, 0=different).
-/// Uses byte loop with early exit on length mismatch or first byte difference.
+/// Compares lengths, then overlapping word/half-word loads that never read past either string.
 fn emit_str_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_eq ---");
     emitter.label_global("__rt_str_eq");
 
-    emitter.instruction("cmp rsi, rcx");                                        // compare both string lengths before touching the byte payloads
-    emitter.instruction("jne __rt_str_eq_false");                               // unequal lengths cannot represent equal strings
-    emitter.instruction("test rsi, rsi");                                       // are both strings empty after the length comparison?
-    emitter.instruction("je __rt_str_eq_true");                                 // zero-length strings are equal without entering the byte loop
-
+    emitter.instruction("cmp rsi, rcx");                                        // compare both string lengths
+    emitter.instruction("jne __rt_str_eq_false");                               // unequal lengths cannot hold equal bytes
+    emitter.instruction("cmp rdi, rdx");                                        // the same bytes?
+    emitter.instruction("je __rt_str_eq_true");                                 // identical pointers are equal
+    emitter.instruction("test rsi, rsi");                                       // two empty strings?
+    emitter.instruction("je __rt_str_eq_true");                                 // are equal
+    emitter.instruction("cmp rsi, 8");                                          // at least one full word?
+    emitter.instruction("jb __rt_str_eq_small");                                // 1..7 bytes use 4/2/1-byte compares
+    emitter.instruction("sub rsi, 8");                                          // bytes before the final word
+    emitter.instruction("mov r8, QWORD PTR [rdi + rsi]");                       // final (possibly overlapping) word of the left string
+    emitter.instruction("cmp r8, QWORD PTR [rdx + rsi]");                       // compare it with the right string's final word
+    emitter.instruction("jne __rt_str_eq_false");                               // mismatch
     emitter.label("__rt_str_eq_loop");
-    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // load the next byte from the left-hand string
-    emitter.instruction("movzx r9d, BYTE PTR [rdx]");                           // load the next byte from the right-hand string
-    emitter.instruction("cmp r8b, r9b");                                        // compare the current byte pair
-    emitter.instruction("jne __rt_str_eq_false");                               // return false as soon as a mismatching byte is found
-    emitter.instruction("add rdi, 1");                                          // advance the left-hand string pointer to the next byte
-    emitter.instruction("add rdx, 1");                                          // advance the right-hand string pointer to the next byte
-    emitter.instruction("sub rsi, 1");                                          // decrement the remaining byte count after one successful comparison
-    emitter.instruction("jne __rt_str_eq_loop");                                // continue until every byte has matched
-
+    emitter.instruction("test rsi, rsi");                                       // any leading words left?
+    emitter.instruction("jle __rt_str_eq_true");                                // all words matched
+    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // next word of the left string
+    emitter.instruction("cmp r8, QWORD PTR [rdx]");                             // compare it with the right string
+    emitter.instruction("jne __rt_str_eq_false");                               // mismatch
+    emitter.instruction("add rdi, 8");                                          // advance the left string
+    emitter.instruction("add rdx, 8");                                          // advance the right string
+    emitter.instruction("sub rsi, 8");                                          // eight fewer leading bytes
+    emitter.instruction("jmp __rt_str_eq_loop");                                // continue with the next word
+    emitter.label("__rt_str_eq_small");
+    emitter.instruction("cmp rsi, 4");                                          // at least four bytes?
+    emitter.instruction("jb __rt_str_eq_tiny");                                 // 1..3 bytes
+    emitter.instruction("mov r8d, DWORD PTR [rdi]");                            // first four bytes of the left string
+    emitter.instruction("cmp r8d, DWORD PTR [rdx]");                            // compare them
+    emitter.instruction("jne __rt_str_eq_false");                               // mismatch
+    emitter.instruction("mov r8d, DWORD PTR [rdi + rsi - 4]");                  // last four bytes of the left string
+    emitter.instruction("cmp r8d, DWORD PTR [rdx + rsi - 4]");                  // compare them
+    emitter.instruction("jne __rt_str_eq_false");                               // mismatch
+    emitter.instruction("jmp __rt_str_eq_true");                                // equal
+    emitter.label("__rt_str_eq_tiny");
+    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // first byte of the left string
+    emitter.instruction("cmp r8b, BYTE PTR [rdx]");                             // compare it
+    emitter.instruction("jne __rt_str_eq_false");                               // mismatch
+    emitter.instruction("cmp rsi, 1");                                          // a single byte?
+    emitter.instruction("je __rt_str_eq_true");                                 // equal
+    emitter.instruction("movzx r8d, WORD PTR [rdi + rsi - 2]");                 // last two bytes of the left string
+    emitter.instruction("cmp r8w, WORD PTR [rdx + rsi - 2]");                   // compare them
+    emitter.instruction("jne __rt_str_eq_false");                               // mismatch
     emitter.label("__rt_str_eq_true");
     emitter.instruction("mov rax, 1");                                          // return 1 to signal that both strings are equal
     emitter.instruction("ret");                                                 // return to the caller after the equality fast path or completed byte loop

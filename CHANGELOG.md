@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- `__rt_str_eq` compares strings with overlapping 8/4/2-byte loads (never past either string) and short-circuits identical pointers; the FNV-1a key hash loop is two instructions shorter per byte (x86_64 and aarch64).
 - x86_64 runtime helpers (`array_to_hash`, `array_replace(_recursive)`, `array_merge_recursive`, assoc diff/intersect, `unserialize` aliases, `stream_context_set_option`, user stream wrappers) passed refcount pointers to `__rt_incref`/`__rt_decref_*` in `rdi` instead of `rax`, silently skipping the retain (use-after-free once the copy was released, e.g. `unset` on a copied mixed list) or the release (leaks).
 - mem2reg also promotes scalar lowering temps (the merged value of `&&`/`||`), and branch simplification threads edges that pass a constant into a join block that only branches on it or forwards it, so short-circuit conditions jump straight to their target.
 - The integer-range analysis bounds `++` counters of counted `for` loops (`for ($i = A; $i < B; $i++)` with `$i` and `B` unchanged in the body) by the loop's trip count, so a plain `$count++` keeps a native int instead of a boxed int-or-float value whenever it provably cannot overflow.
