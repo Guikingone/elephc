@@ -653,3 +653,15 @@ echo loc(), "\n";
     assert_eq!(out.stdout, "6 20 22 6.25 107\n16\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `$cnt[$v] = ($cnt[$v] ?? 0) + 1` reads the hash twice in one block; the read whose reference
+/// is released is never shared with the one the write uses (no use-after-free).
+#[test]
+fn test_counting_into_hash_with_coalesce_keeps_both_reads() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$cnt = []; foreach ([5, 3, 5, 9, 3, 5] as $v) { $cnt[$v] = ($cnt[$v] ?? 0) + 1; } print_r($cnt);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "Array\n(\n    [5] => 3\n    [3] => 2\n    [9] => 1\n)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

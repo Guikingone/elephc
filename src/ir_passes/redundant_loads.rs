@@ -7,6 +7,8 @@
 //! - `crate::ir_passes::driver::default_passes()`.
 //!
 //! Key details:
+//! - Heap reads whose value any release, store, refcount operation, call or terminator
+//!   consumes are never shared (a `maybe_owned` load may carry a reference).
 //! - Only non-owning reads with the same IR and PHP type of `PhpLocal`/`HiddenTemp` slots that are never addressed by reference (no by-reference
 //!   parameter, no reference-cell local in the function) are tracked, and only `int`/`float`/
 //!   `bool` property reads (no ownership to balance).
@@ -49,6 +51,22 @@ impl IrPass for RedundantLoads {
             | Effects::MAY_FATAL
             | Effects::MAY_WARN
             | Effects::MAY_THROW;
+        // Heap values whose reference a consumer may take or drop (a release, a store, any
+        // refcount-changing operation, a terminator): their loads are never shared.
+        let mut consumed: std::collections::HashSet<ValueId> = std::collections::HashSet::new();
+        for inst in &function.instructions {
+            if inst.effects.contains(Effects::REFCOUNT_OP)
+                || matches!(inst.op, Op::Release | Op::StoreLocal | Op::Acquire)
+                || inst.op.name().contains("call")
+            {
+                consumed.extend(inst.operands.iter().copied());
+            }
+        }
+        for block in &function.blocks {
+            if let Some(term) = &block.terminator {
+                consumed.extend(super::liveness::terminator_uses(term));
+            }
+        }
         let mut replace: HashMap<ValueId, ValueId> = HashMap::new();
         let mut dead = Vec::new();
         for block in &function.blocks {
@@ -62,13 +80,17 @@ impl IrPass for RedundantLoads {
                     (Op::LoadLocal, Some(Immediate::LocalSlot(slot)), Some(result)) => {
                         let plain = function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
                             matches!(local.kind, LocalKind::PhpLocal | LocalKind::HiddenTemp)
-                        }) && inst.result_ownership != crate::ir::Ownership::Owned;
+                        }) && inst.result_ownership != crate::ir::Ownership::Owned
+                            && (!matches!(inst.result_type, IrType::Heap(_)) || !consumed.contains(&result));
                         if plain {
                             // Reads of one slot may view it differently (a list as `mixed`): only
                             // an identical view is shared.
                             let view = (inst.result_type, inst.result_php_type.clone());
                             match locals.get(&slot.as_raw()) {
-                                Some((first, first_view)) if *first_view == view => {
+                                Some((first, first_view))
+                                    if *first_view == view
+                                        && (!matches!(inst.result_type, IrType::Heap(_)) || !consumed.contains(first)) =>
+                                {
                                     replace.insert(result, *first);
                                     dead.push(*inst_id);
                                 }
