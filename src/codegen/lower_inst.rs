@@ -3042,6 +3042,39 @@ fn lower_array_fetch_for_write_runtime_call(
     }
 }
 
+/// Lowers `unset($mixed[$key])` through `__rt_mixed_array_unset(cell, key_lo, key_hi)`.
+///
+/// The key is normalized like a hash key (`key_hi == -1` for integer keys); the helper mutates
+/// the (already separated) receiver cell in place and returns nothing.
+fn lower_mixed_array_unset_runtime_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let receiver = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    match ctx.value_php_type(receiver)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {}
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "mixed array unset with receiver PHP type {:?}",
+                other
+            )))
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(receiver, "x0")?;
+        }
+        Arch::X86_64 => {
+            hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(receiver, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_unset");
+    Ok(())
+}
+
 /// Lowers `$mixed[$key] = $value` through the shared boxed Mixed array/hash/stdClass writer.
 fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;

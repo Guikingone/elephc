@@ -735,6 +735,8 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 | `__rt_mixed_property_set` | Unbox a Mixed object payload and dispatch stdClass property writes | boxed `mixed` + property string + boxed value | — |
 | `__rt_mixed_array_get` | Unbox Mixed array/hash/stdClass payloads for `$mixed[$key]` access | boxed `mixed` + normalized key tuple | boxed `mixed` payload |
 | `__rt_mixed_array_set` | Unbox a Mixed indexed-array/hash payload and write a boxed Mixed value for `$mixed[$key] = ...`; consumes the boxed value on success | boxed `mixed` + normalized key tuple + boxed value | — |
+| `__rt_mixed_separate` | Separate-on-write for a boxed Mixed local: return the cell unchanged when unshared, else a `__rt_mixed_from_value` clone after releasing the caller's share (`runtime.mixed.separate`) | owned boxed `mixed` | owned unshared boxed `mixed` |
+| `__rt_mixed_array_unset` | Remove one key from a Mixed array/hash payload in place for `unset($mixed[$key])`; an existing list key promotes the payload to a hash first (`runtime.mixed.array_unset`) | boxed `mixed` + normalized key tuple | — |
 | `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing stdClass as a JSON object | stdClass hash pointer | `x1`/`x2` = JSON string |
 
 ## SPL and iterable routines

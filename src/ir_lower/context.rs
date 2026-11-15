@@ -746,6 +746,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !self.is_adopted_ref_bound_local(name)
     }
 
+    /// Returns true when an in-place write through `name` may separate (clone) its boxed Mixed
+    /// cell and store the unshared cell back with a plain frame-slot store.
+    ///
+    /// Covers ordinary frame locals (including by-value parameters), owned hidden temporaries,
+    /// and function static locals. Reference-bound locals intentionally write through their
+    /// shared cell, and global-storage aliases keep their dedicated store path.
+    pub(crate) fn local_supports_mixed_separation(&self, name: &str) -> bool {
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        match kind {
+            LocalKind::PhpLocal => self.local_uses_plain_slot_storage(name),
+            LocalKind::OwnedTemp | LocalKind::StaticLocal => {
+                !self.uses_global_storage(name, kind) && !self.is_ref_bound_local(name)
+            }
+            _ => false,
+        }
+    }
+
     /// Records that a local received a hoisted entry-block `Op::LocalRefEnsure` (see
     /// `collect_ref_ensure_locals`). `unset_local` gates its re-establish behavior on this.
     pub(crate) fn mark_hoisted_ref_ensure_local(&mut self, name: &str) {

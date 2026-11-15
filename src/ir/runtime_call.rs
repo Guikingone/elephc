@@ -37,6 +37,13 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Separates a boxed Mixed cell before an in-place write: consumes one
+    /// owned cell reference and returns an owned cell that no other owner
+    /// shares (the same cell when its refcount is 1, else a fresh clone).
+    MixedSeparate,
+    /// Removes one key from the array/hash payload of a boxed Mixed cell in place
+    /// (`unset($mixed[$key])`); operands are the cell and the key.
+    MixedArrayUnset,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
@@ -48,6 +55,14 @@ impl RuntimeCallTarget {
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
             RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 2,
+                max_operands: Some(2),
+            }),
+            RuntimeCallTarget::MixedSeparate => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 1,
+                max_operands: Some(1),
+            }),
+            RuntimeCallTarget::MixedArrayUnset => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
@@ -65,6 +80,8 @@ impl RuntimeCallTarget {
     pub fn as_eir(self) -> &'static str {
         match self {
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::MixedSeparate => "mixed.separate",
+            RuntimeCallTarget::MixedArrayUnset => "mixed.array_unset",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
         }

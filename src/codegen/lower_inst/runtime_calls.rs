@@ -27,9 +27,34 @@ pub(super) fn lower(
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
+        RuntimeCallTarget::MixedSeparate => lower_mixed_separate(ctx, inst),
+        RuntimeCallTarget::MixedArrayUnset => super::lower_mixed_array_unset_runtime_call(ctx, inst),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
     }
+}
+
+/// Lowers separate-on-write of a boxed Mixed cell through `__rt_mixed_separate`.
+///
+/// The operand is the cell currently owned by the written local; the helper returns the cell
+/// to store back (unchanged when unshared, a fresh clone otherwise) in the result register.
+fn lower_mixed_separate(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime mixed.separate expected 1 operand, got {}",
+            inst.operands.len(),
+        )));
+    }
+    let cell = expect_operand(inst, 0)?;
+    let actual = ctx.load_value_to_result(cell)?.codegen_repr();
+    if !matches!(actual, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime mixed.separate expected a boxed Mixed cell, got {:?}",
+            actual,
+        )));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_separate");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers a typed `Str -> Str` transform using the internal string result register pair.

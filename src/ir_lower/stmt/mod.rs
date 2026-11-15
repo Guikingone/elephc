@@ -2419,6 +2419,7 @@ fn lower_array_assign_generic(
     } else {
         array_value
     };
+    let array_value = separate_mixed_local_for_write(ctx, array, array_value, span);
     ctx.emit_void(
         op,
         vec![array_value.value, index_value.value, value_value.value],
@@ -3319,8 +3320,13 @@ fn lower_nested_assign_parent(
     }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
+    // A boxed Mixed root local is separated first so the nested write never mutates a cell
+    // still shared with another variable or array slot.
     let receiver = if matches!(array.kind, ExprKind::ArrayAccess { .. }) {
         lower_nested_assign_parent(ctx, array, span)
+    } else if let ExprKind::Variable(name) = &array.kind {
+        let receiver = lower_expr(ctx, array);
+        separate_mixed_local_for_write(ctx, name, receiver, span)
     } else {
         lower_expr(ctx, array)
     };
@@ -3642,6 +3648,44 @@ fn lower_property_parent_fetch_for_write(
 }
 
 /// Lowers `$array[] = value`.
+/// Separates a boxed Mixed local before an in-place write through it (PHP separate-on-write).
+///
+/// `$x = $y`, reading `$e = $m[$k]` from Mixed storage, and by-value `mixed` arguments only
+/// retain the shared boxed cell, while the Mixed write helpers (`__rt_mixed_array_set`,
+/// `__rt_mixed_array_append`, fetch-for-write) mutate that cell in place. Emitting
+/// `runtime.mixed.separate` first replaces a shared cell with an unshared clone (releasing the
+/// local's share of the original) and stores it back into the local, so the other owners keep
+/// observing the unmodified value. Non-Mixed values and locals without plain slot storage
+/// (reference-bound or global aliases, whose writes are meant to be shared) pass through.
+/// Returns a borrowed reload of the (possibly replaced) local cell.
+pub(super) fn separate_mixed_local_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !matches!(
+        value.ir_type,
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union)
+    ) || !ctx.local_supports_mixed_separation(name)
+    {
+        return value;
+    }
+    let ty = ctx.builder.value_php_type(value.value);
+    let separated = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedSeparate)),
+        ty.clone(),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    ctx.store_prepared_mutated_local(name, separated, ty, Some(span));
+    // Hand the write a plain (borrowed) reload of the local: the separated cell is owned by
+    // the slot now, so callers must not treat the write receiver as an owning temporary.
+    ctx.load_local(name, Some(span))
+}
+
 fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let array_value = ctx.load_local(array, Some(span));
     let value = lower_expr(ctx, value);
@@ -3677,6 +3721,7 @@ fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
+    let array_value = separate_mixed_local_for_write(ctx, array, array_value, span);
     ctx.emit_void(
         op,
         vec![array_value.value, value.value],

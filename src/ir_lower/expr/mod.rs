@@ -12,7 +12,7 @@
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
-    MixedNumericOp, Op, Ownership, StrBitKind, Terminator, ValueId,
+    MixedNumericOp, Op, Ownership, RuntimeCallTarget, StrBitKind, Terminator, ValueId,
 };
 use crate::ir_lower::checked_downcast::{
     CalleeLabel, DowncastPosition, emit_checked_downcast, emit_scalar_coercion_refusal_guard,
@@ -6252,6 +6252,7 @@ fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_array_access_has_local_mixed_receiver(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -6282,6 +6283,47 @@ fn unset_array_access_has_local_array_receiver(
         ctx.local_type(name).codegen_repr(),
         PhpType::AssocArray { .. } | PhpType::Array(_)
     )
+}
+
+/// Returns true when an array-access unset receiver is a boxed Mixed/Union local
+/// (`unset($decoded[$key])`), removed through `runtime.mixed.array_unset`.
+fn unset_array_access_has_local_mixed_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    matches!(
+        ctx.local_type(name).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Lowers `unset($mixed[$key])` for a boxed Mixed/Union local.
+///
+/// The local is separated first (a cell shared with another variable or array slot is cloned and
+/// stored back), then `runtime.mixed.array_unset` removes the key from the cell's payload in place.
+fn lower_unset_mixed_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let cell = ctx.load_local(name, Some(array_span));
+    let key = lower_expr(ctx, index);
+    let cell = crate::ir_lower::stmt::separate_mixed_local_for_write(ctx, name, cell, expr.span);
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![cell.value, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedArrayUnset)),
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
+    }
 }
 
 /// Returns true when an array-access unset receiver is a static ArrayAccess object.
@@ -6330,6 +6372,10 @@ fn lower_unset_array_access(
                 }
                 _ => {}
             }
+        }
+        if unset_array_access_has_local_mixed_receiver(ctx, array) {
+            lower_unset_mixed_element(ctx, name, array.span, index, expr);
+            return;
         }
     }
     let synthetic = Expr::new(

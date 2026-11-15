@@ -232,6 +232,24 @@ fn nested_autovivify_uses_typed_fetch_for_write_runtime_call() {
     );
 }
 
+/// Verifies in-place writes through a boxed Mixed local separate the cell first, and that
+/// `unset($mixed[$key])` lowers to the typed Mixed unset runtime call.
+#[test]
+fn mixed_local_writes_separate_shared_cell_first() {
+    let module = lower_source(
+        "<?php function mk(): mixed { return [1]; } $y = mk(); $x = $y; $x[] = 2; $x[0] = 3; unset($x[0]); echo count($y);",
+    );
+    let text = print_module(&module);
+    assert!(
+        text.matches("runtime.mixed.separate").count() >= 3,
+        "expected a separation before every Mixed write: {text}"
+    );
+    assert!(
+        text.contains("runtime.mixed.array_unset"),
+        "missing typed Mixed unset runtime call: {text}"
+    );
+}
+
 /// Verifies unary string transforms carry typed runtime identities rather than PHP names.
 #[test]
 fn unary_string_builtins_use_typed_runtime_calls() {
