@@ -13,6 +13,8 @@
 //!   `ArrayAccess`/string/scalar runtime dispatch).
 //! - Nested appends through `mixed` elements must stay amortized O(1); that is asserted through
 //!   heap-debug allocation counts rather than timings.
+//! - Key writes through a concrete-array prefix into a `mixed` element (`$d[0][1][0] = $v`) are
+//!   covered for copy isolation across list/hash parents, depths 3 and 4, refs, and properties.
 //! - Heap-debug variants build Mixed values without `json_decode()` and assert a clean leak
 //!   summary, so the separation's clone/release pairs stay balanced.
 
@@ -314,4 +316,114 @@ NULL
 bool(false)
 {"0":1,"2":3}{"b":2}
 "#);
+}
+
+/// Key writes through a concrete-array prefix into a boxed `mixed` element
+/// (`$d[0][1][0] = $v` on `array<array<mixed>>`, depth 3 and 4, list and hash parents, string
+/// keys, by-value parameters, main scope and functions) never leak into copies of the root, and
+/// typed hash entries are written through instead of into a detached box.
+#[test]
+fn test_typed_prefix_mixed_key_writes_keep_copies_independent() {
+    assert_heap_clean(
+        r#"<?php
+function mk(): mixed { return ['a' => ['b' => [1, 2]], 'l' => [[1, [2, 3]]]]; }
+// main scope, typed list root, depth 3 and 4
+$c = [[1, [2, 3]]]; $d = $c; $d[0][1][0] = 9; echo json_encode($c), json_encode($d), "\n";
+$c = [[1, [2, [4, 5]]]]; $d = $c; $d[0][1][1][0] = 9; echo json_encode($c), json_encode($d), "\n";
+// typed hash root with string keys
+$h = ['x' => ['y' => 1, 'z' => [1, 2]]]; $g = $h; $g['x']['z'][1] = 7; $g['x']['z']['k'] = 8; echo json_encode($h), json_encode($g), "\n";
+// hash of lists
+$h = ['x' => [1, [2]]]; $g = $h; $g['x'][1][0] = 5; echo json_encode($h), json_encode($g), "\n";
+// list of hashes
+$l = [['p' => 1, 'q' => ['r' => 2]]]; $m = $l; $m[0]['q']['r'] = 3; $m[0]['q']['s'] = 4; echo json_encode($l), json_encode($m), "\n";
+// depth 2 through mixed root, mixed copies
+$x = mk(); $y = $x; $y['a']['b'][0] = 9; $y['l'][0][1][0] = 8; echo json_encode($x), json_encode($y), "\n";
+// element read then key write
+$c = [[1, [2, 3]]]; $e = $c[0]; $c[0][1][0] = 6; echo json_encode($e), json_encode($c), "\n";
+// inside a function with by-value params
+function f(array $p, mixed $q) { $p[0][1][0] = 'p'; $q['a']['b'][1] = 'q'; return json_encode($p) . json_encode($q); }
+$p = [[1, [2, 3]]]; $q = mk(); echo f($p, $q), json_encode($p), json_encode($q), "\n";
+// properties
+class H { public array $d; function __construct() { $this->d = [[1, [2, 3]]]; } }
+$o = new H; $snap = $o->d; $o->d[0][1][0] = 'o'; echo json_encode($snap), json_encode($o->d), "\n";
+// unshared loop stays correct
+$u = [[1, [0, 0]]];
+for ($i = 0; $i < 5; $i++) { $u[0][1][0] = $i; $u[0][1][1] += $i; }
+echo json_encode($u), "\n";
+function inner() { $c = [[1, [2, 3]]]; $d = $c; $d[0][1][0] = 9; $d[0][1]['s'] = 's'; return json_encode($c) . json_encode($d); }
+echo inner(), "\n";
+"#,
+        r#"[[1,[2,3]]][[1,[9,3]]]
+[[1,[2,[4,5]]]][[1,[2,[9,5]]]]
+{"x":{"y":1,"z":[1,2]}}{"x":{"y":1,"z":{"0":1,"1":7,"k":8}}}
+{"x":[1,[2]]}{"x":[1,[5]]}
+[{"p":1,"q":{"r":2}}][{"p":1,"q":{"r":3,"s":4}}]
+{"a":{"b":[1,2]},"l":[[1,[2,3]]]}{"a":{"b":[9,2]},"l":[[1,[8,3]]]}
+[1,[2,3]][[1,[6,3]]]
+[[1,["p",3]]]{"a":{"b":[1,"q"]},"l":[[1,[2,3]]]}[[1,[2,3]]]{"a":{"b":[1,2]},"l":[[1,[2,3]]]}
+[[1,[2,3]]][[1,["o",3]]]
+[[1,[4,10]]]
+[[1,[2,3]]][[1,{"0":9,"1":3,"s":"s"}]]
+"#,
+    );
+}
+
+/// Missing intermediate keys of a typed-prefix nested write autovivify silently (hash and list
+/// parents), as PHP does in write context.
+#[test]
+fn test_typed_prefix_mixed_key_writes_autovivify_missing_levels() {
+    assert_heap_clean(
+        r#"<?php
+function run() {
+    $h = ['x' => ['y' => 1, 'z' => [1, 2]]];
+    $h['x']['w']['a'] = 5;
+    $h['n']['z'][0] = 6;
+    echo json_encode($h), "\n";
+    $l = [['p' => 1, 'q' => ['r' => 2]]];
+    $l[0]['m']['k'] = 3;
+    echo json_encode($l), "\n";
+}
+run();
+"#,
+        r#"{"x":{"y":1,"z":[1,2],"w":{"a":5}},"n":{"z":[6]}}
+[{"p":1,"q":{"r":2},"m":{"k":3}}]
+"#,
+    );
+}
+
+/// Reference-bound roots, typed property roots, and Mixed-in-hash chains keep copies independent
+/// for depth-3 key writes.
+#[test]
+fn test_typed_prefix_mixed_key_writes_through_refs_and_properties() {
+    assert_heap_clean(
+        r#"<?php
+$c = [[1, [2, 3]]]; $d = $c; $r = &$d; $d[0][1][0] = 9; echo json_encode($c), json_encode($d), json_encode($r), "\n";
+class P { public array $d = []; }
+$o = new P; $o->d = [['k' => [1, 2]]]; $snap = $o->d; $o->d[0]['k'][1] = 'p'; echo json_encode($snap), json_encode($o->d), "\n";
+$m = ['a' => [[1, ['b' => 2]]]]; $n = $m; $n['a'][0][1]['b'] = 3; $n['a'][0][1]['c'] = 4; echo json_encode($m), json_encode($n), "\n";
+"#,
+        r#"[[1,[2,3]]][[1,[9,3]]][[1,[9,3]]]
+[{"k":[1,2]}][{"k":[1,"p"]}]
+{"a":[[1,{"b":2}]]}{"a":[[1,{"b":3,"c":4}]]}
+"#,
+    );
+}
+
+/// Repeated key writes into an unshared typed-prefix chain mutate it in place and stay heap clean
+/// (the detach placeholders and separations are balanced on every iteration).
+#[test]
+fn test_typed_prefix_mixed_key_write_loops_are_heap_clean() {
+    assert_heap_clean(
+        r#"<?php
+function run() {
+    $d = [[1, [0]]];
+    for ($i = 0; $i < 1000; $i++) { $d[0][1][$i] = $i; }
+    $h = ['x' => ['z' => [0]]];
+    for ($i = 0; $i < 1000; $i++) { $h['x']['z'][$i] = $i; }
+    echo count($d[0][1]), ",", count($h['x']['z']);
+}
+run();
+"#,
+        r#"1000,1000"#,
+    );
 }

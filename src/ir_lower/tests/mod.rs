@@ -250,6 +250,21 @@ fn mixed_local_writes_separate_shared_cell_first() {
     );
 }
 
+/// Verifies a key write through a concrete-array prefix into a Mixed element reads the Mixed cell
+/// for write (silent read, detached from its parent, then separated) instead of mutating a cell
+/// still shared with the parent through a plain +1 read.
+#[test]
+fn typed_prefix_mixed_key_write_detaches_and_separates_the_cell() {
+    let module = lower_source(
+        "<?php function run() { $c = [[1, [2, 3]]]; $d = $c; $d[0][1][0] = 9; echo count($c); } run();",
+    );
+    let text = print_module(&module);
+    assert!(
+        text.contains("array_get_silent") && text.contains("runtime.mixed.separate"),
+        "expected a detached, separated Mixed cell: {text}"
+    );
+}
+
 /// Verifies unary string transforms carry typed runtime identities rather than PHP names.
 #[test]
 fn unary_string_builtins_use_typed_runtime_calls() {

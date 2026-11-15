@@ -3073,6 +3073,12 @@ fn lower_nested_array_assign(
         return;
     }
     if let Some((name, chain)) = nested_local_chain(target) {
+        if let Some(boundary) = typed_prefix_mixed_chain_boundary(ctx, name, &chain) {
+            let indices: Vec<LoweredValue> = chain.iter().map(|e| lower_expr(ctx, e)).collect();
+            let value_val = lower_expr(ctx, value);
+            lower_typed_prefix_mixed_nested_assign(ctx, name, &indices, value_val, boundary, span);
+            return;
+        }
         let root_is_ref_bound = ctx.is_ref_bound_local(name);
         if root_is_ref_bound || concrete_local_nested_chain(ctx, name, &chain) {
             // Lower every index expression once and reuse the SSA value for both the descent read
@@ -3291,6 +3297,299 @@ fn lower_widened_nested_local_assign(
     if ctx.value_is_owning_temporary(parent) {
         crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
     }
+}
+
+/// Returns the depth of the concrete-container prefix of a frame local's nested write chain whose
+/// next element is a boxed `Mixed` value, or `None` when the chain has another shape.
+///
+/// The result `b` means `$name[k0]..[k(b-2)]` are concrete arrays/hashes (indexed levels written
+/// with integer keys, associative levels with integer or string keys), `$name[k0]..[k(b-1)]` is a
+/// `Mixed` element, and at least one more key follows it (`b < chain.len()`). Only prefixes of two
+/// or more concrete levels qualify: a `Mixed`-element root (`b == 1`) already writes through the
+/// fetch-for-write cells of `lower_nested_assign_parent`, and fully concrete chains use the
+/// concrete write-back lowering.
+fn typed_prefix_mixed_chain_boundary(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    chain: &[&Expr],
+) -> Option<usize> {
+    // Static locals and global aliases keep their dedicated storage paths.
+    if !ctx.local_is_frame_php_local(name) {
+        return None;
+    }
+    let mut container_ty = ctx.local_type(name).codegen_repr();
+    for (position, key) in chain.iter().enumerate() {
+        let key_ty = nested_index_static_type(ctx, key);
+        let element_ty = match container_ty {
+            PhpType::Array(element_ty) if matches!(key_ty, PhpType::Int | PhpType::Bool) => {
+                element_ty.codegen_repr()
+            }
+            PhpType::AssocArray { value, .. }
+                if matches!(key_ty, PhpType::Int | PhpType::Bool | PhpType::Str) =>
+            {
+                value.codegen_repr()
+            }
+            _ => return None,
+        };
+        let boundary = position + 1;
+        if element_ty == PhpType::Mixed {
+            return (boundary >= 2 && boundary < chain.len()).then_some(boundary);
+        }
+        if !matches!(element_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return None;
+        }
+        container_ty = element_ty;
+    }
+    None
+}
+
+/// Reads the concrete array/hash child at `key` into the owned hidden temporary `temp_name` for a
+/// nested write, autovivifying an empty child of `element_ty` when the key is missing (PHP creates
+/// the intermediate array silently in write context). Associative parents reuse the existing
+/// `HashIsset`/`HashGet`/`HashNew` reader; indexed parents check `ArrayIsset` the same way so an
+/// out-of-range index never reads past the list.
+fn read_concrete_child_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    container: LoweredValue,
+    key: LoweredValue,
+    temp_name: &str,
+    element_ty: &PhpType,
+    span: Span,
+) {
+    if container.ir_type != IrType::Heap(IrHeapKind::Array) {
+        read_nested_element_into_owned_temp(ctx, container, key, temp_name, element_ty.clone(), span);
+        return;
+    }
+    let key_int = coerce_to_int_at_span(ctx, key, Some(span));
+    let exists = ctx.emit_value(
+        Op::ArrayIsset,
+        vec![container.value, key_int.value],
+        None,
+        PhpType::Bool,
+        Op::ArrayIsset.default_effects(),
+        Some(span),
+    );
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let present_block = ctx.builder.create_named_block("nested_w.present", Vec::new());
+    let vivify_block = ctx.builder.create_named_block("nested_w.vivify", Vec::new());
+    let merge = ctx.builder.create_named_block("nested_w.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: exists.value,
+        then_target: present_block,
+        then_args: Vec::new(),
+        else_target: vivify_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(present_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let existing = ctx.emit_value(
+        Op::ArrayGet,
+        vec![container.value, key_int.value],
+        None,
+        element_ty.clone(),
+        Op::ArrayGet.default_effects(),
+        Some(span),
+    );
+    store_value_into_temp(ctx, temp_name, element_ty.clone(), existing, span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(vivify_block);
+    ctx.restore_initialized_slots(split_initialized);
+    let vivified = nested_detach_placeholder(ctx, element_ty, span);
+    store_value_into_temp(ctx, temp_name, element_ty.clone(), vivified, span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+}
+
+/// Builds the placeholder stored into a parent slot while its child is detached for writing.
+fn nested_detach_placeholder(
+    ctx: &mut LoweringContext<'_, '_>,
+    element_ty: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    let op = match element_ty.codegen_repr() {
+        PhpType::Array(_) => Op::ArrayNew,
+        PhpType::AssocArray { .. } => Op::HashNew,
+        _ => return emit_null_value(ctx, Some(span)),
+    };
+    ctx.emit_value(
+        op,
+        Vec::new(),
+        Some(Immediate::Capacity(0)),
+        element_ty.clone(),
+        op.default_effects(),
+        Some(span),
+    )
+}
+
+/// Detaches the child at `key` from a concrete `container` by storing a placeholder in its slot.
+///
+/// The container is copy-on-write separated first when shared (and published back to its source
+/// local or temporary), and the slot's reference to the child is released, so the hidden temporary
+/// that read the child becomes its only owner unless another variable or array still holds it.
+/// The key operand is not released here: the write-back reuses it.
+fn detach_nested_child(
+    ctx: &mut LoweringContext<'_, '_>,
+    container: LoweredValue,
+    container_ty: &PhpType,
+    key: LoweredValue,
+    element_ty: &PhpType,
+    span: Span,
+) {
+    let placeholder = nested_detach_placeholder(ctx, element_ty, span);
+    let placeholder = match container.ir_type {
+        IrType::Heap(IrHeapKind::Hash) => {
+            ctx.emit_void(
+                Op::HashSet,
+                vec![container.value, key.value, placeholder.value],
+                None,
+                Op::HashSet.default_effects(),
+                Some(span),
+            );
+            placeholder
+        }
+        _ => {
+            let key_int = coerce_to_int_at_span(ctx, key, Some(span));
+            let placeholder =
+                coerce_indexed_array_set_value(ctx, container_ty, placeholder, Some(span));
+            ctx.emit_void(
+                Op::ArraySet,
+                vec![container.value, key_int.value, placeholder.value],
+                None,
+                Op::ArraySet.default_effects(),
+                Some(span),
+            );
+            placeholder
+        }
+    };
+    // Same discipline as `write_nested_element_in_place`: releasing an owning operand right after
+    // the set makes the setter retain its own reference instead of stealing this one.
+    if ctx.value_is_owning_temporary(placeholder) {
+        crate::ir_lower::ownership::release_if_owned(ctx, placeholder, Some(span));
+    }
+}
+
+/// Lowers a nested write through a concrete-container prefix into a boxed `Mixed` element
+/// (`$rows[0][1][0] = $v` on `array<array<mixed>>`, `$map['k']['list'][1] = $v`, ...).
+///
+/// Reading the prefix with ordinary +1 element reads left every child shared with its parent, so
+/// the boxed-Mixed setter mutated a cell still visible through copies of the root (and typed hash
+/// entries were boxed into detached cells, dropping the write). This mirrors PHP's
+/// fetch-for-write instead:
+///
+/// 1. Each concrete level is read into an owned hidden temporary and then detached from its parent
+///    (a placeholder is stored in the slot, copy-on-write separating the parent when shared), so
+///    the temporary holds the child's only reference unless another owner really shares it.
+/// 2. The `Mixed` element is detached the same way and separated (`runtime.mixed.separate`),
+///    which clones the cell only when it is still shared.
+/// 3. The remaining keys write through fetch-for-write cells and the boxed-Mixed setter.
+/// 4. Every level is written back into its parent, ending at the root local.
+///
+/// Unshared chains are mutated in place, so repeated writes stay O(1); shared ones are copied once
+/// by the ordinary copy-on-write splits, leaving every copy of the root unchanged.
+fn lower_typed_prefix_mixed_nested_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    indices: &[LoweredValue],
+    value: LoweredValue,
+    boundary: usize,
+    span: Span,
+) {
+    let depth = indices.len();
+    let head = ctx.load_local(name, Some(span));
+    let head_ty = ctx.builder.value_php_type(head.value).codegen_repr();
+
+    // 1. Descend the concrete levels 1..boundary-1 and the Mixed element at `boundary`, detaching
+    //    each child from its parent right after reading it.
+    let mut temp_names: Vec<String> = Vec::with_capacity(boundary);
+    let mut temp_types: Vec<PhpType> = Vec::with_capacity(boundary);
+    let mut container = head;
+    let mut container_ty = head_ty.clone();
+    for level in 0..boundary {
+        let key = indices[level];
+        let element_ty = reference_element_type(&container_ty);
+        let temp_name = ctx.declare_owned_hidden_temp(element_ty.clone());
+        if level + 1 == boundary {
+            let (read_op, read_key) = match container.ir_type {
+                IrType::Heap(IrHeapKind::Hash) => (Op::HashGetSilent, key),
+                _ => (Op::ArrayGetSilent, coerce_to_int_at_span(ctx, key, Some(span))),
+            };
+            let element = ctx.emit_value(
+                read_op,
+                vec![container.value, read_key.value],
+                None,
+                PhpType::Mixed,
+                read_op.default_effects(),
+                Some(span),
+            );
+            store_value_into_temp(ctx, &temp_name, PhpType::Mixed, element, span);
+        } else {
+            read_concrete_child_for_write(ctx, container, key, &temp_name, &element_ty, span);
+        }
+        let parent = if level == 0 {
+            ctx.load_local(name, Some(span))
+        } else {
+            ctx.load_local(&temp_names[level - 1], Some(span))
+        };
+        detach_nested_child(ctx, parent, &container_ty, key, &element_ty, span);
+        temp_names.push(temp_name);
+        temp_types.push(element_ty.clone());
+        container = ctx.load_local(temp_names.last().unwrap(), Some(span));
+        container_ty = element_ty;
+    }
+
+    // 2. Separate the Mixed cell when another owner still shares it.
+    let cell_temp = temp_names[boundary - 1].clone();
+    let cell = ctx.load_local(&cell_temp, Some(span));
+    let mut parent = separate_mixed_local_for_write(ctx, &cell_temp, cell, span);
+    let mut parent_is_temp = true;
+
+    // 3. Remaining keys: fetch-for-write through the cells, then the boxed-Mixed leaf setter.
+    for key in &indices[boundary..depth - 1] {
+        let next = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![parent.value, key.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+            PhpType::Mixed,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, *key, span);
+        if !parent_is_temp && ctx.value_is_owning_temporary(parent) {
+            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+        }
+        parent = next;
+        parent_is_temp = false;
+    }
+    let leaf_key = indices[depth - 1];
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![parent.value, leaf_key.value, value.value],
+        None,
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    release_persisted_string_operand(ctx, leaf_key, span);
+    release_retained_nested_write_operand(ctx, value, span);
+    if !parent_is_temp && ctx.value_is_owning_temporary(parent) {
+        crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+    }
+
+    // 4. Write every level back into its parent, deepest first, ending at the root local.
+    //    `write_nested_element_in_place` releases each temporary's share through the same load it
+    //    passed to the setter, so the temporary slot is only cleared afterwards.
+    for level in (1..boundary).rev() {
+        let child = ctx.load_local(&temp_names[level], Some(span));
+        let parent = ctx.load_local(&temp_names[level - 1], Some(span));
+        let parent_ty = temp_types[level - 1].clone();
+        write_nested_element_in_place(ctx, parent, parent_ty, indices[level], child, span);
+        ctx.clear_owned_hidden_temp(&temp_names[level], Some(span));
+    }
+    let child = ctx.load_local(&temp_names[0], Some(span));
+    let head = ctx.load_local(name, Some(span));
+    write_nested_element_in_place(ctx, head, head_ty, indices[0], child, span);
+    ctx.clear_owned_hidden_temp(&temp_names[0], Some(span));
 }
 
 /// Walks an `ArrayAccess` chain to its root local and returns outermost-first indices.

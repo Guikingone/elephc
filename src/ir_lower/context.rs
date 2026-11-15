@@ -746,6 +746,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !self.is_adopted_ref_bound_local(name)
     }
 
+    /// Returns true when `name` is an ordinary per-function PHP local (including by-value
+    /// parameters and reference-bound locals), as opposed to a static local, a global alias, or a
+    /// hidden temporary.
+    pub(crate) fn local_is_frame_php_local(&self, name: &str) -> bool {
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::PhpLocal && !self.uses_global_storage(name, kind)
+    }
+
     /// Returns true when an in-place write through `name` may separate (clone) its boxed Mixed
     /// cell and store the unshared cell back with a plain frame-slot store.
     ///
