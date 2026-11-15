@@ -46,6 +46,26 @@ pub(crate) fn heap_bin_ceil_index_table() -> Vec<u8> {
         .collect()
 }
 
+/// Entries of the 8-byte-granular allocation lookup table (`(size - 1) >> 3` for 8..=4096).
+pub(crate) const HEAP_BIN_ALLOC_LOOKUP_LEN: usize = HEAP_BIN_MAX_PAYLOAD / 8;
+
+/// `_heap_bin_alloc_offset[i]`: the bin-head byte offset of the smallest class holding
+/// `8 * (i + 1)` bytes, indexed by `(size - 1) >> 3` for any binned request. Every class is a
+/// multiple of 8 (and above 64 bytes a multiple of 64), so rounding the request up to 8 bytes
+/// never changes its class.
+pub(crate) fn heap_bin_alloc_offset_table() -> Vec<u8> {
+    (0..HEAP_BIN_ALLOC_LOOKUP_LEN)
+        .map(|i| {
+            let need = 8 * (i + 1);
+            let index = HEAP_BIN_CLASS_SIZES[..HEAP_BIN_COUNT]
+                .iter()
+                .position(|&size| size >= need)
+                .unwrap_or(HEAP_BIN_COUNT - 1);
+            (index * 8) as u8
+        })
+        .collect()
+}
+
 /// `_heap_bin_floor_index[k]`: the largest class not above `64 * k` bytes, indexed by
 /// `size >> 6` for a freed block of at least 64 bytes.
 pub(crate) fn heap_bin_floor_index_table() -> Vec<u8> {
@@ -78,17 +98,12 @@ pub(crate) fn emit_bin_offset_aarch64(emitter: &mut Emitter, size: &str, out: &s
 }
 
 /// Emits x86_64 code computing the bin-head byte offset of the smallest class that holds a
-/// request of `size` (8..=4096) bytes: `(size - 1) >> 3` up to 64, else the ceiling table.
-pub(crate) fn emit_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str, scratch2: &str) {
+/// request of `size` (8..=4096) bytes through the `_heap_bin_alloc_offset` table.
+pub(crate) fn emit_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str) {
     emitter.instruction(&format!("lea {}, [{} - 1]", out, size));                  // size - 1 so exact class sizes stay in their own class
-    emitter.instruction(&format!("mov {}, {}", scratch2, out));                    // copy size - 1
-    emitter.instruction(&format!("shr {}, 6", scratch2));                          // 64-byte granule index of the request
-    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_ceil_index");
-    emitter.instruction(&format!("movzx {}, BYTE PTR [{} + {}]", scratch, scratch, scratch2)); // class index for requests above 64 bytes
-    emitter.instruction(&format!("shr {}, 3", out));                               // 8-byte-step class index for requests up to 64 bytes
-    emitter.instruction(&format!("cmp {}, 64", size));                             // is the request above the 8-byte-step classes?
-    emitter.instruction(&format!("cmova {}, {}", out, scratch));                   // pick the table class for larger requests
-    emitter.instruction(&format!("shl {}, 3", out));                               // bin-head byte offset = index * 8
+    emitter.instruction(&format!("shr {}, 3", out));                               // 8-byte granule index of the request
+    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_alloc_offset");
+    emitter.instruction(&format!("movzx {}, BYTE PTR [{} + {}]", out, scratch, out)); // bin-head byte offset of the request's class
 }
 
 /// Emits AArch64 code computing the bin-head byte offset of the largest class a freed block of
@@ -390,9 +405,8 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_start");
 
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before consuming cached free-list state
-    emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this allocation path?
-    emitter.instruction("jz __rt_heap_alloc_debug_checked");                    // skip the validator when heap-debug mode is disabled
+    emitter.instruction("cmp QWORD PTR [r8], 0");                               // is heap-debug validation enabled for this allocation path?
+    emitter.instruction("je __rt_heap_alloc_debug_checked");                    // skip the validator when heap-debug mode is disabled
     emitter.instruction("sub rsp, 16");                                         // reserve one aligned stack slot to preserve the requested allocation size
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the requested allocation size across the nested validator call
     emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached small bins before consuming them
@@ -403,7 +417,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     // -- try small segregated bins before walking the general free list --
     emitter.instruction(&format!("cmp rax, {}", HEAP_BIN_MAX_PAYLOAD));         // does this request fit within the segregated bin classes?
     emitter.instruction("ja __rt_heap_alloc_fl_start");                         // larger payloads still use the general ordered free list
-    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11", "r10");                 // r8 = byte offset of the request's size-class bin
+    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11");                 // r8 = byte offset of the request's size-class bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_bin_sizes");
     emitter.instruction("mov rax, QWORD PTR [r9 + r8]");                        // round the request up to its class size so every cached block in the bin fits
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
@@ -421,7 +435,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- bump tail full: search larger classes, then the general free list --
     emitter.label("__rt_heap_alloc_small_rescan");
-    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11", "r10");                 // r8 = byte offset of the request's size-class bin
+    emit_bin_offset_x86_64(emitter, "rax", "r8", "r11");                 // r8 = byte offset of the request's size-class bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
     emitter.instruction("add r9, r8");                                          // r9 = address of the first candidate small-bin head slot
     emitter.label("__rt_heap_alloc_small_bin_loop");
@@ -544,14 +558,13 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11d, DWORD PTR [r10]");                           // load the finalized payload size from the allocated block header
     emitter.instruction("add r11, 16");                                         // include the uniform 16-byte header in the live-footprint accounting
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_live");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current live-byte count before adding this block footprint
-    emitter.instruction("add r9, r11");                                         // add this block's payload-plus-header footprint to the live-byte count
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated live-byte count after the allocation
+    emitter.instruction("add r11, QWORD PTR [r8]");                             // live bytes after this allocation
+    emitter.instruction("mov QWORD PTR [r8], r11");                             // store the updated live-byte count
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_peak");
-    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the previous live-byte peak watermark before comparing against the new total
-    emitter.instruction("cmp r9, rcx");                                         // did this allocation raise the peak live-byte watermark?
-    emitter.instruction("cmova rcx, r9");                                       // keep the larger of the current live total and the previous peak watermark
-    emitter.instruction("mov QWORD PTR [r8], rcx");                             // store the updated peak live-byte watermark back into runtime state
+    emitter.instruction("cmp r11, QWORD PTR [r8]");                             // did this allocation raise the peak live-byte watermark?
+    emitter.instruction("jbe __rt_heap_alloc_count_done");                      // no: the watermark stands
+    emitter.instruction("mov QWORD PTR [r8], r11");                             // record the new peak live-byte watermark
+    emitter.label("__rt_heap_alloc_count_done");
     emitter.instruction("ret");                                                 // return the owned user payload pointer in rax
 
     // -- no reusable block found; bump allocate from the heap buffer --

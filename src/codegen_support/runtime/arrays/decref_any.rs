@@ -111,22 +111,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: decref_any ---");
     emitter.label_global("__rt_decref_any");
 
-    emitter.instruction("test rax, rax");                                       // skip null heap-backed payload pointers so non-values do not participate in x86_64 release traffic
-    emitter.instruction("jz __rt_decref_any_done");                             // null payloads own no heap storage and therefore need no release work
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("cmp rax, r10");                                        // reject values below the managed x86_64 heap before reading a header word
-    emitter.instruction("jb __rt_decref_any_done");                             // scalar integers and static data below the heap own no runtime storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent
-    emitter.instruction("add r11, r10");                                        // compute the managed heap end address
-    emitter.instruction("cmp rax, r11");                                        // is the candidate pointer outside the live heap window?
-    emitter.instruction("jae __rt_decref_any_done");                            // non-heap values above the managed heap own no runtime storage
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
-    emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker
-    emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
-    emitter.instruction("jne __rt_decref_any_done");                            // foreign/static pointers must be ignored by the uniform x86_64 release dispatcher
-    emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for the concrete release dispatch
+    super::emit_x86_64_heap_owner_guard(emitter, "__rt_decref_any_done", 0);
+    emitter.instruction("movzx r10d, BYTE PTR [rax - 8]");                      // low byte of the uniform header word is the heap kind tag
     emitter.instruction("cmp r10, 1");                                          // does this heap-backed payload own a persisted string buffer?
     emitter.instruction("je __rt_decref_any_string");                           // strings release through heap_free on x86_64
     emitter.instruction("cmp r10, 2");                                          // does this heap-backed payload point at an indexed array?
