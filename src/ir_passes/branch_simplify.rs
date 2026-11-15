@@ -1,6 +1,7 @@
 //! Purpose:
 //! Branch simplification over EIR functions: fold constant-condition `CondBr`
-//! and `Switch` terminators to unconditional `Br`, thread empty forwarding
+//! and `Switch` terminators to unconditional `Br`, thread constant arguments
+//! through join blocks that only branch on them, thread empty forwarding
 //! blocks, and neutralize blocks that become unreachable.
 //!
 //! Called from:
@@ -48,6 +49,7 @@ impl IrPass for BranchSimplify {
         }
         let mut changed = false;
         changed |= fold_constant_terminators(function);
+        changed |= thread_constant_param_branches(function);
         changed |= thread_empty_forwarding_blocks(function);
         changed |= neutralize_unreachable_blocks(function);
         changed
@@ -131,6 +133,103 @@ fn fold_constant_terminators(function: &mut Function) -> bool {
             function.blocks[index].terminator = Some(new_term);
             changed = true;
         }
+    }
+    changed
+}
+
+/// Threads `Br` edges that pass a constant into a block that only branches on it (or only
+/// forwards its parameters to another block).
+///
+/// A join block whose instructions are all `nop` and whose terminator is a `CondBr` on one of
+/// its own parameters (the merged value of a short-circuit `&&`/`||`, say) decides statically
+/// for every predecessor that passes a constant for that parameter: such a predecessor jumps
+/// straight to the taken successor, with the successor's arguments rewritten from the join's
+/// parameters to the values the predecessor passed. Join parameters used anywhere but the
+/// join's own terminator keep the edge, and values the join forwards unchanged dominate the
+/// join (it defines nothing), hence the predecessor too. Returns whether any edge changed.
+fn thread_constant_param_branches(function: &mut Function) -> bool {
+    let mut used_outside: HashMap<BlockId, HashSet<ValueId>> = HashMap::new();
+    let param_owner: HashMap<ValueId, BlockId> = function
+        .blocks
+        .iter()
+        .flat_map(|block| block.params.iter().map(move |param| (*param, block.id)))
+        .collect();
+    let mut note_use = |value: ValueId, user: Option<BlockId>| {
+        if let Some(owner) = param_owner.get(&value) {
+            if user != Some(*owner) {
+                used_outside.entry(*owner).or_default().insert(value);
+            }
+        }
+    };
+    for block in &function.blocks {
+        for inst_id in &block.instructions {
+            if let Some(inst) = function.instruction(*inst_id) {
+                for operand in &inst.operands {
+                    note_use(*operand, None);
+                }
+            }
+        }
+        if let Some(term) = &block.terminator {
+            for value in super::liveness::terminator_uses(term) {
+                note_use(value, Some(block.id));
+            }
+        }
+    }
+    let mut changed = false;
+    for index in 0..function.blocks.len() {
+        let Some(Terminator::Br { target: join_id, args }) = function.blocks[index].terminator.clone() else {
+            continue;
+        };
+        if join_id == function.blocks[index].id {
+            continue;
+        }
+        let Some(join) = function.block(join_id) else {
+            continue;
+        };
+        if join.params.is_empty()
+            || join.params.len() != args.len()
+            || !join
+                .instructions
+                .iter()
+                .all(|inst_id| function.instruction(*inst_id).map(|inst| inst.op == Op::Nop).unwrap_or(true))
+        {
+            continue;
+        }
+        let outside = used_outside.get(&join_id);
+        if join.params.iter().any(|param| outside.is_some_and(|set| set.contains(param))) {
+            continue;
+        }
+        let (target, target_args) = match &join.terminator {
+            Some(Terminator::CondBr { cond, then_target, then_args, else_target, else_args }) => {
+                let Some(position) = join.params.iter().position(|param| param == cond) else {
+                    continue;
+                };
+                let Some(taken) = const_truthiness(function, args[position]) else {
+                    continue;
+                };
+                if taken { (*then_target, then_args) } else { (*else_target, else_args) }
+            }
+            // A pure parameter-forwarding join: skip it when a constant flows through it, so
+            // the next round can decide the branch it feeds.
+            Some(Terminator::Br { target, args: forwarded })
+                if args.iter().any(|value| const_truthiness(function, *value).is_some()) =>
+            {
+                (*target, forwarded)
+            }
+            _ => continue,
+        };
+        if target == join_id {
+            continue;
+        }
+        let rewritten: Vec<ValueId> = target_args
+            .iter()
+            .map(|value| match join.params.iter().position(|param| param == value) {
+                Some(param_index) => args[param_index],
+                None => *value,
+            })
+            .collect();
+        function.blocks[index].terminator = Some(Terminator::Br { target, args: rewritten });
+        changed = true;
     }
     changed
 }

@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- mem2reg also promotes scalar lowering temps (the merged value of `&&`/`||`), and branch simplification threads edges that pass a constant into a join block that only branches on it or forwards it, so short-circuit conditions jump straight to their target.
 - The integer-range analysis bounds `++` counters of counted `for` loops (`for ($i = A; $i < B; $i++)` with `$i` and `B` unchanged in the body) by the loop's trip count, so a plain `$count++` keeps a native int instead of a boxed int-or-float value whenever it provably cannot overflow.
 - Mixed ordered and loose-equality comparisons leave flags on their int fast path (one native compare instead of materializing a three-way sign), and the int operand probe loads the right operand straight into its register.
 - `json_decode` boxes each decoded array/object with `__rt_mixed_box_raw`, adopting the decoder's reference instead of retaining then releasing it.

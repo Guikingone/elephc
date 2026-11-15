@@ -68,7 +68,8 @@ impl IrPass for DeadStore {
 /// Returns the set of local slots that are safe to reason about for dead store
 /// elimination.
 ///
-/// A slot qualifies when it is an ordinary `PhpLocal`, its storage type needs no
+/// A slot qualifies when it is an ordinary `PhpLocal` (or a lowering `HiddenTemp`, such as
+/// the result slot of a short-circuit `&&`/`||`), its storage type needs no
 /// lifetime tracking (so no `acquire`/`release` ownership ops surround its
 /// stores), and every instruction naming the slot is a plain `load_local` or
 /// `store_local`. Any other slot-naming op (ref-cell promote/alias/release,
@@ -89,7 +90,7 @@ pub(super) fn eligible_slots_with(
     let mut eligible: HashSet<LocalSlotId> = function
         .locals
         .iter()
-        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| matches!(local.kind, LocalKind::PhpLocal | LocalKind::HiddenTemp))
         .filter(|local| !Ownership::php_type_needs_lifetime_tracking(&local.php_type))
         .map(|local| local.id)
         .collect();
