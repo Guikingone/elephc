@@ -128,10 +128,23 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 40");                                         // advance the cursor to the first hash entry after the fixed header
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the requested capacity to determine how many entry headers to clear
 
+    emitter.instruction("xor r9d, r9d");                                        // zero source for the occupied markers
+    emitter.instruction("cmp r11, 4");                                          // capacities are powers of two: below 4 clear one slot at a time
+    emitter.instruction("jb __rt_hash_new_zero");
+    emitter.label("__rt_hash_new_zero4");
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // clear four entry occupied markers per iteration
+    emitter.instruction("mov QWORD PTR [r10 + 64], r9");
+    emitter.instruction("mov QWORD PTR [r10 + 128], r9");
+    emitter.instruction("mov QWORD PTR [r10 + 192], r9");
+    emitter.instruction("add r10, 256");                                        // advance past the four cleared slots
+    emitter.instruction("sub r11, 4");                                          // four fewer entry headers left to clear
+    emitter.instruction("jnz __rt_hash_new_zero4");                             // power-of-two capacities >= 4 are multiples of four
+    emitter.instruction("jmp __rt_hash_new_done");
+
     emitter.label("__rt_hash_new_zero");
     emitter.instruction("test r11, r11");                                       // stop clearing once every entry slot in the requested capacity has been visited
     emitter.instruction("je __rt_hash_new_done");                               // skip the zeroing loop entirely for a zero-capacity hash table
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the occupied/tombstone marker for the current hash entry slot
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // clear the occupied/tombstone marker for the current hash entry slot
     emitter.instruction("add r10, 64");                                         // advance the entry cursor to the next hash slot in the entries region
     emitter.instruction("sub r11, 1");                                          // decrement the number of remaining hash entry headers to clear
     emitter.instruction("jmp __rt_hash_new_zero");                              // continue clearing occupied markers until the entries region is initialized

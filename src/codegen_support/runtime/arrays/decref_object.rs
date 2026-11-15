@@ -91,33 +91,15 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: decref_object ---");
     emitter.label_global("__rt_decref_object");
 
-    emitter.instruction("test rax, rax");                                       // skip null object pointers immediately because they do not own heap storage
-    emitter.instruction("jz __rt_decref_object_skip");                          // null object values need no release work
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
-    emitter.instruction("cmp rax, r10");                                        // reject null sentinels, scalar values, and static pointers before reading a heap header
-    emitter.instruction("jb __rt_decref_object_skip");                          // non-heap values below the managed heap do not own object storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent before deriving the live heap end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("add r11, r10");                                        // compute the managed heap end address from the base and live offset
-    emitter.instruction("cmp rax, r11");                                        // is the candidate object pointer outside the live heap window?
-    emitter.instruction("jae __rt_decref_object_skip");                         // pointers above the live heap end are not refcounted objects
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
-    emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker and heap kind
-    emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // ignore foreign pointers that do not carry the elephc x86_64 heap marker
-    emitter.instruction("jne __rt_decref_object_skip");                         // only elephc-owned objects participate in x86_64 decref bookkeeping
-    emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for a final ownership sanity check
+    super::emit_x86_64_heap_owner_guard(emitter, "__rt_decref_object_skip", 16);
+    emitter.instruction("movzx r10d, BYTE PTR [rax - 8]");                      // low byte of the uniform header word is the heap kind tag
     emitter.instruction("cmp r10, 4");                                          // is this heap-backed payload a plain object instance?
     emitter.instruction("je __rt_decref_object_counted");                       // plain objects release through the shared refcount bookkeeping
     emitter.instruction("cmp r10, 6");                                          // is this heap-backed payload a throwable object instance (issue #448)?
     emitter.instruction("jne __rt_decref_object_skip");                         // other heap kinds must not be released through the object decref helper
 
     emitter.label("__rt_decref_object_counted");
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit object refcount from the uniform heap header
-    emitter.instruction("sub r10d, 1");                                         // decrement the object refcount for the releasing x86_64 owner
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented object refcount back into the uniform heap header
+    emitter.instruction("sub DWORD PTR [rax - 12], 1");                         // drop one owner from the 32-bit object refcount
     emitter.instruction("jz __rt_decref_object_free");                          // zero refcount means the object properties and storage can be released now
     emitter.instruction("jmp __rt_decref_object_skip");                         // non-zero refcount stays alive until an explicit GC safe point
 
