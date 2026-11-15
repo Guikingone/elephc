@@ -62,11 +62,12 @@ pub(crate) fn successors(term: &Terminator) -> Vec<BlockId> {
 }
 
 /// Returns true for the blocks of rarely taken paths: generic fallbacks of speculative fast
-/// paths (`*.slow`) and the overflow handling of a split `int` return (`return.overflow`,
+/// paths (`*.slow`), throw-only `*.fatal` blocks, and the overflow handling of a split `int` return (`return.overflow`,
 /// `return.int_min`, `return.type_error`). Their calls are not charged against keeping a value
 /// in a caller-saved register, and the linear order places them after the hot path.
 pub(crate) fn is_cold_block_name(name: &str) -> bool {
     name.ends_with(".slow")
+        || name.ends_with(".fatal")
         || matches!(name, "return.overflow" | "return.int_min" | "return.type_error")
 }
 

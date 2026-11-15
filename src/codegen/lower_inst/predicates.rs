@@ -111,25 +111,22 @@ pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Sets the flags so that "equal" means the loaded container or object pointer is PHP null
-/// (zero, or the in-band null-container sentinel), for a fused `cond_br`.
+/// Sets the flags so that "not equal" means the loaded container or object pointer is PHP
+/// null (zero, or the in-band null-container sentinel), for a fused `cond_br`. Real heap
+/// and data pointers sit below 2^47 (x86_64) / 2^48 (aarch64), so `(p - 1)` has no high
+/// bits set exactly when the pointer is real.
 fn emit_container_null_flags(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     ctx.load_value_to_result(value)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x16", crate::codegen::NULL_SENTINEL);
-            ctx.emitter.instruction("cmp x0, x16");                             // the null-container sentinel?
-            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // fold the sentinel onto a zero pointer
-            ctx.emitter.instruction("cmp x0, #0");                              // equal: the pointer is PHP null
-            ctx.fused_branch_condition = Some("eq");
+            ctx.emitter.instruction("sub x16, x0, #1");                         // bias the pointer so zero wraps to all ones
+            ctx.emitter.instruction("tst x16, #0xffff000000000000");            // not equal: zero or sentinel, i.e. PHP null
+            ctx.fused_branch_condition = Some("ne");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
-            ctx.emitter.instruction("cmp rax, r10");                            // the null-container sentinel?
-            ctx.emitter.instruction("mov r10d, 0");                             // zero without touching the flags
-            ctx.emitter.instruction("cmove rax, r10");                          // fold the sentinel onto a zero pointer
-            ctx.emitter.instruction("test rax, rax");                           // equal: the pointer is PHP null
-            ctx.fused_branch_condition = Some("e");
+            ctx.emitter.instruction("lea r10, [rax - 1]");                      // bias the pointer so zero wraps to all ones
+            ctx.emitter.instruction("shr r10, 47");                             // not equal: zero or sentinel, i.e. PHP null
+            ctx.fused_branch_condition = Some("ne");
         }
     }
     Ok(())

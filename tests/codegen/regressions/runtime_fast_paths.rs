@@ -836,3 +836,25 @@ $t = "x"; $u = $t; $u .= "yz"; echo $t, $u, "\n";
     assert_eq!(out.stdout, "9639 ab0ab0ab1ab2ab3ab4ab5ab6ab7ab8 ab0ab1ab2ab3ab4ab5ab6ab7ab8ab9\nxxyz\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// Nullable method receivers (missed array reads) dispatch directly on the hot path, throw a
+/// catchable `Error` on null, and pass object arguments straight in registers.
+#[test]
+fn test_nullable_receiver_method_call_direct_dispatch() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class A { public function __construct(public int $v) {} public function get(): int { return $this->v; }
+  public function add(A $o): int { return $this->v + $o->v; } }
+$xs = [new A(1), new A(2)];
+$t = 0;
+for ($i = 0; $i < 4; $i++) { $o = @$xs[$i % 2]; $t += $o->get() + $o->add($xs[1 - $i % 2]); }
+echo $t, "\n";
+$m = ["a" => new A(5)];
+try { $q = @$m["b"]; echo $q->get(), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $q = @$xs[7]; echo $q->get(), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+function f(?A $a): int { return $a === null ? -1 : $a->get(); }
+echo f(null), f($xs[1]), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "18\nError: Call to a member function get() on null\nCall to a member function get() on null\n-12\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

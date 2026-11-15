@@ -14425,6 +14425,9 @@ fn method_is_fiber_start(
 }
 
 /// Lowers `?Object->method()` calls so null receivers fatal before argument evaluation.
+///
+/// The null branch throws and ends in `Unreachable`, so the call block dominates the
+/// continuation and its result flows on directly — no hidden temp or merge block.
 fn lower_nullable_regular_method_call(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
@@ -14432,17 +14435,12 @@ fn lower_nullable_regular_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let fatal_block = ctx
         .builder
         .create_named_block("method.null.fatal", Vec::new());
     let call_block = ctx
         .builder
         .create_named_block("method.non_null.call", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("method.nullable.merge", Vec::new());
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![object.value],
@@ -14463,12 +14461,7 @@ fn lower_nullable_regular_method_call(
     terminate_method_call_on_null(ctx, method);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(ctx, object, method, args, Op::MethodCall, expr);
-    store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
-    branch_to(ctx, merge);
-
-    ctx.builder.position_at_end(merge);
-    take_owned_temp(ctx, &temp_name, expr.span)
+    lower_method_call_with_receiver(ctx, object, method, args, Op::MethodCall, expr)
 }
 
 /// Lowers `ReflectionClass::newInstance()` by constructing the reflected class name.

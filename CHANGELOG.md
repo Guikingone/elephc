@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Method calls on nullable receivers no longer route the result through a hidden temp and merge block (the null branch always throws), the fused null test uses the biased-shift pointer check, `*.fatal` blocks are laid out cold, and object arguments bound to object parameters load straight into argument registers.
 - x86_64 `__rt_incref` / `__rt_decref_mixed` fast paths validate the heap window with one unsigned offset compare, check the heap marker straight from memory and update the refcount in place (~22 → ~14 instructions).
 - Null-container receiver checks (zero pointer or in-band null sentinel) compile to a single biased shift test (`(p - 1) >> 47/48`) instead of two compares and a 64-bit immediate load, on x86_64 and aarch64.
 - Fixed: assigning through a reference to an element of an `int`/`float`-typed array inside a function (`$r = &$h["a"]; $r = 5; echo $h["a"];`) read back the reference's internal pointer instead of the value (or crashed).

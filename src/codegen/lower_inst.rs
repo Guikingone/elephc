@@ -6726,7 +6726,8 @@ fn materialize_direct_call_args_with_refs_and_borrowed_options(
 /// Loads all-scalar by-value call arguments straight into their ABI argument registers.
 ///
 /// Applies when every argument is an `int`/`bool`/`float` whose representation already
-/// matches its parameter and every argument travels in a register. A value read as a call
+/// matches its parameter, or an object pointer bound to an object parameter, and every
+/// argument travels in a register. A value read as a call
 /// argument is never allocated to a caller-saved register (the call clobbers them at the
 /// value's last use), so loading the argument registers in order cannot overwrite a later
 /// argument's source. Returns `None` when the general stack-staged path is required.
@@ -6739,11 +6740,22 @@ fn try_direct_scalar_call_args(
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, param_types, 0);
     for ((value, param_ty), assignment) in args.iter().zip(param_types).zip(&assignments) {
         let param_repr = param_ty.codegen_repr();
-        if !matches!(param_repr, PhpType::Int | PhpType::Bool | PhpType::Float)
-            || !assignment.in_register()
-            || ctx.raw_value_php_type(*value)?.codegen_repr() != param_repr
-            || ctx.value_php_type(*value)?.codegen_repr() != param_repr
-        {
+        if !assignment.in_register() {
+            return Ok(None);
+        }
+        let raw_repr = ctx.raw_value_php_type(*value)?.codegen_repr();
+        let value_repr = ctx.value_php_type(*value)?.codegen_repr();
+        let passes_as_is = match &param_repr {
+            PhpType::Int | PhpType::Bool | PhpType::Float => {
+                raw_repr == param_repr && value_repr == param_repr
+            }
+            // Object pointers pass unchanged into object parameters (no coercion code).
+            PhpType::Object(_) => {
+                matches!(raw_repr, PhpType::Object(_)) && matches!(value_repr, PhpType::Object(_))
+            }
+            _ => false,
+        };
+        if !passes_as_is {
             return Ok(None);
         }
     }
