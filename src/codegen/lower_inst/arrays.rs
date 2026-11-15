@@ -429,11 +429,9 @@ fn lower_load_array_elem_ref_cell_x86_64(
     ctx.load_value_to_reg(index, idx_reg)?;
     let null_label = ctx.next_label("array_elem_ref_null");
     let done_label = ctx.next_label("array_elem_ref_done");
-    ctx.emitter.instruction(&format!("cmp {}, 0", idx_reg));                    // check whether the indexed-array offset is negative
-    ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative offsets yield a null cell pointer
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);            // load the indexed-array logical length
-    ctx.emitter.instruction(&format!("cmp {}, {}", idx_reg, len_reg));          // compare the requested offset against the array length
-    ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-bounds offsets yield a null cell pointer
+    let _ = len_reg;
+    ctx.emitter.instruction(&format!("cmp {}, QWORD PTR [{}]", idx_reg, array_reg)); // compare the offset with the length as unsigned values
+    ctx.emitter.instruction(&format!("jae {}", null_label));                    // negative or out-of-bounds offsets yield a null cell pointer
     ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
     if elem_size == 16 {
         ctx.emitter.instruction(&format!("shl {}, 4", idx_reg));                // scale the offset by the 16-byte element slot width
@@ -833,11 +831,9 @@ fn lower_array_get_aarch64(
         len_reg,
         &null_receiver_label,
     );
-    ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));                // check whether the indexed-array offset is negative
-    ctx.emitter.instruction(&format!("b.lt {}", null_label));                   // negative indexed-array offsets read as null
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));       // compare the requested offset against the indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", null_label));                   // out-of-range indexed-array offsets read as null
+    ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));       // compare the offset with the length as unsigned values
+    ctx.emitter.instruction(&format!("b.hs {}", null_label));                   // negative or out-of-range offsets read as null
     emit_array_get_in_bounds_aarch64(ctx, array_reg, result_reg, elem_ty, result_ty)?;
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after a successful indexed-array read
     ctx.emitter.label(&null_label);
@@ -927,11 +923,8 @@ fn lower_array_get_x86_64(
         len_reg,
         &null_receiver_label,
     );
-    ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));                 // check whether the indexed-array offset is negative
-    ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative indexed-array offsets read as null
-    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));       // compare the requested offset against the indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-range indexed-array offsets read as null
+    ctx.emitter.instruction(&format!("cmp {}, QWORD PTR [{}]", result_reg, array_reg)); // compare the offset with the length as unsigned values
+    ctx.emitter.instruction(&format!("jae {}", null_label));                    // negative or out-of-range offsets read as null
     emit_array_get_in_bounds_x86_64(ctx, array_reg, result_reg, elem_ty, result_ty)?;
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after a successful indexed-array read
     ctx.emitter.label(&null_label);
