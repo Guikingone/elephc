@@ -108,6 +108,9 @@ pub(crate) struct FunctionContext<'a> {
     /// Spilled `load_local` results whose home is the local's own frame slot (see
     /// `block_emit::collect_aliased_local_loads`), keyed by value, with their instructions.
     pub(super) aliased_loads: HashMap<ValueId, usize>,
+    /// The frameless early return already ran the entry block's test and it failed: the entry
+    /// block skips that compare and branches straight to its `else` block.
+    pub(super) entry_test_failed: bool,
     pub(super) aliased_load_insts: std::collections::HashSet<InstId>,
     /// The block emitted right after the current one: a branch to it can fall through.
     pub(super) next_block_id: Option<crate::ir::BlockId>,
@@ -203,6 +206,7 @@ impl<'a> FunctionContext<'a> {
             known_non_null: std::collections::HashSet::new(),
             prologue_loaded: std::collections::HashSet::new(),
             aliased_loads: HashMap::new(),
+            entry_test_failed: false,
             aliased_load_insts: std::collections::HashSet::new(),
             next_block_id: None,
             fused_add_overflow: HashMap::new(),

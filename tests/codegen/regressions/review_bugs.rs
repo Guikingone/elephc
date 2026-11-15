@@ -686,3 +686,22 @@ $k = 2; for ($i = 0; $i < 2; $i++) { $m = $k * 3; echo $m; } echo "\n";
 "#);
     assert_eq!(out, "15 4 5\n5 10 20 \n6\n66\n");
 }
+
+/// A function starting with a parameter test whose branch returns a parameter, a constant or
+/// nothing returns before building its frame; recursion, two-parameter tests, void returns,
+/// bool returns and constants beyond 32 bits keep PHP results.
+#[test]
+fn test_frameless_early_return_keeps_results() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(int $n) { if ($n <= 0) return 7; return f($n - 1) + 1; }
+function g(int $a, int $b) { if ($a == $b) { return $a; } return g($a + 1, $b) * 2 % 1000; }
+function h(int $x) { if ($x > 100) return; echo $x, ","; h($x * 3); }
+function k(int $x): bool { if ($x != 3) return false; return true; }
+function neg(int $x) { if ($x < -5000000000) { return -1; } return $x + 1; }
+function fib(int $n): int { return $n < 2 ? $n : fib($n - 1) + fib($n - 2); }
+echo f(5), " ", g(2, 6), " "; h(1); echo " ", var_export(k(3), true), var_export(k(4), true), " ", neg(-6000000000), neg(5), " ", fib(15), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "12 96 1,3,9,27,81, truefalse -16 610\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

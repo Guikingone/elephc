@@ -20,7 +20,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
-use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{CmpPredicate, Function, Immediate, LocalKind, LocalSlotId, Op, Terminator, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers_with_safe, Allocation};
 use crate::names::ir_global_symbol;
 use crate::types::PhpType;
@@ -225,6 +225,7 @@ pub(super) fn emit_function_prologue_with_label(
     }
     ctx.emitter.blank();
     ctx.emitter.label_global(entry_label);
+    emit_frameless_early_return(ctx);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
     if function_resets_concat_buffer(ctx.function) {
         capture_concat_base(ctx);
@@ -288,6 +289,195 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
     Ok(())
+}
+
+/// An entry-block operand of the frameless early return: an integer parameter (in its incoming
+/// argument register) or an integer constant.
+#[derive(Clone, Copy)]
+enum EarlyOperand {
+    Param(usize),
+    Const(i64),
+}
+
+/// Emits, before the prologue, the entry block's own test when the function starts by comparing
+/// integer parameters/constants and one branch only returns a parameter or a constant
+/// (`return $n < 2 ? $n : ...`): that branch returns straight from the argument registers
+/// without building a frame, and the other one falls into the normal prologue, after which the
+/// entry block branches straight to its `else` block (`entry_test_failed`).
+fn emit_frameless_early_return(ctx: &mut FunctionContext<'_>) {
+    let Some((lhs, rhs, predicate, returned)) = frameless_early_return(ctx) else {
+        return;
+    };
+    let target = ctx.emitter.target;
+    let body = format!("{}_framed_body", ctx.function.name.replace(['\\', ':', '$', '{', '}'], "_"));
+    let body = ctx.next_label(&body);
+    let operand = |operand: EarlyOperand| match operand {
+        EarlyOperand::Param(index) => abi::int_arg_reg_name(target, index).to_string(),
+        EarlyOperand::Const(value) => value.to_string(),
+    };
+    ctx.emitter.comment("frameless early return (the entry test, before the prologue)");
+    match target.arch {
+        Arch::X86_64 => {
+            let lhs_text = match lhs {
+                EarlyOperand::Param(_) => operand(lhs),
+                EarlyOperand::Const(value) => {
+                    abi::emit_load_int_immediate(ctx.emitter, "r10", value);
+                    "r10".to_string()
+                }
+            };
+            let rhs_text = match rhs {
+                EarlyOperand::Const(value) if i32::try_from(value).is_err() => {
+                    abi::emit_load_int_immediate(ctx.emitter, "r11", value);
+                    "r11".to_string()
+                }
+                _ => operand(rhs),
+            };
+            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_text, rhs_text)); // the entry block's comparison
+            let skip = match predicate {
+                CmpPredicate::Eq => "jne",
+                CmpPredicate::Ne => "je",
+                CmpPredicate::Slt => "jge",
+                CmpPredicate::Sle => "jg",
+                CmpPredicate::Sgt => "jle",
+                _ => "jl",
+            };
+            ctx.emitter.instruction(&format!("{} {}", skip, body));             // the other branch needs the frame
+            match returned {
+                Some(EarlyOperand::Param(index)) => {
+                    abi::emit_reg_move(ctx.emitter, "rax", abi::int_arg_reg_name(target, index));
+                }
+                Some(EarlyOperand::Const(value)) => abi::emit_load_int_immediate(ctx.emitter, "rax", value),
+                None => {}
+            }
+            ctx.emitter.instruction("ret");                                     // return without a frame
+        }
+        Arch::AArch64 => {
+            let lhs_text = match lhs {
+                EarlyOperand::Param(_) => operand(lhs),
+                EarlyOperand::Const(value) => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x9", value);
+                    "x9".to_string()
+                }
+            };
+            let rhs_text = match rhs {
+                EarlyOperand::Const(value) if (0..4096).contains(&value) => format!("#{}", value),
+                EarlyOperand::Const(value) => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x10", value);
+                    "x10".to_string()
+                }
+                _ => operand(rhs),
+            };
+            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_text, rhs_text)); // the entry block's comparison
+            let skip = match predicate {
+                CmpPredicate::Eq => "b.ne",
+                CmpPredicate::Ne => "b.eq",
+                CmpPredicate::Slt => "b.ge",
+                CmpPredicate::Sle => "b.gt",
+                CmpPredicate::Sgt => "b.le",
+                _ => "b.lt",
+            };
+            ctx.emitter.instruction(&format!("{} {}", skip, body));             // the other branch needs the frame
+            match returned {
+                Some(EarlyOperand::Param(index)) => {
+                    abi::emit_reg_move(ctx.emitter, "x0", abi::int_arg_reg_name(target, index));
+                }
+                Some(EarlyOperand::Const(value)) => abi::emit_load_int_immediate(ctx.emitter, "x0", value),
+                None => {}
+            }
+            ctx.emitter.instruction("ret");                                     // return without a frame
+        }
+    }
+    ctx.emitter.label(&body);
+    ctx.entry_test_failed = true;
+}
+
+/// Recognizes the entry shape `emit_frameless_early_return` handles: the entry block holds only
+/// loads of leading integer parameters, integer constants and one signed `icmp` feeding its
+/// `cond_br`, whose `then` block (entered only from here, no instructions, no block arguments)
+/// returns a parameter, a constant or nothing.
+fn frameless_early_return(
+    ctx: &FunctionContext<'_>,
+) -> Option<(EarlyOperand, EarlyOperand, CmpPredicate, Option<EarlyOperand>)> {
+    let function = ctx.function;
+    if ctx.is_main || function.flags.is_generator || function.flags.by_ref_return {
+        return None;
+    }
+    if !matches!(function.return_php_type.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::Void) {
+        return None;
+    }
+    let int_limit = match ctx.emitter.target.arch {
+        Arch::X86_64 => 6,
+        Arch::AArch64 => 8,
+    };
+    let simple_params = function
+        .params
+        .iter()
+        .take(int_limit)
+        .take_while(|param| !param.by_ref && matches!(param.php_type.codegen_repr(), PhpType::Int | PhpType::Bool))
+        .count();
+    let entry = function.block(function.entry)?;
+    let mut operands: std::collections::HashMap<ValueId, EarlyOperand> = std::collections::HashMap::new();
+    let mut compare = None;
+    for inst_id in &entry.instructions {
+        let inst = function.instruction(*inst_id)?;
+        match (inst.op, inst.immediate.clone(), inst.result) {
+            (Op::Nop, _, _) => {}
+            (Op::LoadLocal, Some(Immediate::LocalSlot(slot)), Some(result)) => {
+                let index = slot.as_raw() as usize;
+                if index >= simple_params
+                    || ctx.local_php_type(slot).ok()?.codegen_repr() != function.params[index].php_type.codegen_repr()
+                {
+                    return None;
+                }
+                operands.insert(result, EarlyOperand::Param(index));
+            }
+            (Op::ConstI64, Some(Immediate::I64(value)), Some(result)) => {
+                operands.insert(result, EarlyOperand::Const(value));
+            }
+            (Op::ICmp, Some(Immediate::CmpPredicate(predicate)), Some(result)) if compare.is_none() => {
+                let [lhs, rhs] = inst.operands.as_slice() else {
+                    return None;
+                };
+                compare = Some((*operands.get(lhs)?, *operands.get(rhs)?, predicate, result));
+            }
+            _ => return None,
+        }
+    }
+    let (lhs, rhs, predicate, cond_value) = compare?;
+    if !matches!(
+        predicate,
+        CmpPredicate::Eq | CmpPredicate::Ne | CmpPredicate::Slt | CmpPredicate::Sle | CmpPredicate::Sgt | CmpPredicate::Sge
+    ) {
+        return None;
+    }
+    let Some(Terminator::CondBr { cond, then_target, then_args, .. }) = &entry.terminator else {
+        return None;
+    };
+    if *cond != cond_value || !then_args.is_empty() {
+        return None;
+    }
+    let then_block = function.block(*then_target)?;
+    let only_entry_enters = function
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.terminator.as_ref().is_some_and(|term| crate::ir_passes::terminator_successors(term).contains(then_target))
+        })
+        .count()
+        == 1;
+    let empty = then_block.instructions.iter().all(|id| function.instruction(*id).is_some_and(|inst| inst.op == Op::Nop));
+    if !only_entry_enters || !empty || !then_block.params.is_empty() {
+        return None;
+    }
+    let returned = match &then_block.terminator {
+        Some(Terminator::Return { value: Some(value) }) => Some(*operands.get(value)?),
+        Some(Terminator::Return { value: None }) => None,
+        _ => return None,
+    };
+    if returned.is_none() && function.return_php_type.codegen_repr() != PhpType::Void {
+        return None;
+    }
+    Some((lhs, rhs, predicate, returned))
 }
 
 /// Returns the integer parameters (index, entry `load_local`, register) whose frame slot is

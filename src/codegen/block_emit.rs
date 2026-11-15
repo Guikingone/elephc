@@ -1926,8 +1926,15 @@ fn emit_block(
     ctx.fused_compare_predicate = None;
     ctx.fused_branch_condition = None;
     ctx.add_flags_for = None;
+    let entry_test_failed = ctx.entry_test_failed && block.id == ctx.function.entry;
     for inst_id in &block.instructions {
         if ctx.skipped_consts.contains(inst_id) {
+            continue;
+        }
+        if entry_test_failed
+            && ctx.function.instruction(*inst_id).is_some_and(|inst| inst.op == Op::ICmp)
+        {
+            // Already evaluated (false) before the prologue.
             continue;
         }
         let keeps_add_flags = ctx.fused_compare_value.is_some()
@@ -1973,6 +1980,13 @@ fn emit_block(
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
+    if entry_test_failed {
+        if let Terminator::CondBr { else_target, else_args, .. } = terminator {
+            let jump = Terminator::Br { target: *else_target, args: else_args.clone() };
+            ctx.fused_compare_value = None;
+            return lower_term::lower_terminator(ctx, &jump);
+        }
+    }
     lower_term::lower_terminator(ctx, terminator)
 }
 
