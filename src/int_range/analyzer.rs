@@ -660,6 +660,11 @@ impl<'a> Analyzer<'a> {
             }
             _ => return Vec::new(),
         };
+        // `$i <= PHP_INT_MAX` keeps holding after `$i++` overflows to float, so the trip count
+        // is only bounded when the induction step cannot overflow.
+        if inclusive && limit_hi == MAX {
+            return Vec::new();
+        }
         let Some((start_lo, _)) = self.read(entry, induction).bounds() else {
             return Vec::new();
         };

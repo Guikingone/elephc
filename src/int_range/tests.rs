@@ -284,3 +284,11 @@ fn side_counter_in_nested_loop_or_otherwise_written_stays_checked() {
     let moved_bound = "<?php\nfunction f(int $n) {\n  $c = 0;\n  for ($i = 0; $i < $n; $i++) {\n    $c++;\n    $n = $n + 0;\n  }\n  return $c;\n}\nf(5);\n";
     assert_not_proven(moved_bound, 5, ArithKind::Inc);
 }
+
+#[test]
+fn inclusive_bound_at_int_max_does_not_bound_side_counters() {
+    let src = "<?php\nfunction f(int $n) {\n  $c = PHP_INT_MAX - 5; $k = 0;\n  for ($i = PHP_INT_MAX - 1; $i <= $n; $i++) {\n    $c++; if ($k++ > 10) break;\n  }\n  return $c;\n}\nf(PHP_INT_MAX);\n";
+    assert_not_proven(src, 5, ArithKind::Inc);
+    let literal = "<?php\nfunction f() {\n  $c = PHP_INT_MAX - 5; $k = 0;\n  for ($i = PHP_INT_MAX - 1; $i <= 9223372036854775807; $i++) {\n    $c++; if ($k++ > 10) break;\n  }\n  return $c;\n}\nf();\n";
+    assert_not_proven(literal, 5, ArithKind::Inc);
+}
