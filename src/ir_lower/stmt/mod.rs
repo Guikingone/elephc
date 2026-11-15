@@ -279,8 +279,392 @@ pub(crate) fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
             index += 2;
             continue;
         }
+        if try_lower_nested_mixed_append(ctx, body, index) {
+            index += 3;
+            continue;
+        }
         lower_stmt(ctx, stmt);
         index += 1;
+    }
+}
+
+/// Lowers statement-level two-way control flow whose branches are produced by closures, with the
+/// same initialized-slot and flow-sensitive type merging as `if`.
+fn lower_guarded_branches(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: &Expr,
+    then_branch: &mut dyn FnMut(&mut LoweringContext<'_, '_>),
+    else_branch: &mut dyn FnMut(&mut LoweringContext<'_, '_>),
+) {
+    let cond_value = lower_expr(ctx, condition);
+    let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let split_types = ctx.local_types_snapshot();
+    let then_block = ctx.builder.create_named_block("guard.then", Vec::new());
+    let else_block = ctx.builder.create_named_block("guard.else", Vec::new());
+    let merge = ctx.builder.create_named_block("guard.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: cond_value.value,
+        then_target: then_block,
+        then_args: Vec::new(),
+        else_target: else_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(then_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
+    then_branch(ctx);
+    let then_reachable = !ctx.builder.insertion_block_is_terminated();
+    if then_reachable {
+        branch_to(ctx, merge);
+    }
+    let then_initialized = ctx.initialized_slots_snapshot();
+    let then_types = ctx.local_types_snapshot();
+
+    ctx.builder.position_at_end(else_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
+    else_branch(ctx);
+    let else_reachable = !ctx.builder.insertion_block_is_terminated();
+    if else_reachable {
+        branch_to(ctx, merge);
+    }
+    let else_initialized = ctx.initialized_slots_snapshot();
+    let else_types = ctx.local_types_snapshot();
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots(
+        &split_initialized,
+        then_initialized,
+        then_reachable,
+        else_initialized,
+        else_reachable,
+    ));
+    let merged_types = merge_local_types(
+        ctx,
+        &split_types,
+        then_types,
+        then_reachable,
+        else_types,
+        else_reachable,
+    );
+    ctx.restore_local_types(merged_types);
+}
+
+/// Lowers `unset($name[$index])` for a boxed Mixed/Union local, dispatching on the runtime
+/// payload like PHP's `ZEND_UNSET_DIM`:
+/// - an array removes the key in place (after separating a shared cell);
+/// - a string throws `Error("Cannot unset string offsets")`;
+/// - `null` and `false` are quiet no-ops;
+/// - an `ArrayAccess` object calls `offsetUnset($index)`;
+/// - any other object throws `Error("Cannot use object of type C as array")`;
+/// - every other scalar throws `Error("Cannot unset offset in a non-array variable")`.
+///
+/// The index expression is lowered inside each (mutually exclusive) branch, so it is evaluated
+/// exactly once on every path.
+pub(super) fn lower_mixed_unset_dispatch(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let span = expr.span;
+    let local = || Expr::new(ExprKind::Variable(name.to_string()), array_span);
+    let call = |function: &str, args: Vec<Expr>| {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified(function),
+                args,
+            },
+            span,
+        )
+    };
+    let text = |text: &str| Expr::new(ExprKind::StringLiteral(text.to_string()), span);
+    let strict_eq = |right: Expr| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(local()),
+                op: BinOp::StrictEq,
+                right: Box::new(right),
+            },
+            span,
+        )
+    };
+    let is_array = call("is_array", vec![local()]);
+    let is_string = call("is_string", vec![local()]);
+    let is_object = call("is_object", vec![local()]);
+    let is_null_or_false = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(strict_eq(Expr::new(ExprKind::Null, span))),
+            op: BinOp::Or,
+            right: Box::new(strict_eq(Expr::new(ExprKind::BoolLiteral(false), span))),
+        },
+        span,
+    );
+    let is_array_access = Expr::new(
+        ExprKind::InstanceOf {
+            value: Box::new(local()),
+            target: InstanceOfTarget::Name(crate::names::Name::unqualified("ArrayAccess")),
+        },
+        span,
+    );
+    let object_message = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(text("Cannot use object of type ")),
+                    op: BinOp::Concat,
+                    right: Box::new(call("get_class", vec![local()])),
+                },
+                span,
+            )),
+            op: BinOp::Concat,
+            right: Box::new(text(" as array")),
+        },
+        span,
+    );
+    let throw_after_index = |ctx: &mut LoweringContext<'_, '_>, message: &Expr| {
+        let key = lower_expr(ctx, index);
+        if ctx.value_is_owning_temporary(key) {
+            crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        }
+        let error_expr = Expr::new(
+            ExprKind::NewObject {
+                class_name: crate::names::Name::unqualified("Error"),
+                args: vec![message.clone()],
+            },
+            span,
+        );
+        let error_value = lower_expr(ctx, &error_expr);
+        terminate_throw(ctx, error_value.value);
+    };
+
+    let mut array_branch = |ctx: &mut LoweringContext<'_, '_>| {
+        crate::ir_lower::expr::lower_unset_mixed_array_payload(ctx, name, array_span, index, expr);
+    };
+    let mut non_array_branch = |ctx: &mut LoweringContext<'_, '_>| {
+        let mut string_branch = |ctx: &mut LoweringContext<'_, '_>| {
+            throw_after_index(ctx, &text("Cannot unset string offsets"));
+        };
+        let mut rest_branch = |ctx: &mut LoweringContext<'_, '_>| {
+            let mut noop_branch = |ctx: &mut LoweringContext<'_, '_>| {
+                let key = lower_expr(ctx, index);
+                if ctx.value_is_owning_temporary(key) {
+            crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        }
+            };
+            let mut object_or_scalar_branch = |ctx: &mut LoweringContext<'_, '_>| {
+                let mut object_branch = |ctx: &mut LoweringContext<'_, '_>| {
+                    let mut array_access_branch = |ctx: &mut LoweringContext<'_, '_>| {
+                        lower_mixed_unset_offset_unset_call(ctx, name, array_span, index, span);
+                    };
+                    let mut plain_object_branch = |ctx: &mut LoweringContext<'_, '_>| {
+                        throw_after_index(ctx, &object_message);
+                    };
+                    lower_guarded_branches(
+                        ctx,
+                        &is_array_access,
+                        &mut array_access_branch,
+                        &mut plain_object_branch,
+                    );
+                };
+                let mut scalar_branch = |ctx: &mut LoweringContext<'_, '_>| {
+                    throw_after_index(ctx, &text("Cannot unset offset in a non-array variable"));
+                };
+                lower_guarded_branches(ctx, &is_object, &mut object_branch, &mut scalar_branch);
+            };
+            lower_guarded_branches(
+                ctx,
+                &is_null_or_false,
+                &mut noop_branch,
+                &mut object_or_scalar_branch,
+            );
+        };
+        lower_guarded_branches(ctx, &is_string, &mut string_branch, &mut rest_branch);
+    };
+    lower_guarded_branches(ctx, &is_array, &mut array_branch, &mut non_array_branch);
+}
+
+/// Calls `offsetUnset($index)` on the `ArrayAccess` object held by the boxed Mixed local `name`.
+///
+/// The object is unboxed into an owned hidden temporary typed as the `ArrayAccess` interface so
+/// the ordinary interface method-call lowering dispatches to the runtime class's implementation.
+fn lower_mixed_unset_offset_unset_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    span: Span,
+) {
+    let object_ty = PhpType::Object("ArrayAccess".to_string());
+    let cell = ctx.load_local(name, Some(array_span));
+    let object = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![cell.value],
+        None,
+        object_ty.clone(),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    let temp = ctx.declare_owned_hidden_temp(object_ty.clone());
+    store_value_into_temp(ctx, &temp, object_ty.clone(), object, span);
+    let call = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(Expr::new(ExprKind::Variable(temp.clone()), span)),
+            method: "offsetUnset".to_string(),
+            args: vec![index.clone()],
+        },
+        span,
+    );
+    let result = lower_expr(ctx, &call);
+    if ctx.value_is_owning_temporary(result) {
+        crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
+    }
+    release_owned_hidden_temp(ctx, &temp, object_ty, false, span);
+}
+
+/// Prefix of the hidden temporaries the parser introduces for nested appends
+/// (`crate::parser::stmt::assign::postfix`).
+const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_compound_";
+
+/// Lowers the parser's nested-append desugar (`$t = $a[..][k]; $t[] = $v; $a[..][k] = $t;`)
+/// in place through fetch-for-write when the addressed element is a boxed Mixed cell.
+///
+/// The desugared form reads the element into a temporary that shares the cell with the parent,
+/// so the separate-on-write of the temporary always cloned the cell and the following append
+/// copy-on-write copied the whole payload: every `$a['list'][] = $v` became O(n). Fetch-for-write
+/// instead makes each container level unique (only when it is really shared) and separates the
+/// element cell only when another owner still holds it, then appends directly into the STORED
+/// cell, so appends stay amortized O(1) while copies of the root never observe the write. The
+/// value is evaluated before the container fetch, matching PHP's delayed dimension fetches.
+/// Returns false (lowering nothing) when the statements do not form that desugar or the parent
+/// chain has no fetch-for-write lowering.
+fn try_lower_nested_mixed_append(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+    index: usize,
+) -> bool {
+    let Some([read, push, write_back]) = body.get(index..index + 3) else {
+        return false;
+    };
+    let StmtKind::Assign { name: temp, value: target } = &read.kind else {
+        return false;
+    };
+    if !temp.starts_with(NESTED_APPEND_TEMP_PREFIX) {
+        return false;
+    }
+    let StmtKind::ArrayPush { array, value } = &push.kind else {
+        return false;
+    };
+    if array != temp || !nested_append_write_back_stores_temp(&write_back.kind, temp) {
+        return false;
+    }
+    if !nested_append_fetches_stored_cell(ctx, target) {
+        return false;
+    }
+    let span = push.span;
+    let value = lower_expr(ctx, value);
+    let cell = lower_nested_assign_parent(ctx, target, span);
+    debug_assert_eq!(cell.ir_type, IrType::Heap(IrHeapKind::Mixed));
+    ctx.emit_void(
+        Op::MixedArrayAppend,
+        vec![cell.value, value.value],
+        None,
+        Op::MixedArrayAppend.default_effects(),
+        Some(span),
+    );
+    release_persisted_string_operand(ctx, value, span);
+    if ctx.value_is_owning_temporary(cell) {
+        crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(span));
+    }
+    true
+}
+
+/// Returns true when `stmt` is the nested-append write-back of the hidden temporary `temp`.
+fn nested_append_write_back_stores_temp(stmt: &StmtKind, temp: &str) -> bool {
+    let value = match stmt {
+        StmtKind::ArrayAssign { value, .. }
+        | StmtKind::NestedArrayAssign { value, .. }
+        | StmtKind::PropertyArrayAssign { value, .. } => value,
+        _ => return false,
+    };
+    matches!(&value.kind, ExprKind::Variable(name) if name == temp)
+}
+
+/// Returns true when an index expression can be evaluated after the appended value without
+/// observable reordering (no side effects, no dependency on the value's evaluation).
+fn nested_append_index_is_simple(index: &Expr) -> bool {
+    matches!(
+        index.kind,
+        ExprKind::Variable(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+    )
+}
+
+/// Returns true when `lower_nested_assign_parent(target)` is known to return the STORED boxed
+/// Mixed cell of the addressed element (a fetch-for-write path, not a detached read).
+fn nested_append_fetches_stored_cell(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return false;
+    };
+    if !nested_append_index_is_simple(index) {
+        return false;
+    }
+    match &array.kind {
+        ExprKind::Variable(name) => {
+            if ctx.is_ref_bound_local(name) {
+                return false;
+            }
+            match ctx.local_type(name).codegen_repr() {
+                PhpType::Array(elem_ty)
+                    if elem_ty.codegen_repr() == PhpType::Mixed
+                        || is_empty_indexed_array_element(elem_ty.as_ref()) =>
+                {
+                    matches!(
+                        index_expr_key_type(ctx, index),
+                        PhpType::Int | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+                    )
+                }
+                PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+                // The root cell itself is separated before the fetch, which needs plain slot
+                // storage; global aliases keep the generic read/append/write-back desugar.
+                PhpType::Mixed => ctx.local_supports_mixed_separation(name),
+                _ => false,
+            }
+        }
+        ExprKind::ArrayAccess { .. } => nested_append_fetches_stored_cell(ctx, array),
+        ExprKind::PropertyAccess { object, property } => {
+            let class = match &object.kind {
+                ExprKind::Variable(name) => match ctx.local_type(name) {
+                    PhpType::Object(class) => class,
+                    _ => return false,
+                },
+                ExprKind::This => match ctx.current_class.clone() {
+                    Some(class) => class,
+                    None => return false,
+                },
+                _ => return false,
+            };
+            let Some(class_info) = ctx.classes.get(class.trim_start_matches('\\')) else {
+                return false;
+            };
+            let Some((_, (_, property_ty))) = class_info.visible_property(property) else {
+                return false;
+            };
+            match normalize_value_php_type(property_ty.codegen_repr()) {
+                PhpType::Array(elem_ty) => {
+                    elem_ty.codegen_repr() == PhpType::Mixed
+                        && index_expr_key_type(ctx, index) == PhpType::Int
+                }
+                PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+                _ => false,
+            }
+        }
+        _ => false,
     }
 }
 
@@ -3563,7 +3947,9 @@ fn lower_hash_parent_fetch_for_write(
         Some(span),
     );
     if ctx.value_is_owning_temporary(key) {
-        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        if ctx.value_is_owning_temporary(key) {
+            crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        }
     } else {
         release_persisted_string_operand(ctx, key, span);
     }
@@ -3610,6 +3996,32 @@ fn lower_property_parent_fetch_for_write(
     let property_value =
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
     let key = lower_expr(ctx, index);
+    // Detach the container from the property while it is fetched for write: the retained
+    // operand above would otherwise make every container look shared, so the fetch-for-write
+    // copy-on-write split would clone it (and every shared child cell) on each write. A
+    // placeholder empty container keeps the property slot valid until the result is stored
+    // back; the retaining `PropSet` drops the property's reference to the real container.
+    let placeholder_op = if read_op == Op::HashGet {
+        Op::HashNew
+    } else {
+        Op::ArrayNew
+    };
+    let placeholder = ctx.emit_value(
+        placeholder_op,
+        Vec::new(),
+        Some(Immediate::Capacity(0)),
+        property_ty.clone(),
+        placeholder_op.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, placeholder.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, placeholder, Some(span));
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![property_value.value, key.value],
@@ -3640,7 +4052,9 @@ fn lower_property_parent_fetch_for_write(
         span,
     );
     if ctx.value_is_owning_temporary(key) {
-        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        if ctx.value_is_owning_temporary(key) {
+            crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        }
     } else {
         release_persisted_string_operand(ctx, key, span);
     }

@@ -15,7 +15,9 @@
 //!   keeps a list unchanged when the key does not exist). An existing integer
 //!   key promotes the payload to hash storage first, because PHP keeps the
 //!   surviving keys without renumbering.
-//! - Null, scalar, and object payloads are a quiet no-op.
+//! - EIR lowering (`lower_mixed_unset_dispatch`) only routes array payloads here; it handles
+//!   `ArrayAccess` objects, string/scalar errors, and `null`/`false` itself. Any other payload
+//!   reaching the helper is left untouched defensively.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;

@@ -6300,11 +6300,23 @@ fn unset_array_access_has_local_mixed_receiver(
     )
 }
 
-/// Lowers `unset($mixed[$key])` for a boxed Mixed/Union local.
+/// Lowers `unset($mixed[$key])` for a boxed Mixed/Union local by dispatching on the runtime
+/// payload kind (see `crate::ir_lower::stmt::lower_mixed_unset_dispatch`).
+fn lower_unset_mixed_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    crate::ir_lower::stmt::lower_mixed_unset_dispatch(ctx, name, array_span, index, expr);
+}
+
+/// Removes `$name[$index]` from a boxed Mixed local whose runtime payload is a PHP array.
 ///
 /// The local is separated first (a cell shared with another variable or array slot is cloned and
 /// stored back), then `runtime.mixed.array_unset` removes the key from the cell's payload in place.
-fn lower_unset_mixed_element(
+pub(crate) fn lower_unset_mixed_array_payload(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     array_span: Span,
