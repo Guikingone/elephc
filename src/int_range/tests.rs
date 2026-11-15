@@ -255,3 +255,32 @@ fn user_count_method_unbounds_count() {
     let src = "<?php\nclass C implements Countable { function count(): int { return PHP_INT_MAX; } }\n$c = new C();\nvar_dump(count($c) + 1);\n";
     assert_not_proven(src, 4, ArithKind::Add);
 }
+
+#[test]
+fn for_loop_side_counter_is_bounded_by_trip_count() {
+    let src = "<?php\nfunction f(array $d, int $n) {\n  $c = 0;\n  for ($i = 0; $i < $n; $i++) {\n    if ($d[$i]) { $c++; }\n  }\n  return $c;\n}\nf([1], (int) $argv[1]);\n";
+    assert_proven(src, 5, ArithKind::Inc);
+}
+
+#[test]
+fn for_loop_side_counter_with_two_increments_and_inclusive_bound_is_proven() {
+    let src = "<?php\nfunction f(int $n) {\n  $c = 0;\n  for ($i = 0; $i <= $n; ++$i) {\n    $c++;\n    if ($i % 2) { ++$c; }\n  }\n  return $c;\n}\nf(9);\n";
+    assert_proven(src, 5, ArithKind::Inc);
+    assert_proven(src, 6, ArithKind::Inc);
+}
+
+#[test]
+fn side_counter_near_int_max_stays_checked() {
+    let src = "<?php\nfunction f(int $n) {\n  $c = PHP_INT_MAX - 2;\n  for ($i = 0; $i < $n; $i++) {\n    $c++;\n  }\n  return $c;\n}\nf(5);\n";
+    assert_not_proven(src, 5, ArithKind::Inc);
+}
+
+#[test]
+fn side_counter_in_nested_loop_or_otherwise_written_stays_checked() {
+    let nested = "<?php\nfunction f(int $n) {\n  $c = 0;\n  for ($i = 0; $i < $n; $i++) {\n    for ($j = 0; $j < $n; $j++) { $c++; }\n  }\n  return $c;\n}\nf(5);\n";
+    assert_not_proven(nested, 5, ArithKind::Inc);
+    let written = "<?php\nfunction f(int $n) {\n  $c = 0;\n  for ($i = 0; $i < $n; $i++) {\n    $c++;\n    if ($i == 2) { $c = PHP_INT_MAX; }\n  }\n  return $c;\n}\nf(5);\n";
+    assert_not_proven(written, 5, ArithKind::Inc);
+    let moved_bound = "<?php\nfunction f(int $n) {\n  $c = 0;\n  for ($i = 0; $i < $n; $i++) {\n    $c++;\n    $n = $n + 0;\n  }\n  return $c;\n}\nf(5);\n";
+    assert_not_proven(moved_bound, 5, ArithKind::Inc);
+}

@@ -22,8 +22,8 @@ use crate::parser::ast::{BinOp, CastType, ClassMethod, Expr, ExprKind, Stmt, Stm
 
 use super::domain::{join_opt, join_states, narrow, ops, widen_states, AbsVal, Env, State, MAX, MIN};
 use super::scan::{
-    collect_reads_expr, collect_writes_expr, collect_writes_stmts, global_alias_target, root_variable,
-    scan_body, symbol_key, walk_stmts, Node, Param, ProgramInfo,
+    collect_reads_expr, collect_writes_expr, collect_writes_stmts, expr_writes, global_alias_target,
+    root_variable, scan_body, stmt_writes, symbol_key, walk_stmt, walk_stmts, Node, Param, ProgramInfo,
 };
 use super::{ArithKind, Facts};
 
@@ -318,11 +318,18 @@ impl<'a> Analyzer<'a> {
                 if let Some(init) = init {
                     state = self.stmt(init, state);
                 }
+                let counters = self.for_loop_counters(condition.as_ref(), update.as_deref(), body, &state);
                 self.run_loop(state, false, &mut |a, head| {
                     let (inside, outside) = match condition {
                         Some(condition) => a.cond(condition, head),
                         None => (head, None),
                     };
+                    let mut inside = inside;
+                    let mut outside = outside;
+                    for counter in &counters {
+                        force_int(&mut inside, &counter.name, counter.lo, counter.body_hi);
+                        force_int(&mut outside, &counter.name, counter.lo, counter.exit_hi);
+                    }
                     let end = a.exec(body, inside);
                     let frame = a.frames.pop().expect("loop frame");
                     let mut back = join_states(&end, &frame.continues);
@@ -602,6 +609,118 @@ impl<'a> Analyzer<'a> {
         } else {
             frame.breaks = join_states(&frame.breaks, state);
         }
+    }
+
+    /// Bounds the `++` counters of a counted `for` loop by its trip count.
+    ///
+    /// For `for (...; $i < B; $i++)` (or `<=`, `++$i`) where neither `$i` nor `B` changes in the
+    /// body, the body runs at most `T = hi(B) - lo($i) (+1 for <=)` times. A local whose only
+    /// writes in the loop are `k` increments outside nested loops then stays an int within
+    /// `[lo(c0), hi(c0) + k * (T - 1)]` at every body entry and `hi(c0) + k * T` at the exit,
+    /// which is what lets a plain `$count++` keep its native int form.
+    fn for_loop_counters(
+        &self,
+        condition: Option<&Expr>,
+        update: Option<&Stmt>,
+        body: &[Stmt],
+        entry: &State,
+    ) -> Vec<LoopCounter> {
+        let (Some(condition), Some(update)) = (condition, update) else {
+            return Vec::new();
+        };
+        let ExprKind::BinaryOp { left, op, right } = &condition.kind else {
+            return Vec::new();
+        };
+        let inclusive = match op {
+            BinOp::Lt => false,
+            BinOp::LtEq => true,
+            _ => return Vec::new(),
+        };
+        let ExprKind::Variable(induction) = &left.kind else {
+            return Vec::new();
+        };
+        let steps_induction = matches!(&update.kind, StmtKind::ExprStmt(expr)
+            if matches!(&expr.kind, ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name) if name == induction));
+        if !steps_induction || self.is_pinned(induction) {
+            return Vec::new();
+        }
+        let mut body_writes = HashSet::new();
+        collect_writes_stmts(body, &mut body_writes);
+        collect_writes_expr(condition, &mut body_writes);
+        if body_writes.contains(induction) {
+            return Vec::new();
+        }
+        let limit_hi = match &right.kind {
+            ExprKind::IntLiteral(value) => *value,
+            ExprKind::Variable(name) if !body_writes.contains(name) && !self.is_pinned(name) && name != induction => {
+                match self.read(entry, name).bounds() {
+                    Some((_, hi)) => hi,
+                    None => return Vec::new(),
+                }
+            }
+            _ => return Vec::new(),
+        };
+        let Some((start_lo, _)) = self.read(entry, induction).bounds() else {
+            return Vec::new();
+        };
+        let trips = (limit_hi as i128 - start_lo as i128 + i128::from(inclusive)).max(0);
+        if trips == 0 {
+            return Vec::new();
+        }
+        // Increments per local, those reached inside nested loops, and every other write.
+        let mut increments: HashMap<String, i128> = HashMap::new();
+        let mut nested = HashSet::new();
+        let mut other_writes = HashSet::new();
+        walk_stmts(body, false, &mut |node| match node {
+            Node::Stmt(stmt) => {
+                stmt_writes(stmt, &mut other_writes);
+                if matches!(
+                    stmt.kind,
+                    StmtKind::For { .. } | StmtKind::While { .. } | StmtKind::DoWhile { .. } | StmtKind::Foreach { .. }
+                ) {
+                    walk_stmt(stmt, false, &mut |inner| {
+                        if let Node::Expr(expr) = inner {
+                            if let ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name) = &expr.kind {
+                                nested.insert(name.clone());
+                            }
+                        }
+                    });
+                }
+            }
+            Node::Expr(expr) => match &expr.kind {
+                ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name) => {
+                    *increments.entry(name.clone()).or_insert(0) += 1;
+                }
+                _ => expr_writes(expr, &mut other_writes),
+            },
+        });
+        let mut update_writes = HashSet::new();
+        walk_stmt(update, false, &mut |node| match node {
+            Node::Stmt(stmt) => stmt_writes(stmt, &mut update_writes),
+            Node::Expr(expr) => expr_writes(expr, &mut update_writes),
+        });
+        collect_writes_expr(condition, &mut update_writes);
+        let mut counters = Vec::new();
+        for (name, k) in increments {
+            if name == *induction
+                || nested.contains(&name)
+                || other_writes.contains(&name)
+                || update_writes.contains(&name)
+                || self.is_pinned(&name)
+            {
+                continue;
+            }
+            let Some((lo, hi)) = self.read(entry, &name).bounds() else {
+                continue;
+            };
+            let body_hi = hi as i128 + k * (trips - 1);
+            let exit_hi = hi as i128 + k * trips;
+            if exit_hi > MAX as i128 {
+                continue;
+            }
+            counters.push(LoopCounter { name, lo, body_hi: body_hi as i64, exit_hi: exit_hi as i64 });
+        }
+        counters
     }
 
     /// Runs a loop-shaped construct to a fixpoint, then once more while recording.
@@ -1206,4 +1325,29 @@ fn apply_cmp(
         state = narrow(state, name, right_bounds.0, right_bounds.1);
     }
     state
+}
+
+/// A `++` counter of a counted `for` loop with its trip-count bounds (see
+/// `Analyzer::for_loop_counters`).
+struct LoopCounter {
+    name: String,
+    lo: i64,
+    body_hi: i64,
+    exit_hi: i64,
+}
+
+/// Pins a local to the int interval `[lo, hi]`: an int value is intersected with it, and a
+/// value the fixpoint lost track of (`Top`) is restored to it. Only called where an invariant
+/// proves the local holds an int inside that interval.
+fn force_int(state: &mut State, name: &str, lo: i64, hi: i64) {
+    if let Some(env) = state {
+        let value = match env.get(name) {
+            AbsVal::Int(cur_lo, cur_hi) => AbsVal::Int(cur_lo.max(lo), cur_hi.min(hi)),
+            AbsVal::Top => AbsVal::Int(lo, hi),
+        };
+        match value {
+            AbsVal::Int(new_lo, new_hi) if new_lo > new_hi => *state = None,
+            value => env.set(name, value),
+        }
+    }
 }

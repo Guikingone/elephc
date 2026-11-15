@@ -541,7 +541,7 @@ pub(crate) fn collect_reads_expr(expr: &Expr, out: &mut HashSet<String>) {
 }
 
 /// Records the locals written by one statement node.
-fn stmt_writes(stmt: &Stmt, out: &mut HashSet<String>) {
+pub(crate) fn stmt_writes(stmt: &Stmt, out: &mut HashSet<String>) {
     match &stmt.kind {
         StmtKind::Assign { name, .. }
         | StmtKind::TypedAssign { name, .. }
@@ -577,7 +577,7 @@ fn stmt_writes(stmt: &Stmt, out: &mut HashSet<String>) {
 }
 
 /// Records the locals written by one expression node.
-fn expr_writes(expr: &Expr, out: &mut HashSet<String>) {
+pub(crate) fn expr_writes(expr: &Expr, out: &mut HashSet<String>) {
     match &expr.kind {
         ExprKind::Assignment {
             target,

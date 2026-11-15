@@ -858,3 +858,25 @@ echo f(null), f($xs[1]), "\n";
     assert_eq!(out.stdout, "18\nError: Call to a member function get() on null\nCall to a member function get() on null\n-12\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// `++` counters of a counted `for` loop are bounded by its trip count and stay native ints,
+/// while counters that can still overflow (seeded near `PHP_INT_MAX`, nested, or otherwise
+/// written) keep PHP's float promotion.
+#[test]
+fn test_for_loop_side_counters_keep_php_overflow_semantics() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function cnt(array $d, int $n): int { $c = 0; for ($i = 0; $i < $n; $i++) { if ($d[$i % 3]) { $c++; } } return $c; }
+echo cnt([true, false, true], 10), "\n";
+function big(int $n): void { $c = PHP_INT_MAX - 2; for ($i = 0; $i < $n; $i++) { $c++; } var_dump($c); }
+big(1); big(5);
+function two(int $n) { $c = 0; for ($i = 0; $i <= $n; ++$i) { $c++; if ($i % 2) { $c++; } } var_dump($c); }
+two(7);
+function nest(int $n) { $c = 0; for ($i = 0; $i < $n; $i++) { for ($j = 0; $j < $n; $j++) { $c++; } } var_dump($c); }
+nest(4);
+function wr(int $n) { $c = 0; for ($i = 0; $i < $n; $i++) { $c++; if ($i == 2) { $c = PHP_INT_MAX; } } var_dump($c); }
+wr(4);
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7\nint(9223372036854775806)\nfloat(9.223372036854776E+18)\nint(12)\nint(16)\nfloat(9.223372036854776E+18)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
+}

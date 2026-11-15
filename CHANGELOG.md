@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- The integer-range analysis bounds `++` counters of counted `for` loops (`for ($i = A; $i < B; $i++)` with `$i` and `B` unchanged in the body) by the loop's trip count, so a plain `$count++` keeps a native int instead of a boxed int-or-float value whenever it provably cannot overflow.
 - Mixed ordered and loose-equality comparisons leave flags on their int fast path (one native compare instead of materializing a three-way sign), and the int operand probe loads the right operand straight into its register.
 - `json_decode` boxes each decoded array/object with `__rt_mixed_box_raw`, adopting the decoder's reference instead of retaining then releasing it.
 - x86_64 `__rt_decref_object` shares the single-compare heap owner guard; `__rt_hash_new` clears entry markers four slots per iteration.
