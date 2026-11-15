@@ -90,27 +90,20 @@ fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: decref_mixed ---");
     emitter.label_global("__rt_decref_mixed");
 
-    emitter.instruction("test rax, rax");                                       // skip null mixed pointers immediately because they do not own heap storage
-    emitter.instruction("jz __rt_decref_mixed_skip");                           // null mixed values need no release work
+    // One unsigned window test covers null, sentinels, static data and pointers past the
+    // live heap: `rax - _heap_buf` must land in [16, _heap_off).
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
-    emitter.instruction("cmp rax, r10");                                        // reject null sentinels, scalar values, and static pointers before reading a heap header
-    emitter.instruction("jb __rt_decref_mixed_skip");                           // non-heap values below the managed heap do not own mixed-box storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent before deriving the live heap end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("add r11, r10");                                        // compute the managed heap end address from the base and live offset
-    emitter.instruction("cmp rax, r11");                                        // is the candidate mixed pointer outside the live heap window?
-    emitter.instruction("jae __rt_decref_mixed_skip");                          // pointers above the live heap end are not refcounted mixed boxes
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
-    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // ignore foreign pointers that do not carry the elephc x86_64 heap marker
+    emitter.instruction("mov r11, rax");                                        // candidate mixed pointer
+    emitter.instruction("sub r11, r10");                                        // offset into the managed heap (null and low pointers wrap to huge values)
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_off", 0);
+    emitter.instruction("cmp r11, r10");                                        // is the pointer outside the live heap window?
+    emitter.instruction("jae __rt_decref_mixed_skip");                          // non-heap values do not own mixed-box storage
+    emitter.instruction("cmp r11, 16");                                         // the first user payload begins after the initial heap header
+    emitter.instruction("jb __rt_decref_mixed_skip");                           // header-adjacent pointers are not mixed boxes
+    emitter.instruction(&format!("cmp DWORD PTR [rax - 4], 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // high word of the uniform header carries the elephc heap marker
     emitter.instruction("jne __rt_decref_mixed_skip");                          // only elephc-owned mixed boxes participate in x86_64 decref bookkeeping
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit mixed-box refcount from the uniform heap header
-    emitter.instruction("sub r10d, 1");                                         // decrement the mixed-box refcount for the releasing x86_64 owner
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented mixed-box refcount back into the uniform heap header
+    emitter.instruction("sub DWORD PTR [rax - 12], 1");                         // drop one owner from the 32-bit mixed-box refcount
     emitter.instruction("jz __rt_decref_mixed_free");                           // zero refcount means the boxed payload can be released now
-    emitter.instruction("jmp __rt_decref_mixed_skip");                          // non-zero refcount stays alive until an explicit GC safe point
     emitter.label("__rt_decref_mixed_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers
 

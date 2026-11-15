@@ -71,19 +71,15 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: incref ---");
     emitter.label_global("__rt_incref");
-    emitter.instruction("test rax, rax");                                       // ignore null pointers so borrowed non-values do not participate in refcount traffic
-    emitter.instruction("jz __rt_incref_skip");                                 // null payloads do not own heap storage and therefore need no refcount update
+    // One unsigned window test covers null, sentinels, static data and pointers past the
+    // live heap: `rax - _heap_buf` must land in [0, _heap_off).
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("cmp rax, r10");                                        // reject values below the managed x86_64 heap before reading a header word
-    emitter.instruction("jb __rt_incref_skip");                                 // scalar integers and static data below the heap are not refcounted
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent
-    emitter.instruction("add r11, r10");                                        // compute the managed heap end address
-    emitter.instruction("cmp rax, r11");                                        // is the candidate pointer outside the live heap window?
-    emitter.instruction("jae __rt_incref_skip");                                // non-heap values above the managed heap are not refcounted
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
-    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
+    emitter.instruction("mov r11, rax");                                        // candidate refcounted pointer
+    emitter.instruction("sub r11, r10");                                        // offset into the managed heap (null and low pointers wrap to huge values)
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_off", 0);
+    emitter.instruction("cmp r11, r10");                                        // is the candidate pointer outside the live heap window?
+    emitter.instruction("jae __rt_incref_skip");                                // non-heap values are not refcounted
+    emitter.instruction(&format!("cmp DWORD PTR [rax - 4], 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // high word of the uniform header carries the elephc heap marker
     emitter.instruction("jne __rt_incref_skip");                                // skip static strings or foreign pointers that do not carry elephc heap headers
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_debug_enabled");
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the heap-debug enabled flag before mutating the x86_64 refcount
@@ -91,9 +87,7 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_incref_checked");                              // skip the nested live-check helper when heap-debug mode is disabled
     emitter.instruction("call __rt_heap_debug_check_live");                     // ensure the referenced heap block still looks live before incrementing its refcount
     emitter.label("__rt_incref_checked");
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit refcount stored in the uniform heap header
-    emitter.instruction("add r10d, 1");                                         // increment the refcount for the additional x86_64 heap owner
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the incremented refcount back into the uniform heap header
+    emitter.instruction("add DWORD PTR [rax - 12], 1");                         // add one owner to the 32-bit refcount in the uniform heap header
     emitter.label("__rt_incref_skip");
     emitter.instruction("ret");                                                 // return to the caller after the optional refcount increment
 }
