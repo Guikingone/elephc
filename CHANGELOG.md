@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Null-container receiver checks (zero pointer or in-band null sentinel) compile to a single biased shift test (`(p - 1) >> 47/48`) instead of two compares and a 64-bit immediate load, on x86_64 and aarch64.
 - Fixed: assigning through a reference to an element of an `int`/`float`-typed array inside a function (`$r = &$h["a"]; $r = 5; echo $h["a"];`) read back the reference's internal pointer instead of the value (or crashed).
 - Fixed (PHP compliance): `/` on two ints returns an int when the division is exact (`10 / 2` is `int(5)`, `7 / 2` stays `float(3.5)`, `PHP_INT_MIN / -1` is a float), at runtime (`__rt_int_div_checked`) and in constant folding; a float context such as `1.0 / ($n * ($n + 1) / 2 + $i + 1)` evaluates the integer tree in floating point when every operand is small enough for the result to be exact, keeping the boxed `int|float` path only as a fallback.
 - Fixed (PHP compliance): `/` and `%` by zero and `intdiv($x, 0)` throw a catchable `DivisionByZeroError` ("Division by zero" / "Modulo by zero") instead of yielding `INF`/`0` or a fatal error, including inside a `try` in the same function; `PHP_INT_MIN % -1` is 0 instead of crashing on x86_64.
