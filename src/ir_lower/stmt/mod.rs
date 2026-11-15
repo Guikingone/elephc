@@ -11,6 +11,7 @@
 
 use std::collections::HashSet;
 
+mod loop_nested_writes;
 mod loop_types;
 mod return_type_guard;
 
@@ -2366,6 +2367,35 @@ fn apply_loop_storage_contracts(
             _ => {}
         }
     }
+    for name in loop_nested_writes::nested_write_roots_needing_mixed_elements(ctx, body) {
+        widen_local_container_elements_to_mixed(ctx, &name, span);
+    }
+}
+
+/// Converts a concrete container local to `mixed` elements in place (`ArrayToMixed` /
+/// `HashToMixed`, copy-on-write safe) and retypes it, so later nested writes of any value type
+/// go through the boxed-Mixed fetch-for-write path.
+fn widen_local_container_elements_to_mixed(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Option<Span>,
+) {
+    let (op, widened_ty) = match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed => {
+            (Op::ArrayToMixed, PhpType::Array(Box::new(PhpType::Mixed)))
+        }
+        PhpType::AssocArray { key, value } if value.codegen_repr() != PhpType::Mixed => (
+            Op::HashToMixed,
+            PhpType::AssocArray {
+                key,
+                value: Box::new(PhpType::Mixed),
+            },
+        ),
+        _ => return,
+    };
+    let source = ctx.load_local(name, span);
+    let converted = ctx.emit_value(op, vec![source.value], None, widened_ty.clone(), op.default_effects(), span);
+    ctx.store_mutated_local(name, converted, widened_ty, span);
 }
 
 /// Lowers a `while` loop.
@@ -4272,7 +4302,14 @@ fn lower_local_parent_fetch_for_write(
             if elem_ty.codegen_repr() == PhpType::Mixed
                 || is_empty_indexed_array_element(elem_ty.as_ref()) =>
         {
-            match index_expr_key_type(ctx, index) {
+            // An int-typed local key (a loop counter) addresses the list directly; the syntactic
+            // key type reports every variable as gradual, which would promote the list to a hash
+            // and change the local's representation in the middle of a loop body.
+            let key_ty = match nested_index_static_type(ctx, index) {
+                PhpType::Int => PhpType::Int,
+                _ => index_expr_key_type(ctx, index),
+            };
+            match key_ty {
                 PhpType::Int => {
                     let array_value = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
@@ -4578,6 +4615,13 @@ fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
+    // `$h[] = v` on an associative local stores `v` like a keyed write does, so a value of
+    // another type widens the table to `mixed` values first (`["b" => [1]]` then `[] = 9`).
+    let array_value = if array_value.ir_type == IrType::Heap(IrHeapKind::Hash) {
+        widen_hash_local_for_value(ctx, array, array_value, value, span)
+    } else {
+        array_value
+    };
     let array_value = separate_mixed_local_for_write(ctx, array, array_value, span);
     ctx.emit_void(
         op,

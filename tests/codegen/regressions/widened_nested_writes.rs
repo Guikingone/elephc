@@ -162,3 +162,81 @@ f();
         "[1,[2,\"x\"]][7,\"x\",9]\n[[1,[2]],[3]][[1,[5,9]],[3]]\n{\"k\":[1,\"s\"]}{\"k\":[1,\"s\",2]}\n",
     );
 }
+
+/// Appending a value of another type to an associative local (directly or through a nested
+/// append) widens the table to `mixed` values instead of storing a mistyped payload.
+#[test]
+fn test_mismatched_append_into_assoc_local_widens_values() {
+    assert_clean_run(
+        r#"<?php
+function f() {
+    $c = ["a"=>["b"=>[1]]]; $d = $c; $d["a"][] = 9; echo json_encode($c), json_encode($d), "\n";
+    $h = ["b"=>[1]]; $h[] = 9; $h[] = [2]; echo json_encode($h), "\n";
+}
+f();
+"#,
+        "{\"a\":{\"b\":[1]}}{\"a\":{\"b\":[1],\"0\":9}}\n{\"b\":[1],\"0\":9,\"1\":[2]}\n",
+    );
+}
+
+/// A nested list literal stored into a loop-widened `array<mixed>` parent is re-boxed, so the
+/// following nested append reads real cells.
+#[test]
+fn test_nested_literal_in_loop_matches_widened_storage() {
+    assert_clean_run(
+        r#"<?php
+function f() {
+    for ($i = 0; $i < 3; $i++) { $d = ["a"=>["b"=>[$i]]]; $e = $d; $d["a"]["b"][] = $i * 10; echo json_encode($e), json_encode($d), "\n"; }
+    for ($i = 0; $i < 2; $i++) { $l = [[$i], [$i + 1]]; $l[1][] = $i * 3; echo json_encode($l), "\n"; }
+}
+f();
+for ($i = 0; $i < 2; $i++) { $d = ["a"=>["b"=>[$i]]]; $d["a"]["b"][] = $i * 10; echo json_encode($d), "\n"; }
+"#,
+        "{\"a\":{\"b\":[0]}}{\"a\":{\"b\":[0,0]}}\n{\"a\":{\"b\":[1]}}{\"a\":{\"b\":[1,10]}}\n\
+{\"a\":{\"b\":[2]}}{\"a\":{\"b\":[2,20]}}\n[[0],[1,0]]\n[[1],[2,3]]\n{\"a\":{\"b\":[0,0]}}\n{\"a\":{\"b\":[1,10]}}\n",
+    );
+}
+
+/// Mismatched nested writes inside loop bodies widen the root once, before the loop, while
+/// homogeneous matrix updates keep their concrete layout.
+#[test]
+fn test_mismatched_nested_writes_in_loops_widen_root_before_loop() {
+    assert_clean_run(
+        r#"<?php
+function f() {
+    $d = ["a"=>["b"=>[1]]];
+    for ($i = 0; $i < 3; $i++) { $d["a"]["b"] = $i; $d["a"]["c$i"] = "s$i"; }
+    echo json_encode($d), "\n";
+    $m = [[1,2],[3]];
+    for ($i = 0; $i < 2; $i++) { $m[$i][0] = "x$i"; }
+    echo json_encode($m), "\n";
+    $s = [["a"], ["b"]];
+    for ($i = 0; $i < 2; $i++) { $s[$i][0] = $i; }
+    echo json_encode($s), "\n";
+    $h = ["k" => ["x" => 1]];
+    foreach (["p", "q"] as $n) { $h["k"][$n] = [$n]; }
+    echo json_encode($h), "\n";
+    $g = [[1, 2], [3, 4]];
+    for ($i = 0; $i < 2; $i++) { for ($j = 0; $j < 2; $j++) { $g[$i][$j] = $g[$i][$j] + $i + $j; } }
+    echo json_encode($g), "\n";
+}
+f();
+"#,
+        "{\"a\":{\"b\":2,\"c0\":\"s0\",\"c1\":\"s1\",\"c2\":\"s2\"}}\n[[\"x0\",2],[\"x1\"]]\n[[0],[1]]\n\
+{\"k\":{\"x\":1,\"p\":[\"p\"],\"q\":[\"q\"]}}\n[[1,3],[4,6]]\n",
+    );
+}
+
+/// `var_dump` prints nested associative arrays instead of `NULL` for the inner table.
+#[test]
+fn test_var_dump_nested_assoc_array() {
+    assert_clean_run(
+        r#"<?php
+$d = ["a"=>["b"=>1]]; var_dump($d);
+function f() { $h = ["k"=>["l"=>1.5]]; var_dump($h); }
+f();
+"#,
+        "array(1) {\n  [\"a\"]=>\n  array(1) {\n    [\"b\"]=>\n    int(1)\n  }\n}\n\
+array(1) {\n  [\"k\"]=>\n  array(1) {\n    [\"l\"]=>\n    float(1.5)\n  }\n}\n",
+    );
+}

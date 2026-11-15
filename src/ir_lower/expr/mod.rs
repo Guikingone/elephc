@@ -10184,7 +10184,11 @@ fn coerce_array_literal_element_to_storage_type(
     let Some(elem_ty) = elem_ty else {
         return value;
     };
-    let coerced = match elem_ty.codegen_repr() {
+    let elem_repr = elem_ty.codegen_repr();
+    if matches!(elem_repr, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return coerce_literal_container_to_storage_payload(ctx, value, Some(&elem_repr), expr.span);
+    }
+    let coerced = match elem_repr {
         PhpType::Int | PhpType::Bool if value.ir_type != IrType::I64 => {
             coerce_to_int(ctx, value, expr)
         }
@@ -10640,12 +10644,56 @@ fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, 
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    let value_storage_ty = match ctx.builder.value_php_type(hash.value).codegen_repr() {
+        PhpType::AssocArray { value, .. } => Some(value.codegen_repr()),
+        _ => None,
+    };
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
+        let value = coerce_literal_container_to_storage_payload(
+            ctx,
+            value,
+            value_storage_ty.as_ref(),
+            expr.span,
+        );
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
     }
     hash
+}
+
+/// Converts a nested container literal value to the `mixed`-payload container its parent literal
+/// stores.
+///
+/// A literal's storage type can come from a wider contract than the value's own lowering (a loop
+/// pre-scan widening `$d = ["a" => ["b" => [$i]]]` to `array<string, array<string, array<mixed>>>`),
+/// while the nested value was built with its natural typed payload. Storing the typed container
+/// into a slot whose readers expect boxed `mixed` elements made them decode raw ints as cells.
+/// `ArrayToMixed`/`HashToMixed` re-box the payload copy-on-write safely; a non-consumable source is
+/// retained first by `coerce_container_to_mixed_payload`.
+fn coerce_literal_container_to_storage_payload(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    storage_ty: Option<&PhpType>,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let Some(storage_ty) = storage_ty else {
+        return value;
+    };
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let same_family = matches!(
+        (&source_ty, storage_ty),
+        (PhpType::Array(_), PhpType::Array(_))
+            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+    );
+    if !same_family || source_ty == *storage_ty {
+        return value;
+    }
+    let converted = coerce_container_to_mixed_payload(ctx, value, &source_ty, storage_ty, span);
+    if converted.value != value.value && ctx.value_is_owned_unboxed_local_load(value.value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    converted
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative
