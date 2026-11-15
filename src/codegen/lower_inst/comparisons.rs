@@ -34,12 +34,10 @@ pub(super) fn lower_str_cmp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let predicate = super::expect_cmp_predicate(inst)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    emit_php_compare_sign(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
+    emit_php_compare_sign_flags(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, #0", result_reg));               // compare the PHP comparison sign against zero
             let set_inst = format!(
                 "cset {}, {}",
                 result_reg,
@@ -48,8 +46,6 @@ pub(super) fn lower_str_cmp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction(&set_inst);                                 // materialize the ordered predicate as 0 or 1
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, 0", result_reg));                // compare the PHP comparison sign against zero
             ctx.emitter
                 .instruction(&format!("set{} al", super::x86_64_condition(predicate)?)); // materialize the ordered predicate in the low byte
             ctx.emitter
@@ -72,6 +68,31 @@ fn emit_php_compare_sign(
     rhs: ValueId,
     rhs_ty: &PhpType,
 ) -> Result<()> {
+    emit_php_compare(ctx, lhs, lhs_ty, rhs, rhs_ty, false)
+}
+
+/// Like `emit_php_compare_sign`, but leaves only the flags of comparing the sign against zero
+/// (signed predicates and equality read them directly). The int fast path then reduces to one
+/// native compare of the two ints, which sets exactly those flags.
+fn emit_php_compare_sign_flags(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+) -> Result<()> {
+    emit_php_compare(ctx, lhs, lhs_ty, rhs, rhs_ty, true)
+}
+
+/// Shared body of `emit_php_compare_sign` / `emit_php_compare_sign_flags`.
+fn emit_php_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+    flags_only: bool,
+) -> Result<()> {
     let lhs_repr = lhs_ty.codegen_repr();
     let rhs_repr = rhs_ty.codegen_repr();
     // Int fast path: when both operands currently hold ints, the sign is a native compare.
@@ -82,21 +103,28 @@ fn emit_php_compare_sign(
     if int_fast_path {
         let slow = ctx.next_label("php_compare_slow");
         super::arithmetic::emit_int_operand_probe(ctx, lhs, rhs, &slow)?;
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("cmp x0, x10");                         // compare the two ints
-                ctx.emitter.instruction("cset x9, gt");                         // 1 when left > right
-                ctx.emitter.instruction("cset x11, lt");                        // 1 when left < right
-                ctx.emitter.instruction("sub x0, x9, x11");                     // three-way sign
+        if flags_only {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("cmp x0, x10"),        // flags of sign(left - right) against zero
+                Arch::X86_64 => ctx.emitter.instruction("cmp rax, rcx"),        // flags of sign(left - right) against zero
             }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("xor edx, edx");                        // clear the greater-than flag word
-                ctx.emitter.instruction("xor r11d, r11d");                      // clear the less-than flag word
-                ctx.emitter.instruction("cmp rax, rcx");                        // compare the two ints
-                ctx.emitter.instruction("setg dl");                             // 1 when left > right
-                ctx.emitter.instruction("setl r11b");                           // 1 when left < right
-                ctx.emitter.instruction("sub rdx, r11");                        // three-way sign
-                ctx.emitter.instruction("mov rax, rdx");                        // sign in the result register
+        } else {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, x10");                     // compare the two ints
+                    ctx.emitter.instruction("cset x9, gt");                     // 1 when left > right
+                    ctx.emitter.instruction("cset x11, lt");                    // 1 when left < right
+                    ctx.emitter.instruction("sub x0, x9, x11");                 // three-way sign
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("xor edx, edx");                    // clear the greater-than flag word
+                    ctx.emitter.instruction("xor r11d, r11d");                  // clear the less-than flag word
+                    ctx.emitter.instruction("cmp rax, rcx");                    // compare the two ints
+                    ctx.emitter.instruction("setg dl");                         // 1 when left > right
+                    ctx.emitter.instruction("setl r11b");                       // 1 when left < right
+                    ctx.emitter.instruction("sub rdx, r11");                    // three-way sign
+                    ctx.emitter.instruction("mov rax, rdx");                    // sign in the result register
+                }
             }
         }
         abi::emit_jump(ctx.emitter, &done);
@@ -129,6 +157,13 @@ fn emit_php_compare_sign(
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if flags_only {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)), // compare the PHP comparison sign against zero
+            Arch::X86_64 => ctx.emitter.instruction(&format!("cmp {}, 0", result_reg)), // compare the PHP comparison sign against zero
+        }
+    }
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -354,12 +389,13 @@ fn emit_mixed_loose_eq(
     rhs_ty: &PhpType,
     is_equal: bool,
 ) -> Result<()> {
-    emit_php_compare_sign(ctx, lhs, lhs_ty, rhs, rhs_ty)?;
+    emit_php_compare_sign_flags(ctx, lhs, lhs_ty, rhs, rhs_ty)?;
     fold_compare_sign_to_equality(ctx, is_equal);
     Ok(())
 }
 
-/// Folds the `-1`/`0`/`+1` comparison sign in the integer result register to a `0`/`1` boolean.
+/// Folds the flags of the `-1`/`0`/`+1` comparison sign against zero (left by
+/// `emit_php_compare_sign_flags`) to a `0`/`1` boolean.
 ///
 /// For loose equality the boolean is set when the sign is zero (operands compared equal); for
 /// inequality it is set when the sign is non-zero. Leaves the boolean in the integer result
@@ -367,12 +403,10 @@ fn emit_mixed_loose_eq(
 fn fold_compare_sign_to_equality(ctx: &mut FunctionContext<'_>, is_equal: bool) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0");                              // test the PHP comparison sign for equality with zero
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality from the comparison sign
+            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality from the comparison flags
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 0");                              // test the PHP comparison sign for equality with zero
-            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality in the low byte
+            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality from the comparison flags
             ctx.emitter.instruction("movzx rax, al");                           // widen the loose equality byte into the integer result register
         }
     }

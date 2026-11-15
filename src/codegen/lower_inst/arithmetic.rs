@@ -879,34 +879,50 @@ pub(in crate::codegen) fn emit_int_operand_probe(
         }
         kinds[index] = ty;
     }
+    // The right operand loads straight into x10/rcx unless it is a register-held tagged pair
+    // (which only loads into the result register pair); the left one stays in the result register.
+    let right_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "rcx",
+    };
+    // A spilled tagged pair keeps its payload word at the value's own offset, so only that word
+    // needs loading once the tag has been probed.
+    let right_direct =
+        kinds[1] != PhpType::TaggedScalar || ctx.allocation.register_of(rhs).is_none();
     for (index, value) in [lhs, rhs].into_iter().enumerate() {
+        let target = if index == 1 && right_direct { right_reg } else { result_reg };
         match kinds[index] {
+            PhpType::TaggedScalar if index == 1 && right_direct => {
+                ctx.load_value_to_reg(value, target)?;
+            }
             PhpType::TaggedScalar => {
                 ctx.load_value_to_result(value)?;
             }
             PhpType::Mixed => {
-                ctx.load_value_to_reg(value, result_reg)?;
+                ctx.load_value_to_reg(value, target)?;
                 match ctx.emitter.target.arch {
-                    Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0, #8]"), // the int payload
-                    Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]"), // the int payload
+                    Arch::AArch64 => ctx.emitter.instruction(&format!("ldr {}, [{}, #8]", target, target)), // the int payload
+                    Arch::X86_64 => ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + 8]", target, target)), // the int payload
                 }
             }
             _ => {
-                ctx.load_value_to_reg(value, result_reg)?;
+                ctx.load_value_to_reg(value, target)?;
             }
         }
-        if index == 0 {
+        if index == 0 && !right_direct {
             abi::emit_push_reg(ctx.emitter, result_reg);
         }
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x10, x0");                             // right operand
-            abi::emit_pop_reg(ctx.emitter, "x0");
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax");                            // right operand
-            abi::emit_pop_reg(ctx.emitter, "rax");
+    if !right_direct {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x10, x0");                         // right operand
+                abi::emit_pop_reg(ctx.emitter, "x0");
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rcx, rax");                        // right operand
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
         }
     }
     Ok(())
