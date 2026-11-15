@@ -665,3 +665,24 @@ $cnt = []; foreach ([5, 3, 5, 9, 3, 5] as $v) { $cnt[$v] = ($cnt[$v] ?? 0) + 1; 
     assert_eq!(out.stdout, "Array\n(\n    [5] => 3\n    [3] => 2\n    [9] => 1\n)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "heap: {}", out.stderr);
 }
+
+/// A local read inside a loop shares the local's frame slot only when nothing outside the entry
+/// block can write it: `global` writes from a called function, by-reference closure captures and
+/// local appends are all seen.
+#[test]
+fn test_loop_local_reads_see_global_reference_and_append_writes() {
+    let out = compile_and_run(r#"<?php
+$g = 1; $arr = [1, 2]; $obj = new stdClass; $obj->v = 1;
+function bump() { global $g, $arr; $g++; $arr[] = 3; }
+$sum = 0;
+for ($i = 0; $i < 3; $i++) { $sum += $g + count($arr); bump(); }
+echo $sum, " ", $g, " ", count($arr), "\n";
+$h = 5; $f = function() use (&$h) { $h *= 2; };
+for ($i = 0; $i < 3; $i++) { echo $h, " "; $f(); }
+echo "\n";
+function loc(array $a) { $t = 0; $b = $a; for ($i = 0; $i < 3; $i++) { $t += count($b); $b[] = $i; } return $t; }
+echo loc([1]), "\n";
+$k = 2; for ($i = 0; $i < 2; $i++) { $m = $k * 3; echo $m; } echo "\n";
+"#);
+    assert_eq!(out, "15 4 5\n5 10 20 \n6\n66\n");
+}

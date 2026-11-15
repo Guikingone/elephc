@@ -118,7 +118,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
         Op::ObjectClassName => builtins::types::lower_object_class_name(ctx, &inst),
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
-        Op::LoadLocal if ctx.prologue_loaded.contains(&inst_id) => Ok(()),
+        Op::LoadLocal if ctx.prologue_loaded.contains(&inst_id) || ctx.aliased_load_insts.contains(&inst_id) => Ok(()),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::StrAppendLocal => lower_str_append_local(ctx, &inst),

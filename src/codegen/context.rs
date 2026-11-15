@@ -105,6 +105,10 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) known_non_null: std::collections::HashSet<ValueId>,
     /// Entry `load_local`s of parameters the prologue already moved into their register.
     pub(super) prologue_loaded: std::collections::HashSet<InstId>,
+    /// Spilled `load_local` results whose home is the local's own frame slot (see
+    /// `block_emit::collect_aliased_local_loads`), keyed by value, with their instructions.
+    pub(super) aliased_loads: HashMap<ValueId, usize>,
+    pub(super) aliased_load_insts: std::collections::HashSet<InstId>,
     /// The block emitted right after the current one: a branch to it can fall through.
     pub(super) next_block_id: Option<crate::ir::BlockId>,
     /// Branch conditions `((a ^ r) & (b ^ r)) < 0` of an add `r = a + b`, lowered as the add's
@@ -198,6 +202,8 @@ impl<'a> FunctionContext<'a> {
             fused_compare_value: None,
             known_non_null: std::collections::HashSet::new(),
             prologue_loaded: std::collections::HashSet::new(),
+            aliased_loads: HashMap::new(),
+            aliased_load_insts: std::collections::HashSet::new(),
             next_block_id: None,
             fused_add_overflow: HashMap::new(),
             overflow_sums: std::collections::HashSet::new(),
@@ -1199,6 +1205,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the frame offset assigned to a value by Phase 04 placement.
     fn value_offset(&self, value: ValueId) -> Result<usize> {
+        if let Some(offset) = self.aliased_loads.get(&value) {
+            return Ok(*offset);
+        }
         self.placement
             .slot(value)
             .ok_or_else(|| CodegenIrError::missing_entry("value slot", value.as_raw()))

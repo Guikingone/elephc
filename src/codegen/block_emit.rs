@@ -1160,12 +1160,98 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let blocks = ctx.function.blocks.clone();
     let use_counts = value_use_counts(ctx.function);
     collect_rematerialized_consts(ctx);
+    collect_aliased_local_loads(ctx);
     for (index, block) in blocks.iter().enumerate() {
         ctx.next_block_id = blocks.get(index + 1).map(|next| next.id);
         emit_block(ctx, block, &use_counts)?;
     }
     ctx.next_block_id = None;
     Ok(())
+}
+
+/// Finds spilled `load_local` results whose home can be the local's own frame slot, saving the
+/// copy: the local is a plain one-word slot (raw int, float, bool or container/object pointer,
+/// same type as the read) written only in the entry block, and the read is in another block (or
+/// anywhere for a slot no instruction writes, like a parameter), so the slot holds the same word
+/// for the value's whole life.
+fn collect_aliased_local_loads(ctx: &mut FunctionContext<'_>) {
+    let function = ctx.function;
+    ctx.aliased_loads.clear();
+    ctx.aliased_load_insts.clear();
+    if function.flags.is_generator
+        || function.instructions.iter().any(|inst| {
+            matches!(inst.op, Op::TryPushHandler | Op::CatchCurrent | Op::CatchBind | Op::FinallyEnter)
+                || inst.op.name().contains("eval")
+        })
+    {
+        return;
+    }
+    let entry: std::collections::HashSet<InstId> = function
+        .block(function.entry)
+        .map(|block| block.instructions.iter().copied().collect())
+        .unwrap_or_default();
+    // Slots referenced by anything but a plain read outside the entry block.
+    let mut written: std::collections::HashSet<crate::ir::LocalSlotId> = std::collections::HashSet::new();
+    // Slots no instruction writes at all (a parameter only the prologue stores).
+    let mut ever_written: std::collections::HashSet<crate::ir::LocalSlotId> = std::collections::HashSet::new();
+    for (index, inst) in function.instructions.iter().enumerate() {
+        let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate.clone() else {
+            continue;
+        };
+        let id = InstId::from_raw(index as u32);
+        if inst.op != Op::LoadLocal && !(inst.op == Op::StoreLocal && entry.contains(&id)) {
+            written.insert(slot);
+        }
+        if inst.op != Op::LoadLocal {
+            ever_written.insert(slot);
+        }
+    }
+    let mut aliased = Vec::new();
+    for block in &function.blocks {
+        let in_entry = block.id == function.entry;
+        for inst_id in &block.instructions {
+            let Some(inst) = function.instruction(*inst_id) else {
+                continue;
+            };
+            let (Op::LoadLocal, Some(crate::ir::Immediate::LocalSlot(slot)), Some(result)) =
+                (inst.op, inst.immediate.clone(), inst.result)
+            else {
+                continue;
+            };
+            if written.contains(&slot)
+                || (in_entry && ever_written.contains(&slot))
+                || ctx.allocation.register_of(result).is_some()
+            {
+                continue;
+            }
+            let plain = function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+                matches!(local.kind, crate::ir::LocalKind::PhpLocal | crate::ir::LocalKind::HiddenTemp)
+            });
+            let one_word = |ty: &PhpType| {
+                matches!(
+                    ty,
+                    PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Array(_)
+                        | PhpType::AssocArray { .. } | PhpType::Object(_)
+                )
+            };
+            let local_ty = ctx.local_php_type(slot).map(|ty| ty.codegen_repr());
+            let result_ty = ctx.value_php_type(result).map(|ty| ty.codegen_repr());
+            let same_word = matches!((&local_ty, &result_ty), (Ok(local), Ok(result)) if local == result && one_word(local));
+            if !plain
+                || !same_word
+                || ctx.local_slot_representation(slot) != crate::codegen::context::LocalSlotRepresentation::Raw
+            {
+                continue;
+            }
+            if let Ok(offset) = ctx.local_offset(slot) {
+                aliased.push((result, *inst_id, offset));
+            }
+        }
+    }
+    for (value, inst, offset) in aliased {
+        ctx.aliased_loads.insert(value, offset);
+        ctx.aliased_load_insts.insert(inst);
+    }
 }
 
 /// Records integer/bool constants as rematerializable immediates and the constant
