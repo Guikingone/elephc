@@ -71,16 +71,7 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: incref ---");
     emitter.label_global("__rt_incref");
-    // One unsigned window test covers null, sentinels, static data and pointers past the
-    // live heap: `rax - _heap_buf` must land in [0, _heap_off).
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("mov r11, rax");                                        // candidate refcounted pointer
-    emitter.instruction("sub r11, r10");                                        // offset into the managed heap (null and low pointers wrap to huge values)
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_off", 0);
-    emitter.instruction("cmp r11, r10");                                        // is the candidate pointer outside the live heap window?
-    emitter.instruction("jae __rt_incref_skip");                                // non-heap values are not refcounted
-    emitter.instruction(&format!("cmp DWORD PTR [rax - 4], 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // high word of the uniform header carries the elephc heap marker
-    emitter.instruction("jne __rt_incref_skip");                                // skip static strings or foreign pointers that do not carry elephc heap headers
+    super::emit_x86_64_heap_owner_guard(emitter, "__rt_incref_skip", 0);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_debug_enabled");
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the heap-debug enabled flag before mutating the x86_64 refcount
     emitter.instruction("test r11, r11");                                       // is heap-debug live validation enabled for incref?

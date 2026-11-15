@@ -9,6 +9,8 @@
 //! - Array, hash, heap, GC, and Mixed helpers must preserve runtime layout, refcounts, and COW rules before mutating shared storage.
 
 mod array_chunk;
+mod heap_guard;
+pub(crate) use heap_guard::emit_x86_64_heap_owner_guard;
 mod array_chunk_refcounted;
 mod array_change_key_case;
 mod array_column;

@@ -90,25 +90,8 @@ fn emit_decref_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: decref_hash ---");
     emitter.label_global("__rt_decref_hash");
 
-    emitter.instruction("test rax, rax");                                       // skip null hash pointers immediately because they do not own heap storage
-    emitter.instruction("jz __rt_decref_hash_skip");                            // null hash values need no release work
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
-    emitter.instruction("cmp rax, r10");                                        // reject null sentinels, scalar values, and static pointers before reading a heap header
-    emitter.instruction("jb __rt_decref_hash_skip");                            // non-heap values below the managed heap do not own hash-table storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent before deriving the live heap end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("add r11, r10");                                        // compute the managed heap end address from the base and live offset
-    emitter.instruction("cmp rax, r11");                                        // is the candidate hash pointer outside the live heap window?
-    emitter.instruction("jae __rt_decref_hash_skip");                           // pointers above the live heap end are not refcounted hashes
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
-    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // ignore foreign pointers that do not carry the elephc x86_64 heap marker
-    emitter.instruction("jne __rt_decref_hash_skip");                           // only elephc-owned hash tables participate in x86_64 decref bookkeeping
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit hash refcount from the uniform heap header
-    emitter.instruction("sub r10d, 1");                                         // decrement the hash refcount for the releasing x86_64 owner
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented hash refcount back into the uniform heap header
+    super::emit_x86_64_heap_owner_guard(emitter, "__rt_decref_hash_skip", 16);
+    emitter.instruction("sub DWORD PTR [rax - 12], 1");                         // drop one owner from the 32-bit refcount in the uniform heap header
     emitter.instruction("jz __rt_decref_hash_free");                            // zero refcount means the hash and its owned entries can be released now
     emitter.instruction("jmp __rt_decref_hash_skip");                           // non-zero refcount stays alive until an explicit GC safe point
     emitter.label("__rt_decref_hash_skip");

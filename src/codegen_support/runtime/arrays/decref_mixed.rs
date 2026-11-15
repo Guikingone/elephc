@@ -90,18 +90,7 @@ fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: decref_mixed ---");
     emitter.label_global("__rt_decref_mixed");
 
-    // One unsigned window test covers null, sentinels, static data and pointers past the
-    // live heap: `rax - _heap_buf` must land in [16, _heap_off).
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("mov r11, rax");                                        // candidate mixed pointer
-    emitter.instruction("sub r11, r10");                                        // offset into the managed heap (null and low pointers wrap to huge values)
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_off", 0);
-    emitter.instruction("cmp r11, r10");                                        // is the pointer outside the live heap window?
-    emitter.instruction("jae __rt_decref_mixed_skip");                          // non-heap values do not own mixed-box storage
-    emitter.instruction("cmp r11, 16");                                         // the first user payload begins after the initial heap header
-    emitter.instruction("jb __rt_decref_mixed_skip");                           // header-adjacent pointers are not mixed boxes
-    emitter.instruction(&format!("cmp DWORD PTR [rax - 4], 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // high word of the uniform header carries the elephc heap marker
-    emitter.instruction("jne __rt_decref_mixed_skip");                          // only elephc-owned mixed boxes participate in x86_64 decref bookkeeping
+    super::emit_x86_64_heap_owner_guard(emitter, "__rt_decref_mixed_skip", 16);
     emitter.instruction("sub DWORD PTR [rax - 12], 1");                         // drop one owner from the 32-bit mixed-box refcount
     emitter.instruction("jz __rt_decref_mixed_free");                           // zero refcount means the boxed payload can be released now
     emitter.label("__rt_decref_mixed_skip");
