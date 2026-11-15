@@ -21,6 +21,8 @@ use crate::types::PhpType;
 pub struct Builder<'f> {
     func: &'f mut Function,
     current: Option<BlockId>,
+    /// `release_local_slot` ops that drop a boxed-Mixed owner only if the slot ends up Mixed.
+    provisional_mixed_owner_releases: Vec<InstId>,
 }
 
 impl<'f> Builder<'f> {
@@ -29,6 +31,48 @@ impl<'f> Builder<'f> {
         Self {
             func,
             current: None,
+            provisional_mixed_owner_releases: Vec::new(),
+        }
+    }
+
+    /// Marks the instruction just emitted, a `release_local_slot`, as a provisional release of a
+    /// boxed-Mixed slot owner.
+    ///
+    /// A consuming container mutation of a local (fetch-for-write, string-key promotion) must
+    /// first drop the slot's old Mixed box when the frame slot is Mixed, because the mutated
+    /// source was unboxed with its own reference. A later store can still widen the slot to
+    /// Mixed after the mutation is lowered, so the release is emitted provisionally and
+    /// `prune_provisional_mixed_owner_releases` erases it if the slot's final storage is concrete
+    /// (where the source load borrows the slot's only reference instead).
+    pub fn mark_last_instruction_as_provisional_mixed_owner_release(&mut self, slot: LocalSlotId) {
+        let Some(index) = self.func.instructions.len().checked_sub(1) else {
+            return;
+        };
+        let inst = &self.func.instructions[index];
+        if inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot)) {
+            self.provisional_mixed_owner_releases
+                .push(InstId::from_raw(index as u32));
+        }
+    }
+
+    /// Erases provisional Mixed-owner releases whose slot stayed concrete (see
+    /// `mark_last_instruction_as_provisional_mixed_owner_release`).
+    pub fn prune_provisional_mixed_owner_releases(&mut self) {
+        for inst_id in std::mem::take(&mut self.provisional_mixed_owner_releases) {
+            let inst = &mut self.func.instructions[inst_id.as_raw() as usize];
+            if inst.op != Op::ReleaseLocalSlot {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                continue;
+            };
+            let storage_type = self.func.locals[slot.as_raw() as usize].php_type.codegen_repr();
+            if matches!(storage_type, PhpType::Mixed | PhpType::Union(_)) {
+                continue;
+            }
+            inst.op = Op::Nop;
+            inst.immediate = None;
+            inst.effects = Op::Nop.default_effects();
         }
     }
 

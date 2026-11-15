@@ -522,7 +522,9 @@ fn lower_mixed_unset_offset_unset_call(
     if ctx.value_is_owning_temporary(result) {
         crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
     }
-    release_owned_hidden_temp(ctx, &temp, object_ty, false, span);
+    let slot = ctx.declare_local(&temp, object_ty);
+    ctx.release_stored_local_value(&temp, slot, Some(span));
+    ctx.clear_owned_hidden_temp(&temp, Some(span));
 }
 
 /// Prefix of the hidden temporaries the parser introduces for nested appends
@@ -1113,8 +1115,7 @@ fn contextualize_local_assignment(
     }
 
     if matches!(value.kind, ExprKind::ArrayLiteral(_))
-        && matches!(source_repr, PhpType::Array(_))
-        && matches!(contextual_repr, PhpType::AssocArray { .. })
+        && array_literal_hash_promotion_preserves_elements(&source_repr, &contextual_repr)
     {
         let hash = ctx.emit_value(
             Op::ArrayToHash,
@@ -1170,6 +1171,28 @@ fn empty_literal_hash_loop_contract(
         });
     }
     widest.filter(|ty| matches!(ty.codegen_repr(), PhpType::AssocArray { .. }))
+}
+
+/// Returns whether an indexed array literal may be stored as the local's associative contract.
+///
+/// `Op::ArrayToHash` only re-keys the outer container: every element keeps its own runtime
+/// representation (or is boxed when the contract's values are `Mixed`). Promoting is therefore
+/// sound only when the elements already have the contract's value representation. A local that is
+/// first a list of lists and later a map of maps (`$c = [[1, 2]]; ... $c = ["a" => ["b" => [1]]];`)
+/// otherwise had its inner lists typed as hashes, so later nested reads and writes dispatched hash
+/// operations on indexed storage and crashed. Such literals keep their own type instead, and the
+/// frame slot widens to a boxed `Mixed` that can hold both shapes.
+fn array_literal_hash_promotion_preserves_elements(
+    source_repr: &PhpType,
+    contextual_repr: &PhpType,
+) -> bool {
+    let (PhpType::Array(element), PhpType::AssocArray { value, .. }) = (source_repr, contextual_repr)
+    else {
+        return false;
+    };
+    let element = element.codegen_repr();
+    let value = value.codegen_repr();
+    value == PhpType::Mixed || element == value || is_empty_indexed_array_element(&element)
 }
 
 /// Returns whether this function-like scope records `target` for `name` on any loop header.
@@ -1629,8 +1652,8 @@ fn lower_ref_assign_local_nested_append(
     lower_ref_append_into_local_hash(ctx, &inner_temp, var_name, span);
 
     // Write the relocated inner hash back into `outer[$k]`. `HashSet`'s value materialization retains
-    // the borrowed inner (refcount 2: temp + `outer[$k]`); the temp's redundant share is then released
-    // with the inner's ACTUAL hash type (not via `unset`, which would first widen the slot toward
+    // the inner (refcount 2: temp + `outer[$k]`); the temp's redundant share is then released
+    // through the same hash-typed load (not via `unset`, which would first widen the slot toward
     // `Void`/`Mixed` and decref through the wrong runtime helper — leaking the hash), leaving
     // `outer[$k]` the sole owner (refcount 1) so the container frees cleanly. The void `HashSet`
     // codegen writes the possibly-relocated outer hash back to its SSA home and — when `outer` traces
@@ -1643,8 +1666,11 @@ fn lower_ref_assign_local_nested_append(
         Op::HashSet.default_effects(),
         Some(span),
     );
-    let inner_slot = ctx.declare_local(&inner_temp, inner_hash_ty.clone());
-    ctx.release_stored_local_value(&inner_temp, inner_slot, Some(span));
+    // Release the temp's share through the SAME load the setter received: an explicit release of
+    // that operand makes `HashSet` retain its own reference. Releasing through a second load let
+    // the setter take the (owned, release-free) first load's reference and then dropped it again,
+    // freeing the inner hash while `outer[$k]` still stored it.
+    crate::ir_lower::ownership::release_if_owned(ctx, inner_final, Some(span));
     ctx.clear_owned_hidden_temp(&inner_temp, Some(span));
     // Only the ArrayToHash (indexed-container) case needs an explicit write-back: there `outer`
     // traces to `ArrayToHash`, not a `LoadLocal`, so the `HashSet` codegen cannot auto-store it.
@@ -3049,11 +3075,25 @@ fn lower_nested_array_assign(
     if let Some((name, chain)) = nested_local_chain(target) {
         let root_is_ref_bound = ctx.is_ref_bound_local(name);
         if root_is_ref_bound || concrete_local_nested_chain(ctx, name, &chain) {
+            // Lower every index expression once and reuse the SSA value for both the descent read
+            // and the ascending write-back (the index is the same key on the way down and up).
+            let indices: Vec<LoweredValue> = chain.iter().map(|e| lower_expr(ctx, e)).collect();
+            let value_val = lower_expr(ctx, value);
+            // Widening changes the root's representation, which a loop body cannot do mid-body:
+            // loads on the back edge were lowered against the concrete type (loop-carried locals
+            // get their widened contract from the loop pre-scan instead).
+            if !root_is_ref_bound
+                && ctx.loop_stack.is_empty()
+                && !concrete_chain_leaf_accepts(ctx, name, chain.len(), value_val)
+            {
+                lower_widened_nested_local_assign(ctx, name, &indices, value_val, span);
+                return;
+            }
             lower_nested_local_assign_with_parent_writeback(
                 ctx,
                 name,
-                &chain,
-                value,
+                &indices,
+                value_val,
                 span,
                 root_is_ref_bound,
             );
@@ -3103,6 +3143,154 @@ fn lower_nested_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Returns whether a concrete chain's leaf container can store `value` without changing its type.
+///
+/// The write-back path keeps every level's static element type, so the leaf write must store a
+/// value of exactly the leaf container's element representation (or into `Mixed` elements).
+/// Writing an `int` into a map of lists, or a list that an append converted to `array<mixed>` into
+/// a slot typed `array<int>`, would otherwise store a payload that later reads decode with the
+/// wrong layout.
+fn concrete_chain_leaf_accepts(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    depth: usize,
+    value: LoweredValue,
+) -> bool {
+    let mut container_ty = ctx.local_type(name).codegen_repr();
+    for _ in 0..depth {
+        container_ty = match container_ty {
+            PhpType::Array(element_ty) => element_ty.codegen_repr(),
+            PhpType::AssocArray { value, .. } => value.codegen_repr(),
+            _ => return false,
+        };
+    }
+    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    // An empty-typed leaf (`[]`, element `Never`/`Void`) has no element layout to violate yet:
+    // writing any indexed array refines it, exactly as a single-level write does.
+    let empty_leaf_refined = matches!(
+        (&container_ty, &value_ty),
+        (PhpType::Array(leaf), PhpType::Array(_)) if is_empty_indexed_array_element(leaf)
+    );
+    container_ty == PhpType::Mixed || container_ty == value_ty || empty_leaf_refined
+}
+
+/// Lowers a nested local write whose leaf value does not fit the chain's concrete element types.
+///
+/// The root's elements are widened to `Mixed` (`ArrayToMixed`/`HashToMixed`), after which the same
+/// fetch-for-write cells as the generic Mixed path carry the write: the first level ensures the
+/// element inside the widened root and re-reads its stored cell, deeper levels fetch-for-write
+/// through that cell, and the leaf is written with the boxed-Mixed setter. Per-entry runtime tags
+/// keep untouched siblings readable, and the keys and value are the ones already lowered by the
+/// caller, so nothing is evaluated twice.
+///
+/// The root is converted from a retained copy and published with an ordinary retaining store.
+/// Whether the load unboxed an owned reference from a `Mixed` frame slot is only known once the
+/// slot's final type is (a later reassignment may still widen it), and the store's deferred
+/// `release_local_slot` releases the previous occupant in whichever representation the slot ends
+/// up with. The retained copy costs one copy-on-write split of the root on this fallback path.
+fn lower_widened_nested_local_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    indices: &[LoweredValue],
+    value: LoweredValue,
+    span: Span,
+) {
+    let root = ctx.load_local(name, Some(span));
+    let root_ty = ctx.builder.value_php_type(root.value).codegen_repr();
+    let (convert_op, widened_ty, is_hash) = match &root_ty {
+        PhpType::Array(_) => (
+            Op::ArrayToMixed,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            false,
+        ),
+        PhpType::AssocArray { key, .. } => (
+            Op::HashToMixed,
+            PhpType::AssocArray {
+                key: key.clone(),
+                value: Box::new(PhpType::Mixed),
+            },
+            true,
+        ),
+        _ => unreachable!("concrete nested chains are rooted at an array or hash local"),
+    };
+    let held = crate::ir_lower::ownership::acquire_if_refcounted(ctx, root, Some(span));
+    let widened = if root_ty == widened_ty {
+        held
+    } else {
+        ctx.emit_value(
+            convert_op,
+            vec![held.value],
+            None,
+            widened_ty.clone(),
+            convert_op.default_effects(),
+            Some(span),
+        )
+    };
+    if ctx.value_is_owning_temporary(root) {
+        crate::ir_lower::ownership::release_if_owned(ctx, root, Some(span));
+    }
+
+    // First level: ensure the element inside the widened root, publish the root, and re-read the
+    // element's stored cell (retained by the read) as the parent of the next level.
+    let first_key = if is_hash {
+        indices[0]
+    } else {
+        coerce_to_int_at_span(ctx, indices[0], Some(span))
+    };
+    let ensured = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![widened.value, first_key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        widened_ty.clone(),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    let read_op = if is_hash { Op::HashGet } else { Op::ArrayGet };
+    let mut parent = ctx.emit_value(
+        read_op,
+        vec![ensured.value, first_key.value],
+        None,
+        PhpType::Mixed,
+        read_op.default_effects(),
+        Some(span),
+    );
+    ctx.store_local(name, ensured, widened_ty, Some(span));
+    release_persisted_string_operand(ctx, first_key, span);
+
+    // Intermediate levels: fetch-for-write through the boxed cell.
+    let depth = indices.len();
+    for key in &indices[1..depth - 1] {
+        let next = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![parent.value, key.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+            PhpType::Mixed,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, *key, span);
+        if ctx.value_is_owning_temporary(parent) {
+            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+        }
+        parent = next;
+    }
+
+    // Leaf: write through the boxed-Mixed setter.
+    let key = indices[depth - 1];
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![parent.value, key.value, value.value],
+        None,
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    release_persisted_string_operand(ctx, key, span);
+    release_retained_nested_write_operand(ctx, value, span);
+    if ctx.value_is_owning_temporary(parent) {
+        crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+    }
 }
 
 /// Walks an `ArrayAccess` chain to its root local and returns outermost-first indices.
@@ -3198,31 +3386,26 @@ fn nested_index_static_type(ctx: &LoweringContext<'_, '_>, key: &Expr) -> PhpTyp
 ///    relocated (ArrayToHash de-pack, or the first-level read vivified an absent key): in-place
 ///    mutation leaves the cell pointer unchanged, and a redundant `__rt_ref_cell_store` would
 ///    decref the still-aliased inner to zero and free it (a use-after-free). Each temp's redundant
-///    share is released with the temp's actual type after its write-back (SLICE-2 discipline).
+///    share is released through the same SSA load that fed its write-back, then the slot is cleared.
 fn lower_nested_local_assign_with_parent_writeback(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
-    chain: &[&Expr],
-    value: &Expr,
+    indices: &[LoweredValue],
+    value_val: LoweredValue,
     span: Span,
     root_is_ref_bound: bool,
 ) {
-    let depth = chain.len();
+    let depth = indices.len();
     debug_assert!(depth >= 2, "nested ref-bound assign requires 2+ index levels");
 
-    // Lower every index expression once and reuse the SSA value for both the descent read and the
-    // ascending write-back (the index is the same key on the way down and up).
-    let indices: Vec<LoweredValue> = chain.iter().map(|e| lower_expr(ctx, e)).collect();
-    let value_val = lower_expr(ctx, value);
-
-    if let Some(child_ty) = indexed_fetch_for_write_child_type(ctx, name, &indices, root_is_ref_bound) {
-        lower_nested_indexed_fetch_for_write(ctx, name, &indices, value_val, child_ty, span);
+    if let Some(child_ty) = indexed_fetch_for_write_child_type(ctx, name, indices, root_is_ref_bound) {
+        lower_nested_indexed_fetch_for_write(ctx, name, indices, value_val, child_ty, span);
         return;
     }
     lower_nested_local_assign_parent_writeback_lowered(
         ctx,
         name,
-        &indices,
+        indices,
         value_val,
         span,
         root_is_ref_bound,
@@ -3318,6 +3501,11 @@ fn lower_nested_indexed_fetch_for_write(
         Op::ArrayStoreElemRaw.default_effects(),
         Some(span),
     );
+    // The parent reload is an owned unbox when the local's final frame slot is boxed Mixed; the
+    // release is provisional and pruned when the slot stays a concrete array.
+    if ctx.value_is_owning_temporary(parent) {
+        crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+    }
     branch_to(ctx, done);
 
     ctx.builder.position_at_end(slow);
@@ -3404,32 +3592,24 @@ fn lower_nested_local_assign_parent_writeback_lowered(
     );
 
     // 4. Per-level write-back: walk from the deepest temp up to the head, writing each mutated
-    //    temp into its parent at the matching index. After each write-back, release the temp's
-    //    redundant share (SLICE-2 `:787-803` discipline) when the parent's set op RETAINS the
-    //    value (`HashSet` and concrete refcounted `ArraySet`). Boxed-Mixed array/runtime setters
-    //    consume the owned child while boxing it, so those paths only clear the temp slot.
+    //    temp into its parent at the matching index. `write_nested_element_in_place` releases the
+    //    temp's share through the SAME SSA load it passed to the setter, which makes every setter
+    //    retain its own reference (an explicit `release` of an operand forbids the backend from
+    //    stealing it). The temp slot is then only cleared. Releasing through a second, fresh load
+    //    of the temp instead let `HashSet`/Mixed-element `ArraySet` steal the first (owned,
+    //    release-free) load and then dropped the same reference again, freeing the child while
+    //    the parent still stored it.
     for i in (1..(depth - 1)).rev() {
         let child = ctx.load_local(&temp_names[i], Some(span));
         let parent = ctx.load_local(&temp_names[i - 1], Some(span));
-        let parent_ir = parent.ir_type;
         let parent_ty = temp_types[i - 1].clone();
-        write_nested_element_in_place(
-            ctx,
-            parent,
-            parent_ty.clone(),
-            indices[i],
-            child,
-            span,
-        );
-        let consumed = nested_parent_consumes_child(parent_ir, &parent_ty);
-        release_owned_hidden_temp(ctx, &temp_names[i], temp_types[i].clone(), consumed, span);
+        write_nested_element_in_place(ctx, parent, parent_ty, indices[i], child, span);
+        ctx.clear_owned_hidden_temp(&temp_names[i], Some(span));
     }
     // Final write-back: temp[0] → head at index[0].
     let child0 = ctx.load_local(&temp_names[0], Some(span));
-    let head_ir = head.ir_type;
     write_nested_element_in_place(ctx, head, head_ty.clone(), indices[0], child0, span);
-    let head_consumed = nested_parent_consumes_child(head_ir, &head_ty);
-    release_owned_hidden_temp(ctx, &temp_names[0], temp_types[0].clone(), head_consumed, span);
+    ctx.clear_owned_hidden_temp(&temp_names[0], Some(span));
 
     // 5. Tail: store the (possibly relocated) head back into the ref cell ONLY when a relocation
     //    happened. In-place mutation leaves the cell pointer unchanged; a redundant
@@ -3440,24 +3620,6 @@ fn lower_nested_local_assign_parent_writeback_lowered(
             "plain indexed nested chains cannot relocate their root"
         );
         ctx.store_mutated_local(name, head, head_ty, Some(span));
-    }
-}
-
-/// Returns whether a nested parent write transfers the owned child out of its temp slot.
-///
-/// Concrete refcounted indexed arrays call `__rt_array_set_refcounted`, which retains the
-/// incoming payload; the temp must therefore release its original share after write-back.
-/// Mixed-element arrays and boxed-Mixed receivers instead consume the owned child while boxing
-/// or installing it. Hash setters retain their incoming refcounted payload like concrete arrays.
-fn nested_parent_consumes_child(parent_ir: IrType, parent_ty: &PhpType) -> bool {
-    match parent_ir {
-        IrType::Heap(IrHeapKind::Hash) => false,
-        IrType::Heap(IrHeapKind::Array) => matches!(
-            parent_ty.codegen_repr(),
-            PhpType::Array(element_ty) if element_ty.codegen_repr() == PhpType::Mixed
-        ),
-        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => true,
-        _ => true,
     }
 }
 
@@ -3585,6 +3747,10 @@ fn read_nested_element_into_owned_temp(
 /// coerced); `Heap(Mixed)`/`Heap(Union)` → `__rt_mixed_array_set` (3-operand `RuntimeCall`). The
 /// set op's codegen releases the displaced prior element and updates the container SSA value's
 /// home with the possibly-relocated pointer.
+///
+/// An owning `value` (fresh producer or hidden-temp load) is released explicitly right after the
+/// set, on every branch. The explicit release makes each setter retain its own reference instead
+/// of stealing the operand, so callers never release the same share a second time.
 fn write_nested_element_in_place(
     ctx: &mut LoweringContext<'_, '_>,
     container: LoweredValue,
@@ -3603,7 +3769,7 @@ fn write_nested_element_in_place(
                 Some(span),
             );
             release_persisted_string_operand(ctx, key, span);
-            release_persisted_string_operand(ctx, value, span);
+            release_retained_nested_write_operand(ctx, value, span);
         }
         IrType::Heap(IrHeapKind::Array) => {
             let key_int = coerce_to_int_at_span(ctx, key, Some(span));
@@ -3615,7 +3781,7 @@ fn write_nested_element_in_place(
                 Op::ArraySet.default_effects(),
                 Some(span),
             );
-            release_persisted_string_operand(ctx, value_coerced, span);
+            release_retained_nested_write_operand(ctx, value_coerced, span);
         }
         IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => {
             ctx.emit_void(
@@ -3641,30 +3807,6 @@ fn write_nested_element_in_place(
             release_persisted_string_operand(ctx, value, span);
         }
     }
-}
-
-/// Releases an owned hidden temp's redundant share with the temp's actual type and clears the
-/// backing slot without an additional release (SLICE-2 `:787-803` discipline). After a `HashSet`
-/// write-back, the parent slot retains the value (HashSet incref's before storing), so the temp's
-/// share is the redundant one and must be decref'd through the matching runtime helper (not via
-/// `unset`, which would widen the slot toward `Void`/`Mixed` and decref through the wrong helper,
-/// leaking the heap object).
-///
-/// Boxed-Mixed `ArraySet` and 3-operand `__rt_mixed_array_set` consume the owned child while
-/// boxing/installing it, so the temp no longer holds a live reference and is only cleared.
-/// Concrete refcounted `ArraySet` instead retains the child and therefore uses `consumed = false`.
-fn release_owned_hidden_temp(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    ty: PhpType,
-    consumed: bool,
-    span: Span,
-) {
-    if !consumed {
-        let slot = ctx.declare_local(name, ty);
-        ctx.release_stored_local_value(name, slot, Some(span));
-    }
-    ctx.clear_owned_hidden_temp(name, Some(span));
 }
 
 /// Lowers the parent chain of a nested array assignment with write-context
@@ -3883,7 +4025,8 @@ fn lower_local_parent_fetch_for_write(
                         Op::ArrayToHash.default_effects(),
                         Some(span),
                     );
-                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
+                    let key = lower_expr(ctx, index);
+                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, key, span))
                 }
                 PhpType::Mixed | PhpType::Union(_) => {
                     // A gradual key may normalize to either an integer or a
@@ -3901,7 +4044,8 @@ fn lower_local_parent_fetch_for_write(
                         Op::ArrayToHash.default_effects(),
                         Some(span),
                     );
-                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
+                    let key = lower_expr(ctx, index);
+                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, key, span))
                 }
                 _ => None,
             }
@@ -3910,7 +4054,8 @@ fn lower_local_parent_fetch_for_write(
             let hash_value = ctx.load_local(name, Some(span));
             let assoc_ty = ctx.local_type(name);
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
-            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span))
+            let key = lower_expr(ctx, index);
+            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, key, span))
         }
         _ => None,
     }
@@ -3925,10 +4070,9 @@ fn lower_hash_parent_fetch_for_write(
     name: &str,
     hash_value: LoweredValue,
     assoc_ty: PhpType,
-    index: &Expr,
+    key: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    let key = lower_expr(ctx, index);
     let ensured = ctx.emit_value(
         Op::RuntimeCall,
         vec![hash_value.value, key.value],

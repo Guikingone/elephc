@@ -47,3 +47,5 @@ mod runtime_fast_paths;
 mod php_formatting_compliance;
 #[path = "regressions/mixed_separate_on_write.rs"]
 mod mixed_separate_on_write;
+#[path = "regressions/widened_nested_writes.rs"]
+mod widened_nested_writes;

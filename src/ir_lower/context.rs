@@ -1731,12 +1731,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder
             .widen_local_storage_type(slot, replacement_type);
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
-        if !is_ref_bound
-            && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
-            && !matches!(source_type, PhpType::Mixed | PhpType::Union(_))
-        {
-            self.release_stored_local_value(name, slot, span);
+        if is_ref_bound || matches!(source_type, PhpType::Mixed | PhpType::Union(_)) {
+            return;
         }
+        if matches!(storage_type, PhpType::Mixed | PhpType::Union(_)) {
+            self.release_stored_local_value(name, slot, span);
+        } else if previous_kind == LocalKind::PhpLocal {
+            self.emit_provisional_mixed_owner_release(slot, &storage_type, span);
+        }
+    }
+
+    /// Releases a slot's boxed-Mixed owner ahead of a consuming mutation, provisionally.
+    ///
+    /// The slot is not Mixed yet, but a later store may still widen it, which makes the
+    /// mutation's source load an owned unbox that leaves the old box behind. The emitted
+    /// `release_local_slot` is erased by the builder if the slot's final storage stays concrete,
+    /// where the source load borrows the slot's only reference instead.
+    fn emit_provisional_mixed_owner_release(
+        &mut self,
+        slot: LocalSlotId,
+        storage_type: &PhpType,
+        span: Option<Span>,
+    ) {
+        if !Ownership::php_type_needs_lifetime_tracking(storage_type) {
+            return;
+        }
+        self.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            span,
+        );
+        self.builder
+            .mark_last_instruction_as_provisional_mixed_owner_release(slot);
     }
 
     /// Emits a consuming local storeback after a mutation or representation change.
@@ -1801,10 +1829,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
         if release_previous
             && !is_ref_bound
-            && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && !matches!(value_type, PhpType::Mixed | PhpType::Union(_))
         {
-            self.release_stored_local_value(name, slot, span);
+            if matches!(storage_type, PhpType::Mixed | PhpType::Union(_)) {
+                self.release_stored_local_value(name, slot, span);
+            } else if previous_kind == LocalKind::PhpLocal {
+                self.emit_provisional_mixed_owner_release(slot, &storage_type, span);
+            }
         }
         match (is_ref_bound, previous_kind) {
             (true, _) => self.store_ref_cell_slot(slot, value, php_type, span),

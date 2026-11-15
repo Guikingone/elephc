@@ -496,6 +496,12 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    // A concrete array unboxed from a boxed-Mixed frame slot carries its own owned reference;
+    // drop the old box first so the mutation sees only real aliases and the storeback below
+    // installs the result as the slot's sole owner (mirrors `lower_hash_set`).
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_set_aarch64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
         Arch::X86_64 => lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
@@ -516,6 +522,11 @@ pub(super) fn lower_array_fetch_dim_w(ctx: &mut FunctionContext<'_>, inst: &Inst
     let index = expect_operand(inst, 1)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    // Same boxed-Mixed owner hand-off as `lower_array_set`: drop the old box before the
+    // separation so it sees only real aliases, then the storeback installs the parent.
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     let (array_reg, index_reg, child_reg, parent_reg) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x0", "x1", "x0", "x1"),
         Arch::X86_64 => ("rdi", "rsi", "rax", "rdx"),
@@ -716,6 +727,11 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    // Same boxed-Mixed owner hand-off as `lower_array_set`: the unboxed source owns its
+    // reference, so the old box is dropped before the append and replaced by the storeback.
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
         Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
