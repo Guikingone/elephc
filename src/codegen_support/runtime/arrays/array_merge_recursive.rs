@@ -78,7 +78,7 @@ fn emit_amr_box_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_box_value_new");                           // scalar values need no retain
     emitter.instruction("cmp rdi, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_box_value_new");                           // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // load the heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // __rt_incref takes its pointer in rax
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the wrapper hash
     emitter.instruction("jmp __rt_amr_box_value_new");                          // continue to wrapper allocation
     emitter.label("__rt_amr_box_value_persist");
@@ -385,13 +385,13 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // reload the existing-operand ownership flag
     emitter.instruction("test rax, rax");                                       // was the existing operand newly created?
     emitter.instruction("jz __rt_amr_free_na");                                 // skip releasing a borrowed existing operand
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 128]");                      // load the newly created existing operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 128]");                      // __rt_decref_hash takes its pointer in rax
     emitter.instruction("call __rt_decref_hash");                               // release the existing-operand wrapper
     emitter.label("__rt_amr_free_na");
     emitter.instruction("mov rax, QWORD PTR [rbp - 152]");                      // reload the new-operand ownership flag
     emitter.instruction("test rax, rax");                                       // was the new operand newly created?
     emitter.instruction("jz __rt_amr_entry_loop");                              // skip releasing a borrowed new operand
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 136]");                      // load the newly created new operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 136]");                      // __rt_decref_hash takes its pointer in rax
     emitter.instruction("call __rt_decref_hash");                               // release the new-operand wrapper
     emitter.instruction("jmp __rt_amr_entry_loop");                             // continue with the next entry
     emitter.label("__rt_amr_str_new");
@@ -402,7 +402,7 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_str_new_set");                             // scalar values need no retain
     emitter.instruction("cmp rax, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_str_new_set");                             // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // load the heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // __rt_incref takes its pointer in rax
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result
     emitter.instruction("jmp __rt_amr_str_new_set");                            // continue to the insertion
     emitter.label("__rt_amr_str_new_persist");
@@ -429,7 +429,7 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_int_set");                                 // scalar values need no retain
     emitter.instruction("cmp rax, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_int_set");                                 // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // load the heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // __rt_incref takes its pointer in rax
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result
     emitter.instruction("jmp __rt_amr_int_set");                                // continue to the insertion
     emitter.label("__rt_amr_int_persist");

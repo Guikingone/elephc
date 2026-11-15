@@ -192,7 +192,7 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
 
     // -- re-insert sub-hash into top. Incref first to survive the
     //    overwrite-decref inside __rt_hash_set. --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // sub-hash ptr → __rt_incref's first arg
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // __rt_incref takes its pointer in rax
     emitter.instruction("call __rt_incref");                                    // call runtime helper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // top hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // prepare SysV call argument
