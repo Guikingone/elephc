@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- `json_decode` boxes each decoded array/object with `__rt_mixed_box_raw`, adopting the decoder's reference instead of retaining then releasing it.
 - x86_64 `__rt_decref_object` shares the single-compare heap owner guard; `__rt_hash_new` clears entry markers four slots per iteration.
 - x86_64 `__rt_heap_alloc` maps a binned request to its size-class bin with one 512-entry byte table (`_heap_bin_alloc_offset`), tests the heap-debug flag in memory and updates the live/peak counters with fewer loads; `__rt_decref_any` shares the single-compare heap owner guard.
 - Method calls on nullable receivers no longer route the result through a hidden temp and merge block (the null branch always throws), the fused null test uses the biased-shift pointer check, `*.fatal` blocks are laid out cold, and object arguments bound to object parameters load straight into argument registers.

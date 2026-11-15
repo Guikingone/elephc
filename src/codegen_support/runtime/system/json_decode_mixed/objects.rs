@@ -262,11 +262,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
 
     emitter.instruction("mov x0, #5");                                          // tag = associative array
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for assoc payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the hash as Mixed(assoc); the box retains it
-    emitter.instruction("str x0, [sp, #40]");                                   // park the boxed result
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the decoded hash
-    emitter.instruction("bl __rt_decref_hash");                                 // transfer sole ownership of the hash to the box
-    emitter.instruction("ldr x0, [sp, #40]");                                   // return the boxed hash
+    emitter.instruction("bl __rt_mixed_box_raw");                               // box the payload, adopting the decoder's sole reference
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the local frame before returning
     emitter.instruction("ret");                                                 // return Mixed* (assoc array) in x0
@@ -278,11 +274,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // shift the stdClass pointer into the mixed_from_value low-word slot
     emitter.instruction("mov x0, #6");                                          // tag = object
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for object payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the stdClass as Mixed(object); the box retains it
-    emitter.instruction("str x0, [sp, #40]");                                   // park the boxed result
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the stdClass
-    emitter.instruction("bl __rt_decref_object");                               // transfer sole ownership of the stdClass to the box
-    emitter.instruction("ldr x0, [sp, #40]");                                   // return the boxed stdClass
+    emitter.instruction("bl __rt_mixed_box_raw");                               // box the payload, adopting the decoder's sole reference
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the local frame before returning
     emitter.instruction("ret");                                                 // return Mixed* (stdClass) in x0
@@ -549,11 +541,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 5");                                          // tag = associative array
     emitter.instruction("xor rsi, rsi");                                        // mixed_from_value high word unused for assoc payload
-    emitter.instruction("call __rt_mixed_from_value");                          // box the hash as Mixed(assoc); the box retains it
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // park the boxed result
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the decoded hash
-    emitter.instruction("call __rt_decref_hash");                               // transfer sole ownership of the hash to the box
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the boxed hash
+    emitter.instruction("call __rt_mixed_box_raw");                             // box the payload, adopting the decoder's sole reference
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* (assoc array) in rax
@@ -565,11 +553,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // shift the stdClass pointer into the mixed_from_value low-word slot
     emitter.instruction("mov rax, 6");                                          // tag = object
     emitter.instruction("xor rsi, rsi");                                        // mixed_from_value high word unused for object payload
-    emitter.instruction("call __rt_mixed_from_value");                          // box the stdClass as Mixed(object); the box retains it
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // park the boxed result
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the stdClass
-    emitter.instruction("call __rt_decref_object");                             // transfer sole ownership of the stdClass to the box
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the boxed stdClass
+    emitter.instruction("call __rt_mixed_box_raw");                             // box the payload, adopting the decoder's sole reference
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* (stdClass) in rax
