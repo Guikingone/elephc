@@ -66,6 +66,21 @@ pub(crate) fn heap_bin_alloc_offset_table() -> Vec<u8> {
         .collect()
 }
 
+/// `_heap_bin_free_offset[k]`: the bin-head byte offset of the largest class not above `8 * k`
+/// bytes, indexed by `size >> 3` for a freed block of 8..=4096 bytes. Every class is a multiple
+/// of 8, so truncating the block size to 8 bytes never changes the class it can serve.
+pub(crate) fn heap_bin_free_offset_table() -> Vec<u8> {
+    (0..=HEAP_BIN_ALLOC_LOOKUP_LEN)
+        .map(|k| {
+            let index = HEAP_BIN_CLASS_SIZES[..HEAP_BIN_COUNT]
+                .iter()
+                .rposition(|&size| size <= (8 * k).max(8))
+                .unwrap_or(0);
+            (index * 8) as u8
+        })
+        .collect()
+}
+
 /// `_heap_bin_floor_index[k]`: the largest class not above `64 * k` bytes, indexed by
 /// `size >> 6` for a freed block of at least 64 bytes.
 pub(crate) fn heap_bin_floor_index_table() -> Vec<u8> {
@@ -120,18 +135,12 @@ pub(crate) fn emit_free_bin_offset_aarch64(emitter: &mut Emitter, size: &str, ou
 }
 
 /// Emits x86_64 code computing the bin-head byte offset of the largest class a freed block of
-/// `size` (8..=4096) bytes can serve: `(size >> 3) - 1` below 64, else the floor table.
-pub(crate) fn emit_free_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str, scratch2: &str) {
+/// `size` (8..=4096) bytes can serve, through the `_heap_bin_free_offset` table.
+pub(crate) fn emit_free_bin_offset_x86_64(emitter: &mut Emitter, size: &str, out: &str, scratch: &str, _scratch2: &str) {
     emitter.instruction(&format!("mov {}, {}", out, size));                        // copy the freed block size
-    emitter.instruction(&format!("shr {}, 3", out));                               // size / 8
-    emitter.instruction(&format!("sub {}, 1", out));                               // 8-byte-step class index the block fully covers
-    emitter.instruction(&format!("mov {}, {}", scratch2, size));                   // copy the freed block size
-    emitter.instruction(&format!("shr {}, 6", scratch2));                          // 64-byte granule count of the block
-    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_floor_index");
-    emitter.instruction(&format!("movzx {}, BYTE PTR [{} + {}]", scratch, scratch, scratch2)); // class index for blocks of 64+ bytes
-    emitter.instruction(&format!("cmp {}, 64", size));                             // does the block reach the table classes?
-    emitter.instruction(&format!("cmovae {}, {}", out, scratch));                  // pick the table class for larger blocks
-    emitter.instruction(&format!("shl {}, 3", out));                               // bin-head byte offset = index * 8
+    emitter.instruction(&format!("shr {}, 3", out));                               // 8-byte granule count of the block
+    crate::codegen_support::abi::emit_symbol_address(emitter, scratch, "_heap_bin_free_offset");
+    emitter.instruction(&format!("movzx {}, BYTE PTR [{} + {}]", out, scratch, out)); // bin-head byte offset of the largest class it can serve
 }
 
 /// Emits the `__rt_heap_alloc` runtime helper: a free-list allocator with size-segregated

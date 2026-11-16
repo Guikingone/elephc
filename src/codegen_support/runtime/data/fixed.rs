@@ -362,6 +362,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_heap_bin_ceil_index", crate::codegen_support::runtime::arrays::heap_bin_ceil_index_table()),
         ("_heap_bin_floor_index", crate::codegen_support::runtime::arrays::heap_bin_floor_index_table()),
         ("_heap_bin_alloc_offset", crate::codegen_support::runtime::arrays::heap_bin_alloc_offset_table()),
+        ("_heap_bin_free_offset", crate::codegen_support::runtime::arrays::heap_bin_free_offset_table()),
     ] {
         out.push_str(&format!(".globl {}\n{}:\n", label, label));
         for index in table {

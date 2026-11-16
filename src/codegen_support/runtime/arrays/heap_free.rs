@@ -322,14 +322,11 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
     emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
-    emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
-    emitter.instruction("jnz __rt_heap_free_debug_path");                       // debug mode validates, poisons and checks duplicates on the general path
+    emitter.instruction("cmp QWORD PTR [r8], 0");                               // is heap-debug validation enabled for this free path?
+    emitter.instruction("jne __rt_heap_free_debug_path");                       // debug mode validates, poisons and checks duplicates on the general path
 
     // -- fast path (heap-debug disabled): non-tail small blocks go straight to their bin --
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
-    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this payload belong to the x86_64 heap runtime?
+    emitter.instruction(&format!("cmp DWORD PTR [rax - 4], 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // high word of the uniform header carries the heap marker
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header
