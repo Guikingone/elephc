@@ -108,3 +108,17 @@ branch: perf/eval-catalog-cache
 - Two programs with the same builtin set produce units that differ **only** in local label numbers
   and in the `__FILE__` path baked into the eval error text — so the unit is program-independent
   except for the source path, which is a legitimate per-compilation input and stays in the key.
+
+## The cache exposed a determinism bug (66c5a90b4a)
+- The catalog unit was program-independent after data attribution, yet every build computed a
+  different cache key. Diffing two units from two runs of the SAME source showed the same lines in
+  a different ORDER (9,578 differing lines in a small 10-class fixture).
+- Cause: `lower_dynamic_constructor_thunks` walked `module.class_infos`, a hash map, appending one
+  `_class_ctor_<id>_<argc>` thunk per class. The per-process hasher seed decided the order, which
+  reordered the emitted assembly of every opaque-eval build.
+- Fix: sort the classes by `class_id` (then name) before lowering the thunks.
+  `dynamic_new_thunks_emit_identical_assembly_across_processes` fails without it and passes with
+  it; `tests/compiler_determinism_tests.rs` already had the harness and the doctrine, it just had
+  no fixture that produced dynamic-`new` thunks.
+- Lesson: a content-addressed cache is also a determinism test. It found in one run what the
+  existing suites did not cover.
