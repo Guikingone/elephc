@@ -66,7 +66,8 @@ pub(crate) fn split_catalog_unit(asm: &str, spans: &[Range<usize>]) -> CatalogSp
     // whatever section the previous text left behind (the data section, for a recombined file).
     let mut catalog = format!(".text\n{}", promote_crossing_symbols(&catalog, &catalog_promotions));
     attribute_data(&mut catalog, &symbols, &selected);
-    let program_dependent_symbols = unresolved_program_symbols(&symbols, &selected);
+    let program_dependent_symbols =
+        unresolved_program_symbols(&symbols, &selected, &catalog_promotions);
     CatalogSplit {
         program,
         catalog,
@@ -155,8 +156,13 @@ fn attribute_data(catalog: &mut String, symbols: &SymbolScan, selected: &[bool])
 ///
 /// A symbol defined by a moved span comes along with the unit, so only references leaving the unit
 /// matter. Everything left here is a name the generator numbers per compilation, which makes the
-/// unit unusable by another program.
-fn unresolved_program_symbols(symbols: &SymbolScan, selected: &[bool]) -> Vec<String> {
+/// unit unusable by another program. A promoted symbol counts too: the other unit reaches it by
+/// name, so a per-compilation suffix would bind the object to the program that produced it.
+fn unresolved_program_symbols(
+    symbols: &SymbolScan,
+    selected: &[bool],
+    promoted: &[String],
+) -> Vec<String> {
     let mut defined: HashSet<&str> = HashSet::new();
     let mut referenced: HashSet<&str> = HashSet::new();
     for (index, keep) in selected.iter().enumerate() {
@@ -172,6 +178,12 @@ fn unresolved_program_symbols(symbols: &SymbolScan, selected: &[bool]) -> Vec<St
         .filter(|symbol| has_program_index(symbol))
         .map(str::to_string)
         .collect();
+    unresolved.extend(
+        promoted
+            .iter()
+            .filter(|symbol| has_program_index(symbol))
+            .cloned(),
+    );
     unresolved.sort();
     unresolved.dedup();
     unresolved

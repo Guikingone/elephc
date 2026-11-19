@@ -77,6 +77,7 @@ mod progress;
 mod resolver;
 mod repl;
 mod runtime_cache;
+mod catalog_cache;
 mod debug_info;
 mod source;
 mod source_map;

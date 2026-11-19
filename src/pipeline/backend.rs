@@ -434,14 +434,22 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         linker::assemble(target, &output_paths.asm, &output_paths.obj);
         None
     } else {
-        std::thread::scope(|scope| {
-            let catalog = scope.spawn(|| {
-                linker::assemble(target, &output_paths.catalog_asm, &output_paths.catalog_obj);
-            });
-            linker::assemble(target, &output_paths.asm, &output_paths.obj);
-            catalog.join().expect("catalog assembler thread");
-        });
-        Some(output_paths.catalog_obj.clone())
+        // The catalog unit is addressed by content, so a build that already assembled this shape
+        // reuses the stored object instead of paying for the assembler again. The program unit is
+        // built either way, which is why the two run concurrently on a miss.
+        let prepared = crate::catalog_cache::prepare_catalog_object(target, &catalog_asm);
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                crate::progress::clear();
+                eprintln!("Catalog cache error: {}", err);
+                process::exit(1);
+            }
+        };
+        timings.note(format!("Catalog cache: {}", prepared.status.as_str()));
+        // The cache assembled the catalog unit itself, so only the program object is left.
+        linker::assemble(target, &output_paths.asm, &output_paths.obj);
+        Some(prepared.path.clone())
     };
     timings.record_since("assemble", phase_started);
 

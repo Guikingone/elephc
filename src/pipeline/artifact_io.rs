@@ -373,6 +373,8 @@ mod tests {
         let paths = OutputPaths {
             asm: dir.join("main.s"),
             obj: dir.join("main.o"),
+            catalog_asm: dir.join("main.catalog.s"),
+            catalog_obj: dir.join("main.catalog.o"),
             bin: dir.join("main"),
             source_map: dir.join("main.map"),
             header: None,
