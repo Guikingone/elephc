@@ -148,3 +148,16 @@ branch: perf/eval-catalog-cache
 - Safe scope for the next session: land the placeholders behind a flag, keep the text key as the
   source of truth, and only promote the signature key once a determinism soak (the existing
   `compiler_determinism_tests` harness) covers an opaque-eval fixture.
+
+## Step 4 (a3sl, first increment): the emission itself is cached (8c30ee4a48)
+- A rebuild now skips codegen for the catalog: `src/codegen/catalog_reuse.rs` stores the unit texts
+  under a digest and the three emission loops skip the functions it covers.
+- The digest is over the POST-optimization EIR of every catalog function plus target, PHP profile,
+  runtime features, source path, and class ids. Post-optimization is not laziness: the optimizer's
+  inliner copies callee bodies into callers, so a key taken before it would change the code of the
+  functions that inline the catalog — skipping emission perturbs nothing else.
+- `ELEPHC_CATALOG_VERIFY=1` emits anyway and compares with the entry, so a digest that misses an
+  input becomes a warning instead of a silent miscompile.
+- Still NOT cached: lowering and the EIR optimizer for catalog functions (~24.7 s and ~67.7 s of
+  the 208 s baseline). Skipping the optimizer needs the inliner to stop inlining catalog bodies
+  into program functions first, which is a design change, not a flag.
