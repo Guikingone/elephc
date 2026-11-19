@@ -2110,11 +2110,13 @@ mod exit_hook_tests {
     }
 }
 
-/// Returns whether this function is one of the catalog helpers the module vectors carry.
+/// Returns whether this function belongs to the compiler-provided catalog.
 ///
-/// Measured on an opaque-eval compile: these are 884 functions / 19.9 MB of the 95 MB user
-/// unit. The rest of the catalog (the ~21.5k `__elephc_eval_*` wrappers) is emitted outside
-/// these vectors, so the split must record its spans where that emitter writes.
+/// The catalog is every function with no source declaration: the synthetic helpers and the
+/// builtins the preludes lower (`setlocale`, `nl_langinfo`, `token_get_all`, the timezone
+/// family, ...). They are identical for one target/features/PHP version, which is what makes
+/// them movable into a cached unit. Measured on the opaque-eval fixture: 1,018 functions and
+/// 49,762,644 bytes, 94.4% of the emitted unit. A user function always carries its source name.
 fn is_catalog_function(function: &crate::ir::Function) -> bool {
-    function.flags.is_synthetic && function.source_name.is_none()
+    function.source_name.is_none()
 }
