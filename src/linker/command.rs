@@ -42,6 +42,8 @@ pub(super) struct LinkPaths<'a> {
     pub(super) bin: &'a Path,
     /// Generated user-code object path.
     pub(super) object: &'a Path,
+    /// Additional generated objects linked after `object`, such as the split catalog unit.
+    pub(super) extra_objects: &'a [&'a Path],
     /// Cached runtime object path.
     pub(super) runtime: &'a Path,
 }
@@ -181,6 +183,9 @@ fn render_macos_command(
         OsString::from("-o"),
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
+    ]);
+    args.extend(paths.extra_objects.iter().map(|object| object.as_os_str().to_owned()));
+    args.extend([
         paths.runtime.as_os_str().to_owned(),
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
@@ -239,8 +244,9 @@ fn render_linux_command(
         OsString::from("-o"),
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
-        paths.runtime.as_os_str().to_owned(),
     ]);
+    args.extend(paths.extra_objects.iter().map(|object| object.as_os_str().to_owned()));
+    args.push(paths.runtime.as_os_str().to_owned());
     if matches!(emit, Emit::Executable) && matches!(plan.linux_mode(), LinuxLinkMode::Static) {
         args.push(OsString::from("-static"));
     }
@@ -369,6 +375,7 @@ mod tests {
         LinkPaths {
             bin: Path::new("out"),
             object: Path::new("user.o"),
+            extra_objects: &[],
             runtime: Path::new("runtime.o"),
         }
     }

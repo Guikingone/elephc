@@ -328,16 +328,44 @@ pub fn generate_user_asm_from_ir_with_options(
 
 /// User assembly together with runtime dependencies introduced by synthetic codegen wrappers.
 pub struct GeneratedUserAsm {
-    /// Complete target assembly for the user object.
-    pub asm: String,
-    /// Byte ranges of `asm` holding the opaque-eval catalog functions.
+    /// Target assembly for the user object, without the catalog unit when it was split out.
     ///
-    /// Empty for a program that never runs an `eval` whose source is only known at run time.
+    /// A consumer that assembles one file must use [`Self::single_unit`] instead.
+    pub asm: String,
+    /// Assembly of the compiler-provided catalog, moved out of `asm`.
+    ///
+    /// Empty when the build is not split (a library or extension artifact, a source-map build)
+    /// or when the program has no catalog at all.
+    pub catalog_asm: String,
+    /// Byte ranges of the pre-split text holding the catalog functions.
+    ///
+    /// Kept for reporting; the split already consumed them.
     pub catalog_spans: Vec<std::ops::Range<usize>>,
+    /// Number of catalog functions that moved into `catalog_asm`.
+    ///
+    /// Lower than `catalog_spans.len()` when the cross-object symbol rule kept some in place.
+    pub moved_catalog_functions: usize,
     /// Whether generated wrappers reference native error or exception handler state.
     pub handler_state: bool,
     /// Whether generated wrappers reference the native boxed object clone adapter.
     pub object_clone: bool,
+}
+
+impl GeneratedUserAsm {
+    /// Returns the assembly as one file, with the catalog unit appended when there is one.
+    ///
+    /// The pipeline assembles the two units separately; a caller that hands one assembly source to
+    /// an assembler (tests, fixture harnesses) needs the catalog back in place.
+    #[allow(dead_code)] // only the integration-test harness assembles one file
+    pub fn single_unit(self) -> String {
+        if self.catalog_asm.is_empty() {
+            return self.asm;
+        }
+        let mut asm = self.asm;
+        asm.push('\n');
+        asm.push_str(&self.catalog_asm);
+        asm
+    }
 }
 
 /// Generates user assembly while preserving dependencies discovered after module EIR lowering.
@@ -591,6 +619,19 @@ fn finalize_user_asm(
     user_asm.push('\n');
     user_asm.push_str(&user_data);
     user_asm.push_str(&emit_native_reference_metadata(module)?);
+    // Only an executable is split: the library artifacts hand their assembly to a host build,
+    // and `--emit asm` and source maps are read as one file by people and tools. The split runs
+    // after the data section is appended so a catalog symbol reached from a vtable is promoted
+    // like any other cross-object reference.
+    let (user_asm, catalog_asm, moved_catalog_functions) = if emit == Emit::Executable
+        && !catalog_spans.is_empty()
+    {
+        let split =
+            crate::codegen_support::catalog_unit::split_catalog_unit(&user_asm, &catalog_spans);
+        (split.program, split.catalog, split.moved_functions)
+    } else {
+        (user_asm, String::new(), 0)
+    };
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))
@@ -626,14 +667,30 @@ fn finalize_user_asm(
         &[]
     };
     let generated_runtime_features = shared.generated_runtime_features();
-    Ok(GeneratedUserAsm {
-        catalog_spans,
-        asm: crate::codegen::visibility::append_hidden_directives_with_extras(
-            &user_asm,
+    // Each unit is passed through visibility on its own: a symbol declared `.globl` inside the
+    // catalog must be marked in the catalog object, otherwise Mach-O exports it (a dead-strip
+    // root) and ELF makes it preemptible.
+    let asm = crate::codegen::visibility::append_hidden_directives_with_extras(
+        &user_asm,
+        &exported,
+        module.target.platform,
+        additional_internal,
+    );
+    let catalog_asm = if catalog_asm.is_empty() {
+        String::new()
+    } else {
+        crate::codegen::visibility::append_hidden_directives_with_extras(
+            &catalog_asm,
             &exported,
             module.target.platform,
             additional_internal,
-        ),
+        )
+    };
+    Ok(GeneratedUserAsm {
+        catalog_spans,
+        moved_catalog_functions,
+        asm,
+        catalog_asm,
         handler_state: generated_runtime_features.handler_state,
         object_clone: generated_runtime_features.object_clone,
     })

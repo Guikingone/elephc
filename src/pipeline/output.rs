@@ -16,6 +16,10 @@ use crate::codegen::{Emit, RuntimeFeatures};
 pub(super) struct OutputPaths {
     pub(super) asm: PathBuf,
     pub(super) obj: PathBuf,
+    /// Catalog assembly unit, written only when the catalog was split out of `asm`.
+    pub(super) catalog_asm: PathBuf,
+    /// Catalog object, assembled from `catalog_asm`.
+    pub(super) catalog_obj: PathBuf,
     pub(super) bin: PathBuf,
     pub(super) source_map: PathBuf,
     pub(super) header: Option<PathBuf>,
@@ -62,6 +66,8 @@ pub(super) fn output_paths(filename: &str, target: Target, emit: Emit) -> Output
     OutputPaths {
         asm: parent.join(format!("{}.s", stem)),
         obj: parent.join(format!("{}.o", stem)),
+        catalog_asm: parent.join(format!("{}.catalog.s", stem)),
+        catalog_obj: parent.join(format!("{}.catalog.o", stem)),
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
         header: (emit.is_library() && emit != Emit::Phpext).then(|| parent.join(format!("lib{}.h", stem))),

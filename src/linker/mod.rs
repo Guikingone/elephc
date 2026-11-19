@@ -323,10 +323,15 @@ pub(crate) fn link_with_plan(
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
     link_with_plan_and_inputs(target, emit, bin_path, obj_path, runtime_object_path,
-        plan, forced_whole_archive).map(|_| ())
+        plan, forced_whole_archive, &[]).map(|_| ())
 }
 
 /// Links normally and returns exact archive paths plus bridge names for executable caches.
+///
+/// `extra_objects` carries additional generated objects linked alongside the user object — today
+/// the split catalog unit. They are ordinary code objects, so they go immediately after the user
+/// object and before the runtime, keeping the link order that symbol resolution already relies
+/// on.
 pub(crate) fn link_with_plan_and_inputs(
     target: Target,
     emit: Emit,
@@ -335,6 +340,7 @@ pub(crate) fn link_with_plan_and_inputs(
     runtime_object_path: &Path,
     plan: &LinkPlan,
     forced_whole_archive: &[String],
+    extra_objects: &[&Path],
 ) -> Result<Vec<(PathBuf, Option<String>)>, LinkError> {
     let resolved = bridges::resolve(plan, forced_whole_archive, target.platform)?;
     let inputs = resolved.plan.items().iter().filter_map(|item| match item {
@@ -378,6 +384,7 @@ pub(crate) fn link_with_plan_and_inputs(
         LinkPaths {
             bin: bin_path,
             object: obj_path,
+            extra_objects,
             runtime: runtime_object_path,
         },
         render_plan,

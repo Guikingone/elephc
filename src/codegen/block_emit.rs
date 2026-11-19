@@ -2110,13 +2110,16 @@ mod exit_hook_tests {
     }
 }
 
-/// Returns whether this function belongs to the compiler-provided catalog.
+/// Returns whether this function may belong to the compiler-provided catalog.
 ///
-/// The catalog is every function with no source declaration: the synthetic helpers and the
-/// builtins the preludes lower (`setlocale`, `nl_langinfo`, `token_get_all`, the timezone
-/// family, ...). They are identical for one target/features/PHP version, which is what makes
-/// them movable into a cached unit. Measured on the opaque-eval fixture: 1,018 functions and
-/// 49,762,644 bytes, 94.4% of the emitted unit. A user function always carries its source name.
+/// The catalog candidate set is every function with no source declaration: the synthetic helpers,
+/// the builtins the preludes lower (`setlocale`, `token_get_all`, the timezone family), and the
+/// opaque-`eval` wrappers. Measured on the opaque-eval fixture: 1,018 functions and 49,762,644
+/// bytes, 94.4% of the emitted unit. A user function always carries its source name.
+///
+/// This is only the candidate set: `catalog_unit::select_splittable` decides what can actually
+/// cross the object boundary, so a program-specific synthetic function that references or exports
+/// a file-local symbol stays in the program unit.
 fn is_catalog_function(function: &crate::ir::Function) -> bool {
     function.source_name.is_none()
 }

@@ -246,24 +246,37 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
     };
+    let mut user_asm = generated_user_asm.asm;
+    let mut catalog_asm = generated_user_asm.catalog_asm;
     if !generated_user_asm.catalog_spans.is_empty() {
-        let functions = generated_user_asm.catalog_spans.len();
-        let bytes: usize = generated_user_asm
-            .catalog_spans
-            .iter()
-            .map(|span| span.end - span.start)
-            .sum();
+        let recorded = generated_user_asm.catalog_spans.len();
         timings.note(format!(
-            "Catalog assembly: {} functions, {} bytes of the user unit",
-            functions, bytes
+            "Catalog assembly: {} of {} recorded functions moved, {} bytes in the catalog unit",
+            generated_user_asm.moved_catalog_functions,
+            recorded,
+            catalog_asm.len()
         ));
     }
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;
-    let user_asm = if emit_debug_info {
-        debug_info::inject_line_directives(&generated_user_asm.asm, filename, target.platform)
+    // A source map and `--emit asm` both read one assembly file, so those builds keep the
+    // catalog inline and assemble a single object.
+    if !catalog_asm.is_empty() && (emit_source_map || emit_asm) {
+        user_asm.push('\n');
+        user_asm.push_str(&catalog_asm);
+        catalog_asm.clear();
+    }
+    let (user_asm, catalog_asm) = if emit_debug_info {
+        let user_asm =
+            debug_info::inject_line_directives(&user_asm, filename, target.platform);
+        let catalog_asm = if catalog_asm.is_empty() {
+            catalog_asm
+        } else {
+            debug_info::inject_line_directives(&catalog_asm, filename, target.platform)
+        };
+        (user_asm, catalog_asm)
     } else {
-        generated_user_asm.asm
+        (user_asm, catalog_asm)
     };
     let user_asm = if emit == Emit::Phpext {
         match crate::phpext::build::assembly(&user_asm, heap_size, target, runtime_features) {
@@ -279,6 +292,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         crate::progress::clear();
         eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
         process::exit(1);
+    }
+    if !catalog_asm.is_empty() {
+        if let Err(e) = crate::pipeline::artifact_io::write_artifact(
+            &output_paths.catalog_asm,
+            catalog_asm.as_bytes(),
+        ) {
+            crate::progress::clear();
+            eprintln!("Error writing '{}': {}", output_paths.catalog_asm.display(), e);
+            process::exit(1);
+        }
     }
     timings.record_since("write-asm", phase_started);
 
@@ -400,6 +423,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     crate::progress::phase("assemble");
     let phase_started = Instant::now();
     linker::assemble(target, &output_paths.asm, &output_paths.obj);
+    let catalog_object = (!catalog_asm.is_empty()).then(|| {
+        linker::assemble(target, &output_paths.catalog_asm, &output_paths.catalog_obj);
+        output_paths.catalog_obj.clone()
+    });
     timings.record_since("assemble", phase_started);
 
     for (lib_name, flag_name) in linker::bridges_in(&planned_link_libraries) {
@@ -418,6 +445,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         // managed-native archives alongside this library.
         linker::archive(&output_paths.bin, &output_paths.obj, &runtime_object.path);
     } else {
+        let catalog_objects: Vec<&Path> =
+            catalog_object.iter().map(std::path::PathBuf::as_path).collect();
         let linked = linker::link_with_plan_and_inputs(
             target,
             emit,
@@ -426,6 +455,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             &runtime_object.path,
             &link_plan,
             &forced_bridge_libs,
+            &catalog_objects,
         );
         match linked {
             Ok(inputs) if repl_build => {
@@ -480,6 +510,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     }
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
+        if catalog_object.is_some() {
+            let _ = fs::remove_file(&output_paths.catalog_obj);
+        }
     }
 
     // Write the build key next to the binary: `elephc monitor <address> --key`

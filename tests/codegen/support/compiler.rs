@@ -590,7 +590,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         runtime_features.handler_state |= output.handler_state;
         runtime_features.object_clone |= output.object_clone;
     }
-    let user_asm = generated_user_asm.map(|output| output.asm);
+    let user_asm = generated_user_asm.map(|output| output.single_unit());
     let runtime_phase = fixture_phase_timing("runtime-asm");
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
