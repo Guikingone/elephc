@@ -247,14 +247,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         }
     };
     let mut user_asm = generated_user_asm.asm;
-    let mut catalog_asm = generated_user_asm.catalog_asm;
+    let mut catalog_asms = generated_user_asm.catalog_asms;
     if !generated_user_asm.catalog_spans.is_empty() {
         let recorded = generated_user_asm.catalog_spans.len();
+        let bytes: usize = catalog_asms.iter().map(String::len).sum();
         timings.note(format!(
-            "Catalog assembly: {} of {} recorded functions moved, {} bytes in the catalog unit, {} program-dependent symbols",
+            "Catalog assembly: {} of {} recorded functions moved into {} unit(s), {} bytes, {} program-dependent symbols",
             generated_user_asm.moved_catalog_functions,
             recorded,
-            catalog_asm.len(),
+            catalog_asms.len(),
+            bytes,
             generated_user_asm.catalog_program_dependent_symbols.len()
         ));
         for symbol in generated_user_asm.catalog_program_dependent_symbols.iter().take(5) {
@@ -265,22 +267,22 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     runtime_features.object_clone |= generated_user_asm.object_clone;
     // A source map and `--emit asm` both read one assembly file, so those builds keep the
     // catalog inline and assemble a single object.
-    if !catalog_asm.is_empty() && (emit_source_map || emit_asm) {
-        user_asm.push('\n');
-        user_asm.push_str(&catalog_asm);
-        catalog_asm.clear();
+    if !catalog_asms.is_empty() && (emit_source_map || emit_asm) {
+        for catalog in catalog_asms.drain(..) {
+            user_asm.push('\n');
+            user_asm.push_str(&catalog);
+        }
     }
-    let (user_asm, catalog_asm) = if emit_debug_info {
+    let (user_asm, catalog_asms) = if emit_debug_info {
         let user_asm =
             debug_info::inject_line_directives(&user_asm, filename, target.platform);
-        let catalog_asm = if catalog_asm.is_empty() {
-            catalog_asm
-        } else {
-            debug_info::inject_line_directives(&catalog_asm, filename, target.platform)
-        };
-        (user_asm, catalog_asm)
+        let catalog_asms = catalog_asms
+            .into_iter()
+            .map(|catalog| debug_info::inject_line_directives(&catalog, filename, target.platform))
+            .collect();
+        (user_asm, catalog_asms)
     } else {
-        (user_asm, catalog_asm)
+        (user_asm, catalog_asms)
     };
     let user_asm = if emit == Emit::Phpext {
         match crate::phpext::build::assembly(&user_asm, heap_size, target, runtime_features) {
@@ -297,13 +299,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
         process::exit(1);
     }
-    if !catalog_asm.is_empty() {
-        if let Err(e) = crate::pipeline::artifact_io::write_artifact(
-            &output_paths.catalog_asm,
-            catalog_asm.as_bytes(),
-        ) {
+    for (index, catalog) in catalog_asms.iter().enumerate() {
+        let path = output_paths.catalog_unit_asm(index);
+        if let Err(e) = crate::pipeline::artifact_io::write_artifact(&path, catalog.as_bytes()) {
             crate::progress::clear();
-            eprintln!("Error writing '{}': {}", output_paths.catalog_asm.display(), e);
+            eprintln!("Error writing '{}': {}", path.display(), e);
             process::exit(1);
         }
     }
@@ -430,19 +430,19 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // The two units are independent inputs of one `as` invocation each, so they assemble
     // concurrently: the catalog is the bulk of an opaque-eval program's text, and running the two
     // assemblers back to back makes the cold path pay for both.
-    let catalog_object = if catalog_asm.is_empty() {
+    let catalog_objects = if catalog_asms.is_empty() {
         linker::assemble(target, &output_paths.asm, &output_paths.obj);
-        None
+        Vec::new()
     } else {
-        // The catalog unit is addressed by content, so a build that already assembled this shape
-        // reuses the stored object instead of paying for the assembler again. The program unit is
+        // The catalog units are addressed by content, so a build that already assembled this shape
+        // reuses the stored objects instead of paying for the assembler again. The program unit is
         // built either way, which is why the two run concurrently on a miss.
-        let prepared = crate::catalog_cache::prepare_catalog_object(
-            target,
-            &catalog_asm,
-            &output_paths.catalog_obj,
-        );
-        let prepared = match prepared {
+        let local_paths: Vec<std::path::PathBuf> = (0..catalog_asms.len())
+            .map(|index| output_paths.catalog_unit_obj(index))
+            .collect();
+        let prepared =
+            crate::catalog_cache::prepare_catalog_objects(target, &catalog_asms, &local_paths);
+        let (objects, status) = match prepared {
             Ok(prepared) => prepared,
             Err(err) => {
                 crate::progress::clear();
@@ -450,10 +450,14 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
                 process::exit(1);
             }
         };
-        timings.note(format!("Catalog cache: {}", prepared.status.as_str()));
-        // The cache assembled the catalog unit itself, so only the program object is left.
+        timings.note(format!(
+            "Catalog cache: {} ({} unit(s))",
+            status.as_str(),
+            objects.len()
+        ));
+        // The cache assembled the catalog units itself, so only the program object is left.
         linker::assemble(target, &output_paths.asm, &output_paths.obj);
-        Some(prepared.path.clone())
+        objects
     };
     timings.record_since("assemble", phase_started);
 
@@ -473,8 +477,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         // managed-native archives alongside this library.
         linker::archive(&output_paths.bin, &output_paths.obj, &runtime_object.path);
     } else {
-        let catalog_objects: Vec<&Path> =
-            catalog_object.iter().map(std::path::PathBuf::as_path).collect();
+        let link_objects: Vec<&Path> =
+            catalog_objects.iter().map(std::path::PathBuf::as_path).collect();
         let linked = linker::link_with_plan_and_inputs(
             target,
             emit,
@@ -483,7 +487,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             &runtime_object.path,
             &link_plan,
             &forced_bridge_libs,
-            &catalog_objects,
+            &link_objects,
         );
         match linked {
             Ok(inputs) if repl_build => {
@@ -538,8 +542,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     }
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
-        if catalog_object.is_some() {
-            let _ = fs::remove_file(&output_paths.catalog_obj);
+        for index in 0..catalog_asms.len() {
+            let _ = fs::remove_file(output_paths.catalog_unit_obj(index));
         }
     }
 

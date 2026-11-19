@@ -1,20 +1,20 @@
 //! Purpose:
-//! Caches the assembled compiler catalog so an opaque-`eval` build assembles it once per shape.
+//! Caches and assembles the compiler catalog units so an opaque-`eval` build pays for them once.
 //!
 //! Called from:
-//! - `crate::pipeline::backend` right before the catalog unit is assembled.
+//! - `crate::pipeline::backend` right before the catalog units are assembled.
 //!
 //! Key details:
-//! - The catalog unit is emitted without any dependency on the user's program: its literals are
-//!   content-addressed and every function carries its own name, so the same target, PHP profile,
-//!   and catalog contents always produce the same unit.
+//! - The catalog units carry no dependency on the user's program: their literals are
+//!   content-addressed and every function keeps its own name, so the same target, PHP profile, and
+//!   catalog contents always produce the same units.
 //! - The one thing that still differs between programs is the numbering of the assembler-local
-//!   labels. They never leave the object, so the cache key is computed over a normalized text
-//!   where those numeric suffixes are dropped, and the stored object keeps whichever numbering
-//!   the compilation that filled the cache produced.
-//! - The stored object is named after the key and its length, so a truncated or foreign file is
-//!   rejected without a checksum sidecar, and a store is an atomic rename that tolerates
-//!   concurrent compiler runs.
+//!   labels. They never leave their object, so the cache key is computed over a normalized text
+//!   where those numeric suffixes are dropped, and the stored objects keep whichever numbering the
+//!   compilation that filled the cache produced.
+//! - A miss assembles every unit concurrently. Each stored object is named after the key and its
+//!   index, a length witness rejects truncated entries, and a store is an atomic rename that
+//!   tolerates concurrent compiler runs.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,12 +22,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::codegen::platform::Target;
 
-/// Whether the catalog object came from the cache or was assembled now.
+/// Whether the catalog objects came from the cache or were assembled now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CatalogCacheStatus {
-    /// The object was found and reused.
+    /// The objects were found and reused.
     Hit,
-    /// The object was assembled during this build.
+    /// The objects were assembled during this build.
     Miss,
 }
 
@@ -41,39 +41,31 @@ impl CatalogCacheStatus {
     }
 }
 
-/// The catalog object to link, and how it was obtained.
-pub(crate) struct PreparedCatalogObject {
-    /// Path of the object file, stable for the rest of the build.
-    pub(crate) path: PathBuf,
-    /// Cache status of this preparation.
-    pub(crate) status: CatalogCacheStatus,
-}
-
-/// Returns the catalog object for `catalog_asm`, assembling and storing it on a miss.
+/// Returns the objects to link, publishing each at its local path, and how they were obtained.
 ///
-/// `local_object` is where the linker reads the object from. It is a hardlink of the cache entry
-/// when the filesystem allows it, so the link never depends on a cache file another compiler may
-/// prune or replace, and the caller removes it with the rest of the build's objects.
-pub(crate) fn prepare_catalog_object(
+/// `local_paths` are the build's own object paths, in unit order. They are hardlinks of the cache
+/// entries when the filesystem allows it, so the link never depends on a cache file another
+/// compiler may prune or replace, and the caller removes them with the rest of its objects.
+pub(crate) fn prepare_catalog_objects(
     target: Target,
-    catalog_asm: &str,
-    local_object: &Path,
-) -> Result<PreparedCatalogObject, String> {
+    units: &[String],
+    local_paths: &[PathBuf],
+) -> Result<(Vec<PathBuf>, CatalogCacheStatus), String> {
     prepare_in(
         &crate::runtime_cache::runtime_cache_dir().join("catalog"),
         target,
-        catalog_asm,
-        local_object,
+        units,
+        local_paths,
     )
 }
 
-/// Implements [`prepare_catalog_object`] against an explicit cache directory.
+/// Implements [`prepare_catalog_objects`] against an explicit cache directory.
 fn prepare_in(
     directory: &Path,
     target: Target,
-    catalog_asm: &str,
-    local_object: &Path,
-) -> Result<PreparedCatalogObject, String> {
+    units: &[String],
+    local_paths: &[PathBuf],
+) -> Result<(Vec<PathBuf>, CatalogCacheStatus), String> {
     fs::create_dir_all(directory).map_err(|err| {
         format!(
             "failed to create catalog cache '{}': {}",
@@ -81,15 +73,16 @@ fn prepare_in(
             err
         )
     })?;
-    let key = catalog_cache_key(target, catalog_asm);
-    let object_path = directory.join(format!("catalog-{key:016x}.o"));
+    let key = catalog_cache_key(target, units);
     let witness_path = directory.join(format!("catalog-{key:016x}.len"));
-    if cached_object_is_intact(&object_path, &witness_path) {
-        link_or_copy(&object_path, local_object)?;
-        return Ok(PreparedCatalogObject {
-            path: local_object.to_path_buf(),
-            status: CatalogCacheStatus::Hit,
-        });
+    let cached: Vec<PathBuf> = (0..units.len())
+        .map(|index| directory.join(format!("catalog-{key:016x}-{index}.o")))
+        .collect();
+    if cached_objects_are_intact(&cached, &witness_path) {
+        for (source, destination) in cached.iter().zip(local_paths) {
+            link_or_copy(source, destination)?;
+        }
+        return Ok((local_paths.to_vec(), CatalogCacheStatus::Hit));
     }
 
     let unique = format!(
@@ -100,64 +93,115 @@ fn prepare_in(
             .unwrap_or_default()
             .as_nanos()
     );
-    let temp_asm = directory.join(format!("catalog-{key}.{unique}.s"));
-    let temp_obj = directory.join(format!("catalog-{key}.{unique}.o"));
-    fs::write(&temp_asm, catalog_asm).map_err(|err| {
-        format!(
-            "failed to write temporary catalog assembly '{}': {}",
-            temp_asm.display(),
-            err
-        )
+    // Every unit assembles concurrently: a catalog build pays for all of them once, and they are
+    // independent objects.
+    let assembled = std::thread::scope(|scope| {
+        let handles: Vec<_> = units
+            .iter()
+            .enumerate()
+            .map(|(index, unit)| {
+                let temp_obj = directory.join(format!("catalog-{key:016x}-{index}.{unique}.o"));
+                let temp_asm = directory.join(format!("catalog-{key:016x}-{index}.{unique}.s"));
+                scope.spawn(move || {
+                    fs::write(&temp_asm, unit)
+                        .map_err(|err| format!("failed to write '{}': {}", temp_asm.display(), err))?;
+                    let mut assembler = crate::linker::assembler_command(target);
+                    assembler.arg("-o").arg(&temp_obj).arg(&temp_asm);
+                    let status = assembler.status().map_err(|err| {
+                        format!(
+                            "failed to run the catalog assembler for '{}': {}",
+                            temp_obj.display(),
+                            err
+                        )
+                    })?;
+                    let _ = fs::remove_file(&temp_asm);
+                    if !status.success() {
+                        let _ = fs::remove_file(&temp_obj);
+                        return Err(format!(
+                            "catalog assembler failed while building '{}'",
+                            temp_obj.display()
+                        ));
+                    }
+                    Ok(temp_obj)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap_or_else(|_| Err("catalog assembler panicked".to_string())))
+            .collect::<Result<Vec<PathBuf>, String>>()
     })?;
-    let mut assembler = crate::linker::assembler_command(target);
-    assembler.arg("-o").arg(&temp_obj).arg(&temp_asm);
-    let status = assembler.status().map_err(|err| {
-        format!(
-            "failed to run the catalog assembler for '{}': {}",
-            temp_obj.display(),
-            err
-        )
-    });
-    let _ = fs::remove_file(&temp_asm);
-    let status = status?;
-    if !status.success() {
-        let _ = fs::remove_file(&temp_obj);
-        return Err(format!(
-            "catalog assembler failed while building '{}'",
-            object_path.display()
-        ));
+
+    let mut lengths = Vec::with_capacity(assembled.len());
+    let mut published = false;
+    for (temp_obj, object_path) in assembled.iter().zip(&cached) {
+        let length = fs::metadata(temp_obj)
+            .map(|metadata| metadata.len())
+            .map_err(|err| format!("failed to measure '{}': {}", temp_obj.display(), err))?;
+        match fs::rename(temp_obj, object_path) {
+            Ok(()) => {
+                lengths.push(length);
+                published = true;
+            }
+            // Another compiler published the same entry first; both are equivalent.
+            Err(_) if object_path.exists() => {}
+            Err(err) => {
+                return Err(format!(
+                    "failed to store the catalog cache '{}': {}",
+                    object_path.display(),
+                    err
+                ))
+            }
+        }
     }
-    let witness = fs::metadata(&temp_obj)
-        .map(|metadata| metadata.len())
-        .map_err(|err| format!("failed to measure '{}': {}", temp_obj.display(), err))?;
-    match fs::rename(&temp_obj, &object_path).and_then(|()| {
-        fs::write(&witness_path, witness.to_string())
-    }) {
-        Ok(()) => {
-            link_or_copy(&object_path, local_object)?;
-            Ok(PreparedCatalogObject {
-                path: local_object.to_path_buf(),
-                status: CatalogCacheStatus::Miss,
-            })
-        }
-        // Another compiler published the same entry first; both objects are equivalent.
-        Err(_) if object_path.exists() => {
-            let _ = fs::remove_file(&temp_obj);
-            link_or_copy(&object_path, local_object)?;
-            Ok(PreparedCatalogObject {
-                path: local_object.to_path_buf(),
-                status: CatalogCacheStatus::Hit,
-            })
-        }
-        Err(err) => {
-            let _ = fs::remove_file(&temp_obj);
-            Err(format!(
-                "failed to store the catalog cache '{}': {}",
-                object_path.display(),
+    let status = if published {
+        fs::write(&witness_path, lengths_to_witness(&lengths)).map_err(|err| {
+            format!(
+                "failed to write the catalog witness '{}': {}",
+                witness_path.display(),
                 err
-            ))
-        }
+            )
+        })?;
+        CatalogCacheStatus::Miss
+    } else {
+        CatalogCacheStatus::Hit
+    };
+    for (source, destination) in cached.iter().zip(local_paths) {
+        link_or_copy(source, destination)?;
     }
+    Ok((local_paths.to_vec(), status))
+}
+
+/// Returns the text stored as the length witness for `lengths`.
+fn lengths_to_witness(lengths: &[u64]) -> String {
+    lengths
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Returns whether every cached object still matches the length recorded when it was stored.
+///
+/// A truncated or half-copied object would fail the link with a confusing message, so a size that
+/// no longer matches its witness is treated as a miss and rebuilt.
+fn cached_objects_are_intact(objects: &[PathBuf], witness: &Path) -> bool {
+    let Ok(recorded) = fs::read_to_string(witness) else {
+        return false;
+    };
+    let expected: Vec<u64> = recorded
+        .trim()
+        .split(',')
+        .filter_map(|length| length.parse().ok())
+        .collect();
+    if expected.len() != objects.len() {
+        return false;
+    }
+    objects.iter().zip(expected).all(|(object, expected)| {
+        fs::metadata(object)
+            .map(|metadata| metadata.len() == expected)
+            .unwrap_or(false)
+    })
 }
 
 /// Publishes `source` at `destination`, preferring a hardlink over a byte copy.
@@ -179,25 +223,9 @@ fn link_or_copy(source: &Path, destination: &Path) -> Result<(), String> {
     }
 }
 
-/// Returns whether the cached object still matches the length recorded when it was stored.
-///
-/// A truncated or half-copied object would fail the link with a confusing message, so a size that
-/// no longer matches its witness is treated as a miss and rebuilt.
-fn cached_object_is_intact(object: &Path, witness: &Path) -> bool {
-    let Ok(expected) = fs::read_to_string(witness) else {
-        return false;
-    };
-    let Ok(expected) = expected.trim().parse::<u64>() else {
-        return false;
-    };
-    fs::metadata(object)
-        .map(|metadata| metadata.len() == expected)
-        .unwrap_or(false)
-}
-
-/// Hashes the inputs that determine the catalog object: build identity, target, PHP profile, and
-/// the unit text with the assembler-local label numbering normalized away.
-fn catalog_cache_key(target: Target, catalog_asm: &str) -> u64 {
+/// Hashes the inputs that determine the catalog objects: build identity, target, PHP profile, and
+/// the unit texts with the assembler-local label numbering normalized away.
+fn catalog_cache_key(target: Target, units: &[String]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in env!("ELEPHC_RUNTIME_BUILD_ID").as_bytes() {
         hash = fnv1a64_step(hash, *byte);
@@ -207,17 +235,27 @@ fn catalog_cache_key(target: Target, catalog_asm: &str) -> u64 {
     {
         hash = fnv1a64_step(hash, *byte);
     }
-    let mut token = String::new();
-    for character in catalog_asm.chars() {
-        if character.is_ascii_alphanumeric() || character == '_' || character == '.' || character == '$'
-        {
-            token.push(character);
-            continue;
+    // The unit boundaries are part of the key: the same text split differently produces different
+    // objects, and a hit must describe the split the pipeline is about to assemble.
+    for unit in units {
+        for byte in (unit.len() as u64).to_le_bytes() {
+            hash = fnv1a64_step(hash, byte);
+        }
+        let mut token = String::new();
+        for character in unit.chars() {
+            if character.is_ascii_alphanumeric()
+                || character == '_'
+                || character == '.'
+                || character == '$'
+            {
+                token.push(character);
+                continue;
+            }
+            hash_local_label(&mut hash, &mut token);
+            hash = fnv1a64_step(hash, character as u32 as u8);
         }
         hash_local_label(&mut hash, &mut token);
-        hash = fnv1a64_step(hash, character as u32 as u8);
     }
-    hash_local_label(&mut hash, &mut token);
     hash
 }
 
@@ -277,66 +315,84 @@ mod tests {
         dir
     }
 
-    /// A second preparation of the same unit reuses the object the first one assembled.
+    /// A second preparation of the same units reuses the objects the first one assembled.
     #[test]
-    fn stores_then_reuses_the_catalog_object() {
+    fn stores_then_reuses_the_catalog_objects() {
         let dir = scratch("reuse");
-        let asm = ".text\n.globl _catalog_fn\n_catalog_fn:\n    ret\n";
-        let first = prepare_in(&dir, target(), asm, &dir.join("first.o")).expect("first");
-        assert_eq!(first.status, CatalogCacheStatus::Miss);
-        let first_bytes = fs::read(&first.path).expect("first object");
-        let second = prepare_in(&dir, target(), asm, &dir.join("second.o")).expect("second");
-        assert_eq!(second.status, CatalogCacheStatus::Hit);
-        assert_eq!(fs::read(&second.path).expect("second object"), first_bytes);
+        let units = vec![
+            ".text\n.globl _catalog_a\n_catalog_a:\n    ret\n".to_string(),
+            ".text\n.globl _catalog_b\n_catalog_b:\n    ret\n".to_string(),
+        ];
+        let first_paths = vec![dir.join("first-0.o"), dir.join("first-1.o")];
+        let (first, status) =
+            prepare_in(&dir, target(), &units, &first_paths).expect("first");
+        assert_eq!(status, CatalogCacheStatus::Miss);
+        let bytes: Vec<Vec<u8>> = first
+            .iter()
+            .map(|path| fs::read(path).expect("first object"))
+            .collect();
+        let second_paths = vec![dir.join("second-0.o"), dir.join("second-1.o")];
+        let (second, status) =
+            prepare_in(&dir, target(), &units, &second_paths).expect("second");
+        assert_eq!(status, CatalogCacheStatus::Hit);
+        for (path, expected) in second.iter().zip(bytes) {
+            assert_eq!(fs::read(path).expect("second object"), expected);
+        }
     }
 
-    /// A different unit does not reuse the stored object.
+    /// A different unit does not reuse the stored objects.
     #[test]
     fn different_units_do_not_share_an_object() {
         let dir = scratch("distinct");
-        let first = prepare_in(&dir, target(), ".text\n_catalog_fn:\n    ret\n", &dir.join("a.o"))
-            .expect("first");
-        assert_eq!(first.status, CatalogCacheStatus::Miss);
-        let second = prepare_in(
-            &dir,
-            target(),
-            ".text\n_catalog_fn:\n    nop\n    ret\n",
-            &dir.join("b.o"),
-        )
-        .expect("second");
-        assert_eq!(second.status, CatalogCacheStatus::Miss);
+        let first = vec![".text\n_catalog_fn:\n    ret\n".to_string()];
+        let (_, status) = prepare_in(&dir, target(), &first, &[dir.join("a.o")]).expect("first");
+        assert_eq!(status, CatalogCacheStatus::Miss);
+        let second = vec![".text\n_catalog_fn:\n    nop\n    ret\n".to_string()];
+        let (_, status) = prepare_in(&dir, target(), &second, &[dir.join("b.o")]).expect("second");
+        assert_eq!(status, CatalogCacheStatus::Miss);
     }
 
     /// Two units that differ only in assembler-local label numbering share one key.
     #[test]
     fn key_ignores_local_label_numbering() {
-        let first = ".text\nL_eir_fn_loop_7:\n    b L_eir_fn_loop_7\n";
-        let second = ".text\nL_eir_fn_loop_9:\n    b L_eir_fn_loop_9\n";
+        let first = vec![".text\nL_eir_fn_loop_7:\n    b L_eir_fn_loop_7\n".to_string()];
+        let second = vec![".text\nL_eir_fn_loop_9:\n    b L_eir_fn_loop_9\n".to_string()];
         assert_eq!(
-            catalog_cache_key(target(), first),
-            catalog_cache_key(target(), second)
+            catalog_cache_key(target(), &first),
+            catalog_cache_key(target(), &second)
         );
     }
 
     /// A unit with different content gets a different key.
     #[test]
     fn key_follows_the_emitted_content() {
-        let first = ".text\n_fn_a:\n    ret\n";
-        let second = ".text\n_fn_a:\n    nop\n    ret\n";
+        let first = vec![".text\n_fn_a:\n    ret\n".to_string()];
+        let second = vec![".text\n_fn_a:\n    nop\n    ret\n".to_string()];
         assert_ne!(
-            catalog_cache_key(target(), first),
-            catalog_cache_key(target(), second)
+            catalog_cache_key(target(), &first),
+            catalog_cache_key(target(), &second)
         );
     }
 
     /// A symbol whose name is not a numeric suffix keeps its full text in the key.
     #[test]
     fn key_keeps_non_numeric_suffixes() {
-        let first = ".text\n_fn_alpha:\n    ret\n";
-        let second = ".text\n_fn_beta:\n    ret\n";
+        let first = vec![".text\n_fn_alpha:\n    ret\n".to_string()];
+        let second = vec![".text\n_fn_beta:\n    ret\n".to_string()];
         assert_ne!(
-            catalog_cache_key(target(), first),
-            catalog_cache_key(target(), second)
+            catalog_cache_key(target(), &first),
+            catalog_cache_key(target(), &second)
+        );
+    }
+
+    /// The same text split into different units must not share a key.
+    #[test]
+    fn key_covers_the_unit_boundaries() {
+        let one = vec!["A\nB\n".to_string()];
+        let two = vec!["A\n".to_string(), "B\n".to_string()];
+        assert_ne!(
+            catalog_cache_key(target(), &one),
+            catalog_cache_key(target(), &two)
         );
     }
 }

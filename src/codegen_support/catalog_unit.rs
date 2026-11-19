@@ -20,60 +20,248 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-/// One split result: the two units and how many functions left the program unit.
+/// One split result: the program unit, the catalog units, and what moved.
 pub(crate) struct CatalogSplit {
     /// Assembly that stays in the program object.
     pub(crate) program: String,
-    /// Assembly of the catalog object, empty when nothing could move.
-    pub(crate) catalog: String,
+    /// Assembly of each catalog object, empty when nothing could move.
+    ///
+    /// The units are independent objects assembled in parallel, so the split balances them by
+    /// size while keeping functions that share an assembler-local label in the same unit.
+    pub(crate) catalogs: Vec<String>,
     /// Number of function spans that moved.
     pub(crate) moved_functions: usize,
-    /// External symbols the catalog unit names that carry a program-dependent index.
+    /// External symbols the catalog units name that carry a program-dependent index.
     ///
-    /// Zero means the unit is a function of target, features, and PHP version alone, which is what
-    /// a content-addressed cache needs. Non-zero means the unit must not be cached.
+    /// Zero means the units are a function of target, features, and PHP version alone, which is
+    /// what a content-addressed cache needs. Non-zero means they must not be cached.
     pub(crate) program_dependent_symbols: Vec<String>,
 }
 
-/// Splits `asm` into the program text and the catalog text described by `spans`.
+/// Splits `asm` into the program text and up to `chunks` catalog texts.
 ///
-/// Returns the program unit first and the catalog unit second. The catalog unit is empty when
-/// nothing can move, which is what a program without compiler-internal functions produces.
-pub(crate) fn split_catalog_unit(asm: &str, spans: &[Range<usize>]) -> CatalogSplit {
-    if spans.is_empty() {
-        return CatalogSplit {
-            program: asm.to_string(),
-            catalog: String::new(),
-            moved_functions: 0,
-            program_dependent_symbols: Vec::new(),
-        };
+/// The catalog units are empty when nothing can move, which is what a program without
+/// compiler-internal functions produces.
+pub(crate) fn split_catalog_units(
+    asm: &str,
+    spans: &[Range<usize>],
+    chunks: usize,
+) -> CatalogSplit {
+    let empty = |program: String| CatalogSplit {
+        program,
+        catalogs: Vec::new(),
+        moved_functions: 0,
+        program_dependent_symbols: Vec::new(),
+    };
+    if spans.is_empty() || chunks == 0 {
+        return empty(asm.to_string());
     }
     let symbols = scan_symbols(asm, spans);
     let selected = select_splittable(&symbols, spans.len());
     if !selected.iter().any(|keep| *keep) {
-        return CatalogSplit {
-            program: asm.to_string(),
-            catalog: String::new(),
-            moved_functions: 0,
-            program_dependent_symbols: Vec::new(),
-        };
+        return empty(asm.to_string());
     }
-    let (mut program, catalog, moved) = slice_spans(asm, spans, &selected);
-    let (program_promotions, catalog_promotions) = crossing_symbols(&symbols, &selected);
+    let unit_of_span = assign_units(spans, &selected, &symbols, chunks);
+    let (mut program, mut catalogs) = slice_units(asm, spans, &unit_of_span, chunks);
+    let program_promotions = program_promotions(&symbols, &unit_of_span);
     program = promote_crossing_symbols(&program, &program_promotions);
+    attribute_data(&mut catalogs, &symbols, &unit_of_span);
+    let moved_functions = unit_of_span.iter().filter(|unit| unit.is_some()).count();
+    let promoted: Vec<String> = catalogs
+        .iter()
+        .flat_map(|catalog| defined_catalog_symbols(catalog))
+        .collect();
+    let program_dependent_symbols = unresolved_program_symbols(&symbols, &unit_of_span, &promoted);
     // The generator opens the file's text section once and then emits functions into it, so a
     // unit made only of function bodies must open its own: without this the catalog code inherits
     // whatever section the previous text left behind (the data section, for a recombined file).
-    let mut catalog = format!(".text\n{}", promote_crossing_symbols(&catalog, &catalog_promotions));
-    attribute_data(&mut catalog, &symbols, &selected);
-    let program_dependent_symbols =
-        unresolved_program_symbols(&symbols, &selected, &catalog_promotions);
+    for catalog in &mut catalogs {
+        *catalog = format!(
+            ".text\n{}",
+            promote_crossing_symbols(catalog, &defined_catalog_symbols(catalog))
+        );
+    }
     CatalogSplit {
         program,
-        catalog,
-        moved_functions: moved,
+        catalogs,
+        moved_functions,
         program_dependent_symbols,
     }
+}
+
+/// Returns the symbols a catalog unit defines that must be visible to the other objects.
+///
+/// Every function-level symbol a catalog unit defines is promoted, because the other units may
+/// reach it by name: the program through its own calls, another chunk through a cross-chunk call.
+/// Promoted symbols are what the existing visibility pass then marks `.private_extern`/`.hidden`,
+/// so none of them becomes an export or a dead-strip root. Assembler-local labels cannot be
+/// promoted, which is why `assign_units` keeps everything that shares one in the same unit.
+fn defined_catalog_symbols(catalog: &str) -> Vec<String> {
+    let mut symbols: Vec<String> = catalog
+        .lines()
+        .filter_map(|line| {
+            let code = strip_comment(line.trim());
+            let (name, _) = split_definition(code)?;
+            let name = name?;
+            // Numeric labels (`1:`) are assembler-local branch targets, and a name that does not
+            // start like a symbol is a directive fragment: neither can be declared global.
+            let named = name
+                .chars()
+                .next()
+                .map(|first| first.is_ascii_alphabetic() || matches!(first, '_' | '.' | '$'))
+                .unwrap_or(false);
+            (named && !is_linker_local(&name)).then_some(name)
+        })
+        .collect();
+    symbols.sort();
+    symbols.dedup();
+    symbols
+}
+
+/// Assigns each moving span to a catalog unit, balancing bytes while keeping shared labels together.
+///
+/// Spans joined by an assembler-local label must land in the same object, so they are grouped into
+/// components first; each component is then placed whole, largest first, on the currently smallest
+/// unit. `None` means the span stays in the program unit.
+fn assign_units(
+    spans: &[Range<usize>],
+    selected: &[bool],
+    symbols: &SymbolScan,
+    chunks: usize,
+) -> Vec<Option<usize>> {
+    let mut owner: HashMap<&str, usize> = HashMap::new();
+    for (index, keep) in selected.iter().enumerate() {
+        if *keep {
+            for symbol in &symbols.defs[index] {
+                if is_linker_local(symbol) {
+                    owner.insert(symbol.as_str(), index);
+                }
+            }
+        }
+    }
+    let mut parent: Vec<usize> = (0..spans.len()).collect();
+    for (index, keep) in selected.iter().enumerate() {
+        if !*keep {
+            continue;
+        }
+        for symbol in &symbols.refs[index] {
+            if let Some(target) = owner.get(symbol.as_str()) {
+                union(&mut parent, index, *target);
+            }
+        }
+    }
+    let mut components: HashMap<usize, (u64, usize)> = HashMap::new();
+    for (index, keep) in selected.iter().enumerate() {
+        if !*keep {
+            continue;
+        }
+        let root = find(&mut parent, index);
+        let size = (spans[index].end - spans[index].start) as u64;
+        let entry = components.entry(root).or_insert((0, index));
+        entry.0 += size;
+        entry.1 = entry.1.min(index);
+    }
+    let mut order: Vec<(u64, usize, usize)> = components
+        .into_iter()
+        .map(|(root, (size, first))| (size, first, root))
+        .collect();
+    order.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    let mut load = vec![0u64; chunks];
+    let mut unit_of_root: HashMap<usize, usize> = HashMap::new();
+    for (size, _first, root) in order {
+        let target = (0..chunks)
+            .min_by_key(|unit| (load[*unit], *unit))
+            .unwrap_or(0);
+        load[target] += size;
+        unit_of_root.insert(root, target);
+    }
+    (0..spans.len())
+        .map(|index| {
+            if !selected[index] {
+                return None;
+            }
+            let root = find(&mut parent, index);
+            unit_of_root.get(&root).copied()
+        })
+        .collect()
+}
+
+/// Returns the representative of `index`, compressing the path on the way.
+fn find(parent: &mut [usize], index: usize) -> usize {
+    let mut root = index;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut current = index;
+    while parent[current] != root {
+        let next = parent[current];
+        parent[current] = root;
+        current = next;
+    }
+    root
+}
+
+/// Joins the components of `left` and `right`.
+fn union(parent: &mut [usize], left: usize, right: usize) {
+    let left = find(parent, left);
+    let right = find(parent, right);
+    if left != right {
+        parent[right] = left;
+    }
+}
+
+/// Removes the moving spans from `asm`, returning the program text and one text per catalog unit.
+fn slice_units(
+    asm: &str,
+    spans: &[Range<usize>],
+    unit_of_span: &[Option<usize>],
+    chunks: usize,
+) -> (String, Vec<String>) {
+    let mut program = String::with_capacity(asm.len());
+    let mut catalogs: Vec<String> = vec![String::new(); chunks];
+    let mut cursor = 0usize;
+    for (span, unit) in spans.iter().zip(unit_of_span) {
+        let Some(unit) = unit else {
+            continue;
+        };
+        let start = span.start.min(asm.len());
+        let end = span.end.min(asm.len());
+        // Overlapping or inverted spans would duplicate or drop text; the recording side never
+        // produces them, and skipping keeps a bad range from corrupting the split.
+        if start < cursor || end < start || !asm.is_char_boundary(start) || !asm.is_char_boundary(end)
+        {
+            continue;
+        }
+        program.push_str(&asm[cursor..start]);
+        let catalog = &mut catalogs[*unit];
+        catalog.push_str(&asm[start..end]);
+        if !catalog.ends_with('\n') {
+            catalog.push('\n');
+        }
+        cursor = end;
+    }
+    program.push_str(&asm[cursor..]);
+    catalogs.retain(|catalog| !catalog.is_empty());
+    (program, catalogs)
+}
+
+/// Returns the program symbols the catalog units reach by name.
+fn program_promotions(symbols: &SymbolScan, unit_of_span: &[Option<usize>]) -> Vec<String> {
+    let mut catalog_defs: HashSet<&str> = HashSet::new();
+    let mut catalog_refs: HashSet<&str> = HashSet::new();
+    for (index, unit) in unit_of_span.iter().enumerate() {
+        if unit.is_some() {
+            catalog_defs.extend(symbols.defs[index].iter().map(String::as_str));
+            catalog_refs.extend(symbols.refs[index].iter().map(String::as_str));
+        }
+    }
+    let mut promotions: Vec<String> = catalog_refs
+        .into_iter()
+        .filter(|symbol| !symbols.globals.contains(*symbol) && !catalog_defs.contains(symbol))
+        .map(str::to_string)
+        .collect();
+    promotions.sort();
+    promotions
 }
 
 /// Returns the subset of spans that can move, as a keep mask.
@@ -110,63 +298,72 @@ fn select_splittable(symbols: &SymbolScan, span_count: usize) -> Vec<bool> {
     }
 }
 
-/// Copies the data every moved span references into the catalog unit under content-derived names.
+/// Copies the data every moved span references into the catalog units under content-derived names.
 ///
 /// The generator numbers string literals per compilation (`_str_0`, `_str_1`, ...), so a catalog
 /// unit that referenced them would change with every program. Each referenced literal is renamed
-/// after a hash of its own text and emitted beside the code, which makes the unit independent of
-/// the program that produced it. A literal shared by several catalog functions is emitted once.
-fn attribute_data(catalog: &mut String, symbols: &SymbolScan, selected: &[bool]) {
-    let mut referenced: HashSet<&str> = HashSet::new();
-    for (index, keep) in selected.iter().enumerate() {
-        if *keep {
-            for symbol in &symbols.refs[index] {
-                if symbols.strings.contains_key(symbol) {
-                    referenced.insert(symbol.as_str());
-                }
-            }
+/// after a hash of its own text and emitted beside the code, which makes the units independent of
+/// the program that produced it. A literal referenced by several functions is emitted once, in the
+/// lowest unit that reaches it, and promoted there because the other units name it.
+fn attribute_data(catalogs: &mut [String], symbols: &SymbolScan, unit_of_span: &[Option<usize>]) {
+    let mut renames: HashMap<String, String> = HashMap::new();
+    // One entry per literal, holding the earliest unit that reaches it and its text.
+    let mut literals: HashMap<String, (usize, String)> = HashMap::new();
+    for (index, unit) in unit_of_span.iter().enumerate() {
+        let Some(unit) = unit else {
+            continue;
+        };
+        for symbol in &symbols.refs[index] {
+            let Some(payload) = symbols.strings.get(symbol) else {
+                continue;
+            };
+            let renamed = format!("_catalog_str_s{:016x}", fnv1a64(payload.as_bytes()));
+            renames.insert(symbol.clone(), renamed.clone());
+            let entry = literals
+                .entry(renamed)
+                .or_insert_with(|| (*unit, payload.clone()));
+            entry.0 = entry.0.min(*unit);
         }
     }
-    if referenced.is_empty() {
+    if renames.is_empty() {
         return;
     }
-    let mut renames: HashMap<String, String> = HashMap::new();
-    let mut emitted: Vec<(String, String)> = Vec::new();
-    for symbol in referenced {
-        let payload = &symbols.strings[symbol];
-        // The `s` prefix keeps the name from ever ending in a bare number, so it is never
-        // mistaken for a per-compilation symbol by `has_program_index`.
-        let renamed = format!("_catalog_str_s{:016x}", fnv1a64(payload.as_bytes()));
-        renames.insert(symbol.to_string(), renamed.clone());
-        emitted.push((renamed, payload.clone()));
+    for catalog in catalogs.iter_mut() {
+        *catalog = rewrite_symbols(catalog, &renames);
     }
+    let mut emitted: Vec<(usize, String, String)> = literals
+        .into_iter()
+        .map(|(name, (unit, payload))| (unit, name, payload))
+        .collect();
     emitted.sort();
-    emitted.dedup_by(|left, right| left.0 == right.0);
-    *catalog = rewrite_symbols(catalog, &renames);
-    catalog.push_str("\n.data\n");
-    for (symbol, payload) in &emitted {
-        catalog.push_str(symbol);
+    for (unit, name, payload) in emitted {
+        let Some(catalog) = catalogs.get_mut(unit) else {
+            continue;
+        };
+        if !catalog.contains("\n.data\n") {
+            catalog.push_str("\n.data\n");
+        }
+        catalog.push_str(&name);
         catalog.push_str(":\n");
-        catalog.push_str(payload);
+        catalog.push_str(&payload);
         catalog.push('\n');
     }
 }
 
-/// Returns the external symbols the catalog unit names that carry a program-dependent index.
+/// Returns the external symbols the catalog units name that carry a program-dependent index.
 ///
-/// A symbol defined by a moved span comes along with the unit, so only references leaving the unit
-/// matter. Everything left here is a name the generator numbers per compilation, which makes the
-/// unit unusable by another program. A promoted symbol counts too: the other unit reaches it by
-/// name, so a per-compilation suffix would bind the object to the program that produced it.
+/// A symbol defined by a moving span comes along with its unit, so only references leaving the
+/// catalog matter. Everything left here is a name the generator numbers per compilation, which
+/// makes the units unusable by another program.
 fn unresolved_program_symbols(
     symbols: &SymbolScan,
-    selected: &[bool],
+    unit_of_span: &[Option<usize>],
     promoted: &[String],
 ) -> Vec<String> {
     let mut defined: HashSet<&str> = HashSet::new();
     let mut referenced: HashSet<&str> = HashSet::new();
-    for (index, keep) in selected.iter().enumerate() {
-        if *keep {
+    for (index, unit) in unit_of_span.iter().enumerate() {
+        if unit.is_some() {
             defined.extend(symbols.defs[index].iter().map(String::as_str));
             referenced.extend(symbols.refs[index].iter().map(String::as_str));
         }
@@ -279,44 +476,6 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Returns the symbols each unit must declare global so the other can reach them.
-///
-/// The first set belongs to the program unit (referenced from a moved span), the second to the
-/// catalog unit (defined in a moved span and referenced from outside it).
-fn crossing_symbols(symbols: &SymbolScan, kept: &[bool]) -> (Vec<String>, Vec<String>) {
-    let mut catalog_refs: HashSet<&str> = HashSet::new();
-    let mut catalog_defs: HashSet<&str> = HashSet::new();
-    for (index, keep) in kept.iter().enumerate() {
-        if *keep {
-            catalog_refs.extend(symbols.refs[index].iter().map(String::as_str));
-            catalog_defs.extend(symbols.defs[index].iter().map(String::as_str));
-        }
-    }
-    let mut program_promotions: HashSet<&str> = HashSet::new();
-    for symbol in &catalog_refs {
-        if !symbols.globals.contains(*symbol) && !catalog_defs.contains(symbol) {
-            program_promotions.insert(symbol);
-        }
-    }
-    let mut escapes: HashSet<&str> = symbols.outside_refs.iter().map(String::as_str).collect();
-    for (index, keep) in kept.iter().enumerate() {
-        if !keep {
-            escapes.extend(symbols.refs[index].iter().map(String::as_str));
-        }
-    }
-    let mut catalog_promotions: HashSet<&str> = HashSet::new();
-    for symbol in &catalog_defs {
-        if !symbols.globals.contains(*symbol) && escapes.contains(symbol) {
-            catalog_promotions.insert(symbol);
-        }
-    }
-    let mut program: Vec<String> = program_promotions.into_iter().map(str::to_string).collect();
-    let mut catalog: Vec<String> = catalog_promotions.into_iter().map(str::to_string).collect();
-    program.sort();
-    catalog.sort();
-    (program, catalog)
-}
-
 /// Prepends `.globl` declarations for `symbols` that the unit does not already declare.
 fn promote_crossing_symbols(asm: &str, symbols: &[String]) -> String {
     if symbols.is_empty() {
@@ -343,36 +502,6 @@ fn promote_crossing_symbols(asm: &str, symbols: &[String]) -> String {
     }
     out.push_str(asm);
     out
-}
-
-/// Removes the kept spans from `asm`, returning the program text, the catalog text, and the count.
-fn slice_spans(asm: &str, spans: &[Range<usize>], kept: &[bool]) -> (String, String, usize) {
-    let mut program = String::with_capacity(asm.len());
-    let mut catalog = String::new();
-    let mut cursor = 0usize;
-    let mut moved = 0usize;
-    for (span, keep) in spans.iter().zip(kept) {
-        if !keep {
-            continue;
-        }
-        let start = span.start.min(asm.len());
-        let end = span.end.min(asm.len());
-        // Overlapping or inverted spans would duplicate or drop text; the recording side never
-        // produces them, and skipping keeps a bad range from corrupting the split.
-        if start < cursor || end < start || !asm.is_char_boundary(start) || !asm.is_char_boundary(end)
-        {
-            continue;
-        }
-        program.push_str(&asm[cursor..start]);
-        catalog.push_str(&asm[start..end]);
-        if !catalog.ends_with('\n') {
-            catalog.push('\n');
-        }
-        cursor = end;
-        moved += 1;
-    }
-    program.push_str(&asm[cursor..]);
-    (program, catalog, moved)
 }
 
 /// Returns whether the assembler keeps `symbol` out of the object's symbol table.
@@ -522,24 +651,34 @@ fn referenced_symbols(code: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// Splits with a single unit, the shape most tests assert on.
+    fn split_one(asm: &str, spans: &[Range<usize>]) -> CatalogSplit {
+        split_catalog_units(asm, spans, 1)
+    }
+
+    /// Returns the span of the function starting at the first occurrence of `start`.
+    fn span_of(asm: &str, start: &str, body: &str) -> Range<usize> {
+        let offset = asm.find(start).expect("function start");
+        offset..offset + body.len()
+    }
+
     /// Verifies that one span moves exactly its slice into the catalog unit.
     #[test]
     fn moves_one_function_out_of_the_program_unit() {
         let asm = "prelude\n.globl _catalog\n_catalog:\n    nop\nepilogue\n";
-        let start = asm.find(".globl _catalog").expect("catalog label");
-        let end = start + ".globl _catalog\n_catalog:\n    nop\n".len();
-        let split = split_catalog_unit(asm, &[start..end]);
-        assert_eq!(split.catalog, ".text\n.globl _catalog\n_catalog:\n    nop\n");
+        let span = span_of(asm, ".globl _catalog", ".globl _catalog\n_catalog:\n    nop\n");
+        let split = split_one(asm, &[span]);
+        assert_eq!(split.catalogs, vec![".text\n.globl _catalog\n_catalog:\n    nop\n"]);
         assert_eq!(split.program, "prelude\nepilogue\n");
         assert_eq!(split.moved_functions, 1);
     }
 
-    /// Verifies that contiguous spans leave nothing behind in the program unit.
+    /// Verifies that adjacent spans leave nothing behind in the program unit.
     #[test]
     fn joins_adjacent_spans_without_glue() {
         let asm = ".globl _a\n_a:\n.globl _b\n_b:\nC\n";
-        let split = split_catalog_unit(asm, &[0..14, 14..28]);
-        assert_eq!(split.catalog, ".text\n.globl _a\n_a:\n.globl _b\n_b:\n");
+        let split = split_one(asm, &[0..14, 14..28]);
+        assert_eq!(split.catalogs, vec![".text\n.globl _a\n_a:\n.globl _b\n_b:\n"]);
         assert_eq!(split.program, "C\n");
         assert_eq!(split.moved_functions, 2);
     }
@@ -548,17 +687,17 @@ mod tests {
     #[test]
     fn empty_spans_keep_one_unit() {
         let asm = "only\n";
-        let split = split_catalog_unit(asm, &[]);
+        let split = split_one(asm, &[]);
         assert_eq!(split.program, asm);
-        assert!(split.catalog.is_empty());
+        assert!(split.catalogs.is_empty());
     }
 
     /// Verifies that a span reaching past the text is clamped instead of panicking.
     #[test]
     fn out_of_range_span_is_clamped() {
         let asm = "tail\n";
-        let split = split_catalog_unit(asm, &[0..99]);
-        assert_eq!(split.catalog, ".text\ntail\n");
+        let split = split_one(asm, &[0..99]);
+        assert_eq!(split.catalogs, vec![".text\ntail\n"]);
         assert!(split.program.is_empty());
     }
 
@@ -566,9 +705,9 @@ mod tests {
     #[test]
     fn keeps_spans_reaching_program_local_labels() {
         let asm = "L_local:\n    ret\n.globl _inner\n_inner:\n    bl L_local\n";
-        let start = asm.find(".globl _inner").expect("start");
-        let split = split_catalog_unit(asm, &[start..asm.len()]);
-        assert!(split.catalog.is_empty(), "an L label cannot cross objects");
+        let span = span_of(asm, ".globl _inner", ".globl _inner\n_inner:\n    bl L_local\n");
+        let split = split_one(asm, &[span]);
+        assert!(split.catalogs.is_empty(), "an L label cannot cross objects");
         assert_eq!(split.program, asm);
     }
 
@@ -576,9 +715,9 @@ mod tests {
     #[test]
     fn promotes_local_helpers_reached_from_the_catalog() {
         let asm = "_helper:\n    ret\n.globl _inner\n_inner:\n    bl _helper\n";
-        let start = asm.find(".globl _inner").expect("start");
-        let split = split_catalog_unit(asm, &[start..asm.len()]);
-        assert_eq!(split.catalog, ".text\n.globl _inner\n_inner:\n    bl _helper\n");
+        let span = span_of(asm, ".globl _inner", ".globl _inner\n_inner:\n    bl _helper\n");
+        let split = split_one(asm, &[span]);
+        assert_eq!(split.catalogs, vec![".text\n.globl _inner\n_inner:\n    bl _helper\n"]);
         assert!(
             split.program.contains(".globl _helper\n"),
             "the program unit must expose the helper: {}",
@@ -587,35 +726,72 @@ mod tests {
         assert!(split.program.ends_with("_helper:\n    ret\n"));
     }
 
-    /// A local helper defined in the catalog and used by the program is promoted there.
+    /// A symbol a catalog unit defines is promoted so the program can call it.
     #[test]
     fn promotes_catalog_helpers_used_by_the_program() {
         let asm = ".globl _inner\n_inner:\n    ret\n_helper:\n    ret\nprogram:\n    bl _helper\n";
-        let start = asm.find(".globl _inner").expect("start");
-        let end = start + ".globl _inner\n_inner:\n    ret\n_helper:\n    ret\n".len();
-        let split = split_catalog_unit(asm, &[start..end]);
+        let span = span_of(
+            asm,
+            ".globl _inner",
+            ".globl _inner\n_inner:\n    ret\n_helper:\n    ret\n",
+        );
+        let split = split_one(asm, &[span]);
         assert!(
-            split.catalog.contains(".globl _helper\n"),
-            "the catalog unit must expose the helper: {}",
-            split.catalog
+            split.catalogs[0].contains(".globl _inner\n"),
+            "the catalog unit must expose what it defines: {}",
+            split.catalogs[0]
         );
         assert_eq!(split.program, "program:\n    bl _helper\n");
     }
 
-    /// A literal a catalog function references moves into the catalog unit under a hashed name.
+    /// Two functions that share an assembler-local label land in the same unit.
+    #[test]
+    fn keeps_spans_sharing_a_local_label_together() {
+        let asm = ".globl _a\n_a:\n    bl L_shared\n.globl _b\n_b:\nL_shared:\n    ret\n";
+        let a = span_of(asm, ".globl _a", ".globl _a\n_a:\n    bl L_shared\n");
+        let b = span_of(asm, ".globl _b", ".globl _b\n_b:\nL_shared:\n    ret\n");
+        let split = split_catalog_units(asm, &[a, b], 2);
+        assert_eq!(split.catalogs.len(), 1, "a shared L label cannot be split");
+        assert!(split.catalogs[0].contains("_a:"));
+        assert!(split.catalogs[0].contains("_b:"));
+    }
+
+    /// Independent functions spread over the requested units.
+    #[test]
+    fn spreads_independent_spans_over_the_requested_units() {
+        let asm = ".globl _a\n_a:\n    ret\n.globl _b\n_b:\n    ret\n.globl _c\n_c:\n    ret\n.globl _d\n_d:\n    ret\n";
+        let a = span_of(asm, ".globl _a", ".globl _a\n_a:\n    ret\n");
+        let b = span_of(asm, ".globl _b", ".globl _b\n_b:\n    ret\n");
+        let c = span_of(asm, ".globl _c", ".globl _c\n_c:\n    ret\n");
+        let d = span_of(asm, ".globl _d", ".globl _d\n_d:\n    ret\n");
+        let split = split_catalog_units(asm, &[a, b, c, d], 2);
+        assert_eq!(split.catalogs.len(), 2);
+        assert_eq!(split.moved_functions, 4);
+        let names: Vec<bool> = ["_a:", "_b:", "_c:", "_d:"]
+            .iter()
+            .map(|name| split.catalogs.iter().any(|catalog| catalog.contains(name)))
+            .collect();
+        assert!(names.iter().all(|present| *present));
+        assert!(split.program.is_empty());
+    }
+
+    /// A literal a catalog function references moves into its unit under a hashed name.
     #[test]
     fn attributes_referenced_literals_to_the_catalog_unit() {
         let asm = ".globl _inner\n_inner:\n    adrp x0, _str_7@PAGE\n    ret\n.data\n_str_7:\n    .ascii \"hello\"\nprogram:\n    ret\n";
-        let start = asm.find(".globl _inner").expect("start");
-        let end = start + ".globl _inner\n_inner:\n    adrp x0, _str_7@PAGE\n    ret\n".len();
-        let split = split_catalog_unit(asm, &[start..end]);
-        assert!(
-            !split.catalog.contains("_str_7"),
-            "the literal must be renamed: {}",
-            split.catalog
+        let span = span_of(
+            asm,
+            ".globl _inner",
+            ".globl _inner\n_inner:\n    adrp x0, _str_7@PAGE\n    ret\n",
         );
-        assert!(split.catalog.contains(".data\n_catalog_str_s"));
-        assert!(split.catalog.contains(".ascii \"hello\""));
+        let split = split_one(asm, &[span]);
+        assert!(
+            !split.catalogs[0].contains("_str_7"),
+            "the literal must be renamed: {}",
+            split.catalogs[0]
+        );
+        assert!(split.catalogs[0].contains(".data\n_catalog_str_s"));
+        assert!(split.catalogs[0].contains(".ascii \"hello\""));
         assert!(split.program_dependent_symbols.is_empty());
         assert!(
             split.program.contains("_str_7:"),
@@ -628,23 +804,32 @@ mod tests {
     #[test]
     fn attributes_a_shared_literal_once() {
         let asm = ".globl _a\n_a:\n    adrp x0, _str_3@PAGE\n.globl _b\n_b:\n    adrp x1, _str_3@PAGE\n.data\n_str_3:\n    .ascii \"shared\"\n";
-        let a_end = ".globl _a\n_a:\n    adrp x0, _str_3@PAGE\n".len();
-        let split = split_catalog_unit(asm, &[0..a_end, a_end..asm.len() - ".data\n_str_3:\n    .ascii \"shared\"\n".len()]);
-        assert_eq!(split.catalog.matches(".ascii \"shared\"").count(), 1);
-        assert!(!split.catalog.contains("_str_3"));
+        let a = span_of(asm, ".globl _a", ".globl _a\n_a:\n    adrp x0, _str_3@PAGE\n");
+        let b = span_of(asm, ".globl _b", ".globl _b\n_b:\n    adrp x1, _str_3@PAGE\n");
+        let split = split_catalog_units(asm, &[a, b], 2);
+        let occurrences: usize = split
+            .catalogs
+            .iter()
+            .map(|catalog| catalog.matches(".ascii \"shared\"").count())
+            .sum();
+        assert_eq!(occurrences, 1);
+        assert!(split.catalogs.iter().all(|catalog| !catalog.contains("_str_3")));
     }
 
     /// A literal containing a raw newline is captured whole, not just its first line.
     #[test]
     fn captures_multi_line_literals_whole() {
         let asm = ".globl _inner\n_inner:\n    adrp x0, _str_2@PAGE\n    ret\n.data\n_str_2:\n    .ascii \"phar:\nhttps://example.test\"\nprogram:\n    ret\n";
-        let start = asm.find(".globl _inner").expect("start");
-        let end = start + ".globl _inner\n_inner:\n    adrp x0, _str_2@PAGE\n    ret\n".len();
-        let split = split_catalog_unit(asm, &[start..end]);
+        let span = span_of(
+            asm,
+            ".globl _inner",
+            ".globl _inner\n_inner:\n    adrp x0, _str_2@PAGE\n    ret\n",
+        );
+        let split = split_one(asm, &[span]);
         assert!(
-            split.catalog.contains(".ascii \"phar:\nhttps://example.test\""),
+            split.catalogs[0].contains(".ascii \"phar:\nhttps://example.test\""),
             "the whole literal must move: {}",
-            split.catalog
+            split.catalogs[0]
         );
     }
 
@@ -652,8 +837,15 @@ mod tests {
     #[test]
     fn reports_program_dependent_external_symbols() {
         let asm = ".globl _inner\n_inner:\n    bl _class_propinit_12\n    bl __rt_heap_alloc\n";
-        let start = asm.find(".globl _inner").expect("start");
-        let split = split_catalog_unit(asm, &[start..asm.len()]);
-        assert_eq!(split.program_dependent_symbols, vec!["_class_propinit_12".to_string()]);
+        let span = span_of(
+            asm,
+            ".globl _inner",
+            ".globl _inner\n_inner:\n    bl _class_propinit_12\n    bl __rt_heap_alloc\n",
+        );
+        let split = split_one(asm, &[span]);
+        assert_eq!(
+            split.program_dependent_symbols,
+            vec!["_class_propinit_12".to_string()]
+        );
     }
 }

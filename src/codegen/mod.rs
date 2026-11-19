@@ -326,22 +326,29 @@ pub fn generate_user_asm_from_ir_with_options(
     .map(|output| output.asm)
 }
 
+/// Number of catalog units the emitter splits the catalog into.
+///
+/// Four keeps the cold assembly phase busy on a laptop without making the per-unit assembler
+/// startup cost dominate, and a fixed number keeps the artifact reproducible on one machine.
+const CATALOG_UNITS: usize = 4;
+
 /// User assembly together with runtime dependencies introduced by synthetic codegen wrappers.
 pub struct GeneratedUserAsm {
     /// Target assembly for the user object, without the catalog unit when it was split out.
     ///
     /// A consumer that assembles one file must use [`Self::single_unit`] instead.
     pub asm: String,
-    /// Assembly of the compiler-provided catalog, moved out of `asm`.
+    /// Assembly of each compiler-provided catalog unit, moved out of `asm`.
     ///
     /// Empty when the build is not split (a library or extension artifact, a source-map build)
-    /// or when the program has no catalog at all.
-    pub catalog_asm: String,
+    /// or when the program has no catalog at all. The units are independent objects that the
+    /// pipeline assembles in parallel.
+    pub catalog_asms: Vec<String>,
     /// Byte ranges of the pre-split text holding the catalog functions.
     ///
     /// Kept for reporting; the split already consumed them.
     pub catalog_spans: Vec<std::ops::Range<usize>>,
-    /// Number of catalog functions that moved into `catalog_asm`.
+    /// Number of catalog functions that moved into `catalog_asms`.
     ///
     /// Lower than `catalog_spans.len()` when the cross-object symbol rule kept some in place.
     pub moved_catalog_functions: usize,
@@ -363,12 +370,14 @@ impl GeneratedUserAsm {
     /// an assembler (tests, fixture harnesses) needs the catalog back in place.
     #[allow(dead_code)] // only the integration-test harness assembles one file
     pub fn single_unit(self) -> String {
-        if self.catalog_asm.is_empty() {
+        if self.catalog_asms.is_empty() {
             return self.asm;
         }
         let mut asm = self.asm;
-        asm.push('\n');
-        asm.push_str(&self.catalog_asm);
+        for catalog in self.catalog_asms {
+            asm.push('\n');
+            asm.push_str(&catalog);
+        }
         asm
     }
 }
@@ -628,18 +637,21 @@ fn finalize_user_asm(
     // and `--emit asm` and source maps are read as one file by people and tools. The split runs
     // after the data section is appended so a catalog symbol reached from a vtable is promoted
     // like any other cross-object reference.
-    let (user_asm, catalog_asm, moved_catalog_functions, catalog_program_dependent_symbols) =
+    let (user_asm, catalog_asms, moved_catalog_functions, catalog_program_dependent_symbols) =
         if emit == Emit::Executable && !catalog_spans.is_empty() {
-            let split =
-                crate::codegen_support::catalog_unit::split_catalog_unit(&user_asm, &catalog_spans);
+            let split = crate::codegen_support::catalog_unit::split_catalog_units(
+                &user_asm,
+                &catalog_spans,
+                CATALOG_UNITS,
+            );
             (
                 split.program,
-                split.catalog,
+                split.catalogs,
                 split.moved_functions,
                 split.program_dependent_symbols,
             )
         } else {
-            (user_asm, String::new(), 0, Vec::new())
+            (user_asm, Vec::new(), 0, Vec::new())
         };
     let mut exported: HashSet<String> = exported_functions
         .values()
@@ -685,22 +697,23 @@ fn finalize_user_asm(
         module.target.platform,
         additional_internal,
     );
-    let catalog_asm = if catalog_asm.is_empty() {
-        String::new()
-    } else {
-        crate::codegen::visibility::append_hidden_directives_with_extras(
-            &catalog_asm,
-            &exported,
-            module.target.platform,
-            additional_internal,
-        )
-    };
+    let catalog_asms: Vec<String> = catalog_asms
+        .into_iter()
+        .map(|catalog| {
+            crate::codegen::visibility::append_hidden_directives_with_extras(
+                &catalog,
+                &exported,
+                module.target.platform,
+                additional_internal,
+            )
+        })
+        .collect();
     Ok(GeneratedUserAsm {
         catalog_spans,
         moved_catalog_functions,
         catalog_program_dependent_symbols,
         asm,
-        catalog_asm,
+        catalog_asms,
         handler_state: generated_runtime_features.handler_state,
         object_clone: generated_runtime_features.object_clone,
     })
