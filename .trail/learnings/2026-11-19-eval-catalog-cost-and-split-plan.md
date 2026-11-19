@@ -53,3 +53,33 @@ branch: perf/eval-catalog-cache
 - The split criterion still needs widening: `is_synthetic && source_name.is_none()` captures 884
   of the 1,018 module functions (19.9 of 31.8 MB); the other 134 functions (~11.9 MB) need a name
   or flag rule before the second unit can be sliced safely on a program with user code.
+
+## Step 1 landed: the catalog is its own object (56df61c12d)
+- `src/codegen_support/catalog_unit.rs` splits the emitted text; `src/pipeline/backend.rs` writes
+  `<stem>.catalog.s`, assembles it, and `src/linker/mod.rs` links both objects.
+- Candidate criterion is `FunctionFlags`-independent: `function.source_name.is_none()`. Measured on
+  the opaque fixture: **1,018 functions / 49,762,644 bytes = 94.4% of the unit**.
+- Measured on the same fixture: **1,005 of 1,018 move** (49,707,387 bytes). The 13 that stay reach
+  an `L`-prefixed label across the boundary.
+- Cross-object symbols: the generator leaves most shared helpers file-local, so the split promotes
+  what crosses with `.globl`; the existing visibility pass then emits `.private_extern` for every
+  one of them (3,053 promotions, 3,053 private-extern directives, zero new exports).
+- **The catalog unit must open `.text`.** The generator emits the text section once and then emits
+  every function into it, so a unit made only of function bodies inherits whatever section the
+  previous text left (the data section, for a recombined file). Symptom: the function lands in
+  `.data`, the process faults on the first instruction (`EXC_BAD_ACCESS code=2`).
+- `GeneratedUserAsm::single_unit()` exists because two test harnesses assemble one file themselves.
+- Binary equivalence: same size (2,188,480 bytes), same stdout, same global symbol set; `__text`
+  bytes differ in order only, because sections are laid out per object.
+
+## Why the cache still cannot hash that object
+- The catalog unit references **9,163 distinct `_str_*`/`_arr_*` symbols** that live in the
+  program's data section, and their numbering is program-dependent: `_str_0` is `""` in a trivial
+  program and `"count(): Argument #1 ..."` in the opaque fixture.
+- It also carries **107 `_class_propinit_*`** functions, which are program-specific (one per user
+  class), because they too have no source declaration.
+- So the next change is data attribution: record which data entries each catalog function emits,
+  move them into the catalog unit, and give them catalog-stable names. Only then is the unit a
+  function of (target, features, PHP version) alone and hashable.
+- Assembler time does not drop on the cold path (79 s for two sequential `as` runs vs 81 s for
+  one): the win there needs `elephc-ngg1` (parallel assembly), and the win overall needs the cache.
