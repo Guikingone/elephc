@@ -246,6 +246,18 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
     };
+    if !generated_user_asm.catalog_spans.is_empty() {
+        let functions = generated_user_asm.catalog_spans.len();
+        let bytes: usize = generated_user_asm
+            .catalog_spans
+            .iter()
+            .map(|span| span.end - span.start)
+            .sum();
+        timings.note(format!(
+            "Catalog assembly: {} functions, {} bytes of the user unit",
+            functions, bytes
+        ));
+    }
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;
     let user_asm = if emit_debug_info {

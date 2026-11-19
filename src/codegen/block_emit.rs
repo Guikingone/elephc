@@ -2110,10 +2110,11 @@ mod exit_hook_tests {
     }
 }
 
-/// Returns whether this function is part of the opaque-eval builtin catalog.
+/// Returns whether this function is one of the catalog helpers the module vectors carry.
 ///
-/// The catalog is synthetic and has no source declaration, which distinguishes it from the
-/// program's own functions and closures.
+/// Measured on an opaque-eval compile: these are 884 functions / 19.9 MB of the 95 MB user
+/// unit. The rest of the catalog (the ~21.5k `__elephc_eval_*` wrappers) is emitted outside
+/// these vectors, so the split must record its spans where that emitter writes.
 fn is_catalog_function(function: &crate::ir::Function) -> bool {
     function.flags.is_synthetic && function.source_name.is_none()
 }

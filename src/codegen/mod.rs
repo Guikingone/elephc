@@ -330,6 +330,10 @@ pub fn generate_user_asm_from_ir_with_options(
 pub struct GeneratedUserAsm {
     /// Complete target assembly for the user object.
     pub asm: String,
+    /// Byte ranges of `asm` holding the opaque-eval catalog functions.
+    ///
+    /// Empty for a program that never runs an `eval` whose source is only known at run time.
+    pub catalog_spans: Vec<std::ops::Range<usize>>,
     /// Whether generated wrappers reference native error or exception handler state.
     pub handler_state: bool,
     /// Whether generated wrappers reference the native boxed object clone adapter.
@@ -571,6 +575,7 @@ fn finalize_user_asm(
     .map_err(CodegenIrError::invalid_module)?;
 
     let data_output = data.emit(module.target);
+    let catalog_spans = emitter.catalog_spans.clone();
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {
         user_asm.push('\n');
@@ -615,6 +620,7 @@ fn finalize_user_asm(
     };
     let generated_runtime_features = shared.generated_runtime_features();
     Ok(GeneratedUserAsm {
+        catalog_spans,
         asm: crate::codegen::visibility::append_hidden_directives_with_extras(
             &user_asm,
             &exported,
