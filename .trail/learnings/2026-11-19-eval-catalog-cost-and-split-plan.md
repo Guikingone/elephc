@@ -83,3 +83,28 @@ branch: perf/eval-catalog-cache
   function of (target, features, PHP version) alone and hashable.
 - Assembler time does not drop on the cold path (79 s for two sequential `as` runs vs 81 s for
   one): the win there needs `elephc-ngg1` (parallel assembly), and the win overall needs the cache.
+
+## Step 2 (part one): the catalog unit no longer names program data (2404b3cac3)
+- Every string literal a moved span references is renamed after the FNV-1a hash of its own bytes
+  (`_catalog_str_s<hex>`) and emitted inside the catalog unit. The program keeps its own copy for
+  its own references. Measured on the opaque fixture: 8,603 catalog literals, **zero `_str_`**.
+- Property-default thunks (`_class_propinit_*`, 107 of them here) left the candidate set: they are
+  nameless and synthetic too, but there is one per user class.
+- Two traps in literal capture, both real in the generator's output: a literal can contain a raw
+  newline AND `//` (phar/URL strings), and the last literal of the file has no following line to
+  close it.
+- Remaining program dependence, measured by `--timings`: **12** symbols (`_class_ctor_<class>_4`),
+  i.e. constructor thunks named after the *class index*, referenced from the catalog but defined
+  in the program unit.
+
+## Step 2 (part two): a content-addressed object cache (8abf0c82b1)
+- `src/catalog_cache.rs` stores the assembled object under
+  `~/.cache/elephc/catalog/catalog-<key>.o` with a `.len` witness, and returns a hit or miss.
+- Key = build identity + target + PHP profile id + the emitted text, with **only `L`-prefixed
+  labels** normalized. A global symbol ending in a number can encode a program decision
+  (`_class_ctor_7_4` = class 7's constructor), so it stays in the key and different class
+  numbering misses instead of reusing a wrong helper.
+- On a hit the catalog assembler never runs: `<stem>.catalog.o` is not created next to the program.
+- Two programs with the same builtin set produce units that differ **only** in local label numbers
+  and in the `__FILE__` path baked into the eval error text — so the unit is program-independent
+  except for the source path, which is a legitimate per-compilation input and stays in the key.
