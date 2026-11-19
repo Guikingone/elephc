@@ -437,7 +437,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         // The catalog unit is addressed by content, so a build that already assembled this shape
         // reuses the stored object instead of paying for the assembler again. The program unit is
         // built either way, which is why the two run concurrently on a miss.
-        let prepared = crate::catalog_cache::prepare_catalog_object(target, &catalog_asm);
+        let prepared = crate::catalog_cache::prepare_catalog_object(
+            target,
+            &catalog_asm,
+            &output_paths.catalog_obj,
+        );
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(err) => {

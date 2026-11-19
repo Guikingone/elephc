@@ -50,12 +50,31 @@ pub(crate) struct PreparedCatalogObject {
 }
 
 /// Returns the catalog object for `catalog_asm`, assembling and storing it on a miss.
+///
+/// `local_object` is where the linker reads the object from. It is a hardlink of the cache entry
+/// when the filesystem allows it, so the link never depends on a cache file another compiler may
+/// prune or replace, and the caller removes it with the rest of the build's objects.
 pub(crate) fn prepare_catalog_object(
     target: Target,
     catalog_asm: &str,
+    local_object: &Path,
 ) -> Result<PreparedCatalogObject, String> {
-    let directory = crate::runtime_cache::runtime_cache_dir().join("catalog");
-    fs::create_dir_all(&directory).map_err(|err| {
+    prepare_in(
+        &crate::runtime_cache::runtime_cache_dir().join("catalog"),
+        target,
+        catalog_asm,
+        local_object,
+    )
+}
+
+/// Implements [`prepare_catalog_object`] against an explicit cache directory.
+fn prepare_in(
+    directory: &Path,
+    target: Target,
+    catalog_asm: &str,
+    local_object: &Path,
+) -> Result<PreparedCatalogObject, String> {
+    fs::create_dir_all(directory).map_err(|err| {
         format!(
             "failed to create catalog cache '{}': {}",
             directory.display(),
@@ -66,8 +85,9 @@ pub(crate) fn prepare_catalog_object(
     let object_path = directory.join(format!("catalog-{key:016x}.o"));
     let witness_path = directory.join(format!("catalog-{key:016x}.len"));
     if cached_object_is_intact(&object_path, &witness_path) {
+        link_or_copy(&object_path, local_object)?;
         return Ok(PreparedCatalogObject {
-            path: object_path,
+            path: local_object.to_path_buf(),
             status: CatalogCacheStatus::Hit,
         });
     }
@@ -113,15 +133,19 @@ pub(crate) fn prepare_catalog_object(
     match fs::rename(&temp_obj, &object_path).and_then(|()| {
         fs::write(&witness_path, witness.to_string())
     }) {
-        Ok(()) => Ok(PreparedCatalogObject {
-            path: object_path,
-            status: CatalogCacheStatus::Miss,
-        }),
+        Ok(()) => {
+            link_or_copy(&object_path, local_object)?;
+            Ok(PreparedCatalogObject {
+                path: local_object.to_path_buf(),
+                status: CatalogCacheStatus::Miss,
+            })
+        }
         // Another compiler published the same entry first; both objects are equivalent.
         Err(_) if object_path.exists() => {
             let _ = fs::remove_file(&temp_obj);
+            link_or_copy(&object_path, local_object)?;
             Ok(PreparedCatalogObject {
-                path: object_path,
+                path: local_object.to_path_buf(),
                 status: CatalogCacheStatus::Hit,
             })
         }
@@ -133,6 +157,25 @@ pub(crate) fn prepare_catalog_object(
                 err
             ))
         }
+    }
+}
+
+/// Publishes `source` at `destination`, preferring a hardlink over a byte copy.
+fn link_or_copy(source: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() {
+        let _ = fs::remove_file(destination);
+    }
+    match fs::hard_link(source, destination) {
+        Ok(()) => Ok(()),
+        Err(_) => fs::copy(source, destination)
+            .map(|_| ())
+            .map_err(|err| {
+                format!(
+                    "failed to publish the catalog object at '{}': {}",
+                    destination.display(),
+                    err
+                )
+            }),
     }
 }
 
@@ -218,6 +261,50 @@ mod tests {
     /// Returns the target the key tests use.
     fn target() -> Target {
         Target::new(Platform::Linux, Arch::X86_64)
+    }
+
+    /// Returns a fresh temporary directory for one cache test.
+    fn scratch(test: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-catalog-{test}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("scratch directory");
+        dir
+    }
+
+    /// A second preparation of the same unit reuses the object the first one assembled.
+    #[test]
+    fn stores_then_reuses_the_catalog_object() {
+        let dir = scratch("reuse");
+        let asm = ".text\n.globl _catalog_fn\n_catalog_fn:\n    ret\n";
+        let first = prepare_in(&dir, target(), asm, &dir.join("first.o")).expect("first");
+        assert_eq!(first.status, CatalogCacheStatus::Miss);
+        let first_bytes = fs::read(&first.path).expect("first object");
+        let second = prepare_in(&dir, target(), asm, &dir.join("second.o")).expect("second");
+        assert_eq!(second.status, CatalogCacheStatus::Hit);
+        assert_eq!(fs::read(&second.path).expect("second object"), first_bytes);
+    }
+
+    /// A different unit does not reuse the stored object.
+    #[test]
+    fn different_units_do_not_share_an_object() {
+        let dir = scratch("distinct");
+        let first = prepare_in(&dir, target(), ".text\n_catalog_fn:\n    ret\n", &dir.join("a.o"))
+            .expect("first");
+        assert_eq!(first.status, CatalogCacheStatus::Miss);
+        let second = prepare_in(
+            &dir,
+            target(),
+            ".text\n_catalog_fn:\n    nop\n    ret\n",
+            &dir.join("b.o"),
+        )
+        .expect("second");
+        assert_eq!(second.status, CatalogCacheStatus::Miss);
     }
 
     /// Two units that differ only in assembler-local label numbering share one key.
