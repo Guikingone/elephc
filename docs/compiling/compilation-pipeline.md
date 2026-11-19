@@ -196,18 +196,19 @@ behind a flag.
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
 - **catalog-cache** — a program whose `eval()` source is only known at run time
-  lowers the whole built-in catalog. That catalog is emitted as a second assembly
-  unit, addressed by its own content, and its object is cached in
-  `~/.cache/elephc/catalog/` beside the runtime object. A rebuild of the same shape
-  reuses it instead of running the assembler again; the `--timings` note reads
-  `Catalog cache: hit` or `miss`.
+  lowers the whole built-in catalog. That catalog is emitted as its own assembly
+  units (up to four), addressed by their content, and cached in
+  `~/.cache/elephc/catalog/` beside the runtime object. A miss assembles every unit
+  concurrently; a rebuild of the same shape reuses them all instead of running the
+  assembler again. The `--timings` note reads `Catalog cache: hit` or `miss` with
+  the unit count.
 
 ## Tail: assemble and link
 
 The generated assembly is written out and assembled into object files. A build
-that emits a compiler catalog produces two of them — the program unit and the
-catalog unit — and assembles the program unit while the catalog object is either
-assembled in parallel or taken from the catalog cache. Only
+that emits a compiler catalog produces several of them — the program unit and up to
+four catalog units — and assembles the program unit while the catalog objects are
+either assembled concurrently or taken from the catalog cache. Only
 on a final-link path, logical [managed native
 requirements](native-dependencies.md) are resolved read-only from the project
 lock and verified cache receipts. Those exact archives, the cached runtime
