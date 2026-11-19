@@ -67,11 +67,7 @@ pub(crate) fn split_catalog_units(
     program = promote_crossing_symbols(&program, &program_promotions);
     attribute_data(&mut catalogs, &symbols, &unit_of_span);
     let moved_functions = unit_of_span.iter().filter(|unit| unit.is_some()).count();
-    let promoted: Vec<String> = catalogs
-        .iter()
-        .flat_map(|catalog| defined_catalog_symbols(catalog))
-        .collect();
-    let program_dependent_symbols = unresolved_program_symbols(&symbols, &unit_of_span, &promoted);
+    let program_dependent_symbols = unresolved_program_symbols(&symbols, &unit_of_span);
     // The generator opens the file's text section once and then emits functions into it, so a
     // unit made only of function bodies must open its own: without this the catalog code inherits
     // whatever section the previous text left behind (the data section, for a recombined file).
@@ -350,40 +346,47 @@ fn attribute_data(catalogs: &mut [String], symbols: &SymbolScan, unit_of_span: &
     }
 }
 
-/// Returns the external symbols the catalog units name that carry a program-dependent index.
+/// Returns the symbols that cross a unit boundary and carry a program-dependent index.
 ///
-/// A symbol defined by a moving span comes along with its unit, so only references leaving the
-/// catalog matter. Everything left here is a name the generator numbers per compilation, which
-/// makes the units unusable by another program.
+/// Only real crossings matter: a numbered name that a catalog unit defines and only that unit
+/// reads is invisible to the other objects. A crossing one is what makes a stored object
+/// unportable, because the other unit reaches it by a name the next program will number
+/// differently.
 fn unresolved_program_symbols(
     symbols: &SymbolScan,
     unit_of_span: &[Option<usize>],
-    promoted: &[String],
 ) -> Vec<String> {
-    let mut defined: HashSet<&str> = HashSet::new();
-    let mut referenced: HashSet<&str> = HashSet::new();
+    let mut defined_in: HashMap<&str, HashSet<Option<usize>>> = HashMap::new();
     for (index, unit) in unit_of_span.iter().enumerate() {
         if unit.is_some() {
-            defined.extend(symbols.defs[index].iter().map(String::as_str));
-            referenced.extend(symbols.refs[index].iter().map(String::as_str));
+            for symbol in &symbols.defs[index] {
+                defined_in.entry(symbol.as_str()).or_default().insert(*unit);
+            }
         }
     }
-    let mut unresolved: Vec<String> = referenced
+    let mut crossing: HashSet<&str> = HashSet::new();
+    for (index, unit) in unit_of_span.iter().enumerate() {
+        for symbol in &symbols.refs[index] {
+            match defined_in.get(symbol.as_str()) {
+                // Defined in the unit that reads it: stays inside one object.
+                Some(units) if units.len() == 1 && units.contains(unit) => {}
+                // Defined in the program unit, which this scan does not enumerate, or in another
+                // catalog unit: the reference leaves its object.
+                _ => {
+                    crossing.insert(symbol);
+                }
+            }
+        }
+    }
+    let mut crossing: Vec<String> = crossing
         .into_iter()
-        .filter(|symbol| !defined.contains(symbol) && !symbols.globals.contains(*symbol))
         .filter(|symbol| !symbols.strings.contains_key(*symbol))
         .filter(|symbol| has_program_index(symbol))
         .map(str::to_string)
         .collect();
-    unresolved.extend(
-        promoted
-            .iter()
-            .filter(|symbol| has_program_index(symbol))
-            .cloned(),
-    );
-    unresolved.sort();
-    unresolved.dedup();
-    unresolved
+    crossing.sort();
+    crossing.dedup();
+    crossing
 }
 
 /// Returns whether a symbol name ends in a numeric suffix, as per-compilation names do.
