@@ -10,6 +10,7 @@
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod block_emit;
+mod catalog_reuse;
 mod block_layout;
 pub use block_emit::generic_body_sharing_oracle;
 pub(crate) mod callable_reachability;
@@ -413,6 +414,20 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         emitter.emit_text_prelude();
     }
     let mut data = DataSection::new();
+    let reused_catalog = (emit == Emit::Executable)
+        .then(|| catalog_reuse::load(module))
+        .flatten();
+    // Verification mode emits the catalog anyway and compares it with the entry, which is how a
+    // signature that misses an input shows up as a warning instead of a silent miscompile.
+    let verify_reuse = std::env::var_os("ELEPHC_CATALOG_VERIFY").is_some();
+    let skipped_catalog: std::collections::HashSet<String> = if verify_reuse {
+        std::collections::HashSet::new()
+    } else {
+        reused_catalog
+            .as_ref()
+            .map(|reused| reused.functions.clone())
+            .unwrap_or_default()
+    };
     let shared = block_emit::emit_module(
         module,
         &mut emitter,
@@ -427,6 +442,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         regalloc_linear,
         web,
         web_isolation,
+        &skipped_catalog,
     )?;
     finalize_user_asm(
         module,
@@ -437,6 +453,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         heap_debug,
         shared,
         regalloc_linear,
+        reused_catalog,
     )
 }
 
@@ -450,6 +467,7 @@ fn finalize_user_asm(
     heap_debug: bool,
     mut shared: shared_state::SharedCodegenState,
     regalloc_linear: bool,
+    reused_catalog: Option<catalog_reuse::ReusedCatalog>,
 ) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     mbstring_configuration::emit(module, &mut emitter, &mut data);
@@ -639,16 +657,41 @@ fn finalize_user_asm(
     // like any other cross-object reference.
     let (user_asm, catalog_asms, moved_catalog_functions, catalog_program_dependent_symbols) =
         if emit == Emit::Executable && !catalog_spans.is_empty() {
+            // Either no entry existed, or verification mode forced this emission.
             let split = crate::codegen_support::catalog_unit::split_catalog_units(
                 &user_asm,
                 &catalog_spans,
                 CATALOG_UNITS,
             );
+            match &reused_catalog {
+                // Verification mode: the entry should describe exactly what we just emitted.
+                Some(reused) if reused.units != split.catalogs => {
+                    eprintln!(
+                        "warning: cached catalog units differ from the emitted ones ({} vs {} bytes); the cache key misses an input",
+                        reused.units.iter().map(String::len).sum::<usize>(),
+                        split.catalogs.iter().map(String::len).sum::<usize>()
+                    );
+                }
+                Some(_) => {}
+                None => catalog_reuse::store(
+                    module,
+                    &split.catalogs,
+                    split.moved_functions,
+                    &split.program_dependent_symbols,
+                ),
+            }
             (
                 split.program,
                 split.catalogs,
                 split.moved_functions,
                 split.program_dependent_symbols,
+            )
+        } else if let Some(reused) = reused_catalog {
+            (
+                user_asm,
+                reused.units,
+                reused.moved_functions,
+                reused.program_dependent_symbols,
             )
         } else {
             (user_asm, Vec::new(), 0, Vec::new())

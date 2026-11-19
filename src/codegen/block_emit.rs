@@ -134,6 +134,7 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
     web_isolation: WebIsolation,
+    skipped_catalog: &std::collections::HashSet<String>,
 ) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
     // A program hosting PHP extensions declares the engine's shutdown routine; every
@@ -248,6 +249,7 @@ pub(super) fn emit_module(
         .functions
         .iter()
         .filter(|function| !is_main(function))
+        .filter(|function| !skipped_catalog.contains(&function.name))
     {
         let start = emitter.asm_len();
         if let Some(survivor) = body_aliases.get(&function.name) {
@@ -259,7 +261,11 @@ pub(super) fn emit_module(
             emitter.record_catalog_function(start);
         }
     }
-    for method in &module.class_methods {
+    for method in module
+        .class_methods
+        .iter()
+        .filter(|method| !skipped_catalog.contains(&method.name))
+    {
         let start = emitter.asm_len();
         if let Some(survivor) = body_aliases.get(&method.name) {
             emit_folded_body(method, survivor, emitter)?;
@@ -270,7 +276,11 @@ pub(super) fn emit_module(
             emitter.record_catalog_function(start);
         }
     }
-    for closure in &module.closures {
+    for closure in module
+        .closures
+        .iter()
+        .filter(|closure| !skipped_catalog.contains(&closure.name))
+    {
         let start = emitter.asm_len();
         emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
         if is_catalog_function(closure) {

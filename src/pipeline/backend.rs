@@ -248,6 +248,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     };
     let mut user_asm = generated_user_asm.asm;
     let mut catalog_asms = generated_user_asm.catalog_asms;
+    if generated_user_asm.catalog_spans.is_empty() && !catalog_asms.is_empty() {
+        timings.note(format!(
+            "Catalog emission: reused from cache ({} function(s), {} unit(s))",
+            generated_user_asm.moved_catalog_functions,
+            catalog_asms.len()
+        ));
+    }
     if !generated_user_asm.catalog_spans.is_empty() {
         let recorded = generated_user_asm.catalog_spans.len();
         let bytes: usize = catalog_asms.iter().map(String::len).sum();
