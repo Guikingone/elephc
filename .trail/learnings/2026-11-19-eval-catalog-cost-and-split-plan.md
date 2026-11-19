@@ -40,3 +40,16 @@ branch: perf/eval-catalog-cache
   (`src/linker/mod.rs:330`).
 - First proof: the binary produced before and after the split must be identical, before any
   caching is added.
+
+## Measured later the same day (span probes on the split branch)
+- `emit_module` writes 31,762,160 bytes and `finalize_user_asm` 20,926,776 on the opaque fixture
+  (52,688,936 total; the 95 MB figure came from the dev-O1 compiler in another worktree, so
+  compare ratios within one build only).
+- Recording EVERY module function raises coverage from 885 spans / 37,960,954 bytes to
+  1,018 / 49,762,644, i.e. **94.4% of the unit**. The catalog is therefore the module-vector
+  functions plus the contiguous eval helper block in `finalize_user_asm`.
+- The 22,416 `__elephc_eval_*` labels are NOT 22k functions: ~1k functions emit several variant
+  labels each (`_inner`, `_scope_ok`, `_eval_shadow`).
+- The split criterion still needs widening: `is_synthetic && source_name.is_none()` captures 884
+  of the 1,018 module functions (19.9 of 31.8 MB); the other 134 functions (~11.9 MB) need a name
+  or flag rule before the second unit can be sliced safely on a program with user code.
