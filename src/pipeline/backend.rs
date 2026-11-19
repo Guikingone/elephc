@@ -423,10 +423,22 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     crate::progress::phase("assemble");
     let phase_started = Instant::now();
     linker::assemble(target, &output_paths.asm, &output_paths.obj);
-    let catalog_object = (!catalog_asm.is_empty()).then(|| {
-        linker::assemble(target, &output_paths.catalog_asm, &output_paths.catalog_obj);
-        output_paths.catalog_obj.clone()
-    });
+    // The two units are independent inputs of one `as` invocation each, so they assemble
+    // concurrently: the catalog is the bulk of an opaque-eval program's text, and running the two
+    // assemblers back to back makes the cold path pay for both.
+    let catalog_object = if catalog_asm.is_empty() {
+        linker::assemble(target, &output_paths.asm, &output_paths.obj);
+        None
+    } else {
+        std::thread::scope(|scope| {
+            let catalog = scope.spawn(|| {
+                linker::assemble(target, &output_paths.catalog_asm, &output_paths.catalog_obj);
+            });
+            linker::assemble(target, &output_paths.asm, &output_paths.obj);
+            catalog.join().expect("catalog assembler thread");
+        });
+        Some(output_paths.catalog_obj.clone())
+    };
     timings.record_since("assemble", phase_started);
 
     for (lib_name, flag_name) in linker::bridges_in(&planned_link_libraries) {
