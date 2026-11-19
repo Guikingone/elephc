@@ -2117,9 +2117,12 @@ mod exit_hook_tests {
 /// opaque-`eval` wrappers. Measured on the opaque-eval fixture: 1,018 functions and 49,762,644
 /// bytes, 94.4% of the emitted unit. A user function always carries its source name.
 ///
+/// Property-default thunks are excluded: they are synthetic and nameless too, but there is one per
+/// user class, so their bodies mention program-specific class names and identifiers.
+///
 /// This is only the candidate set: `catalog_unit::select_splittable` decides what can actually
 /// cross the object boundary, so a program-specific synthetic function that references or exports
 /// a file-local symbol stays in the program unit.
 fn is_catalog_function(function: &crate::ir::Function) -> bool {
-    function.source_name.is_none()
+    function.source_name.is_none() && !function.name.starts_with("_class_propinit_")
 }

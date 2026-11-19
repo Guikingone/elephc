@@ -251,11 +251,15 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if !generated_user_asm.catalog_spans.is_empty() {
         let recorded = generated_user_asm.catalog_spans.len();
         timings.note(format!(
-            "Catalog assembly: {} of {} recorded functions moved, {} bytes in the catalog unit",
+            "Catalog assembly: {} of {} recorded functions moved, {} bytes in the catalog unit, {} program-dependent symbols",
             generated_user_asm.moved_catalog_functions,
             recorded,
-            catalog_asm.len()
+            catalog_asm.len(),
+            generated_user_asm.catalog_program_dependent_symbols.len()
         ));
+        for symbol in generated_user_asm.catalog_program_dependent_symbols.iter().take(5) {
+            timings.note(format!("  catalog symbol bound to the program: {}", symbol));
+        }
     }
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;

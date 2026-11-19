@@ -345,6 +345,11 @@ pub struct GeneratedUserAsm {
     ///
     /// Lower than `catalog_spans.len()` when the cross-object symbol rule kept some in place.
     pub moved_catalog_functions: usize,
+    /// Catalog symbols still named after a program-dependent index, if any.
+    ///
+    /// Empty means the catalog unit is a function of target, features, and PHP version alone,
+    /// which is what a content-addressed cache needs.
+    pub catalog_program_dependent_symbols: Vec<String>,
     /// Whether generated wrappers reference native error or exception handler state.
     pub handler_state: bool,
     /// Whether generated wrappers reference the native boxed object clone adapter.
@@ -623,15 +628,19 @@ fn finalize_user_asm(
     // and `--emit asm` and source maps are read as one file by people and tools. The split runs
     // after the data section is appended so a catalog symbol reached from a vtable is promoted
     // like any other cross-object reference.
-    let (user_asm, catalog_asm, moved_catalog_functions) = if emit == Emit::Executable
-        && !catalog_spans.is_empty()
-    {
-        let split =
-            crate::codegen_support::catalog_unit::split_catalog_unit(&user_asm, &catalog_spans);
-        (split.program, split.catalog, split.moved_functions)
-    } else {
-        (user_asm, String::new(), 0)
-    };
+    let (user_asm, catalog_asm, moved_catalog_functions, catalog_program_dependent_symbols) =
+        if emit == Emit::Executable && !catalog_spans.is_empty() {
+            let split =
+                crate::codegen_support::catalog_unit::split_catalog_unit(&user_asm, &catalog_spans);
+            (
+                split.program,
+                split.catalog,
+                split.moved_functions,
+                split.program_dependent_symbols,
+            )
+        } else {
+            (user_asm, String::new(), 0, Vec::new())
+        };
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))
@@ -689,6 +698,7 @@ fn finalize_user_asm(
     Ok(GeneratedUserAsm {
         catalog_spans,
         moved_catalog_functions,
+        catalog_program_dependent_symbols,
         asm,
         catalog_asm,
         handler_state: generated_runtime_features.handler_state,

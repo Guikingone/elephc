@@ -17,7 +17,7 @@
 //!   span that reaches an `L` label across the boundary cannot move and stays in the program unit.
 //! - The remainder of the assembly (prelude, `.data`, runtime metadata) stays in the program unit.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 /// One split result: the two units and how many functions left the program unit.
@@ -28,6 +28,11 @@ pub(crate) struct CatalogSplit {
     pub(crate) catalog: String,
     /// Number of function spans that moved.
     pub(crate) moved_functions: usize,
+    /// External symbols the catalog unit names that carry a program-dependent index.
+    ///
+    /// Zero means the unit is a function of target, features, and PHP version alone, which is what
+    /// a content-addressed cache needs. Non-zero means the unit must not be cached.
+    pub(crate) program_dependent_symbols: Vec<String>,
 }
 
 /// Splits `asm` into the program text and the catalog text described by `spans`.
@@ -40,6 +45,7 @@ pub(crate) fn split_catalog_unit(asm: &str, spans: &[Range<usize>]) -> CatalogSp
             program: asm.to_string(),
             catalog: String::new(),
             moved_functions: 0,
+            program_dependent_symbols: Vec::new(),
         };
     }
     let symbols = scan_symbols(asm, spans);
@@ -49,6 +55,7 @@ pub(crate) fn split_catalog_unit(asm: &str, spans: &[Range<usize>]) -> CatalogSp
             program: asm.to_string(),
             catalog: String::new(),
             moved_functions: 0,
+            program_dependent_symbols: Vec::new(),
         };
     }
     let (mut program, catalog, moved) = slice_spans(asm, spans, &selected);
@@ -57,11 +64,14 @@ pub(crate) fn split_catalog_unit(asm: &str, spans: &[Range<usize>]) -> CatalogSp
     // The generator opens the file's text section once and then emits functions into it, so a
     // unit made only of function bodies must open its own: without this the catalog code inherits
     // whatever section the previous text left behind (the data section, for a recombined file).
-    let catalog = format!(".text\n{}", promote_crossing_symbols(&catalog, &catalog_promotions));
+    let mut catalog = format!(".text\n{}", promote_crossing_symbols(&catalog, &catalog_promotions));
+    attribute_data(&mut catalog, &symbols, &selected);
+    let program_dependent_symbols = unresolved_program_symbols(&symbols, &selected);
     CatalogSplit {
         program,
         catalog,
         moved_functions: moved,
+        program_dependent_symbols,
     }
 }
 
@@ -97,6 +107,164 @@ fn select_splittable(symbols: &SymbolScan, span_count: usize) -> Vec<bool> {
             return kept;
         }
     }
+}
+
+/// Copies the data every moved span references into the catalog unit under content-derived names.
+///
+/// The generator numbers string literals per compilation (`_str_0`, `_str_1`, ...), so a catalog
+/// unit that referenced them would change with every program. Each referenced literal is renamed
+/// after a hash of its own text and emitted beside the code, which makes the unit independent of
+/// the program that produced it. A literal shared by several catalog functions is emitted once.
+fn attribute_data(catalog: &mut String, symbols: &SymbolScan, selected: &[bool]) {
+    let mut referenced: HashSet<&str> = HashSet::new();
+    for (index, keep) in selected.iter().enumerate() {
+        if *keep {
+            for symbol in &symbols.refs[index] {
+                if symbols.strings.contains_key(symbol) {
+                    referenced.insert(symbol.as_str());
+                }
+            }
+        }
+    }
+    if referenced.is_empty() {
+        return;
+    }
+    let mut renames: HashMap<String, String> = HashMap::new();
+    let mut emitted: Vec<(String, String)> = Vec::new();
+    for symbol in referenced {
+        let payload = &symbols.strings[symbol];
+        // The `s` prefix keeps the name from ever ending in a bare number, so it is never
+        // mistaken for a per-compilation symbol by `has_program_index`.
+        let renamed = format!("_catalog_str_s{:016x}", fnv1a64(payload.as_bytes()));
+        renames.insert(symbol.to_string(), renamed.clone());
+        emitted.push((renamed, payload.clone()));
+    }
+    emitted.sort();
+    emitted.dedup_by(|left, right| left.0 == right.0);
+    *catalog = rewrite_symbols(catalog, &renames);
+    catalog.push_str("\n.data\n");
+    for (symbol, payload) in &emitted {
+        catalog.push_str(symbol);
+        catalog.push_str(":\n");
+        catalog.push_str(payload);
+        catalog.push('\n');
+    }
+}
+
+/// Returns the external symbols the catalog unit names that carry a program-dependent index.
+///
+/// A symbol defined by a moved span comes along with the unit, so only references leaving the unit
+/// matter. Everything left here is a name the generator numbers per compilation, which makes the
+/// unit unusable by another program.
+fn unresolved_program_symbols(symbols: &SymbolScan, selected: &[bool]) -> Vec<String> {
+    let mut defined: HashSet<&str> = HashSet::new();
+    let mut referenced: HashSet<&str> = HashSet::new();
+    for (index, keep) in selected.iter().enumerate() {
+        if *keep {
+            defined.extend(symbols.defs[index].iter().map(String::as_str));
+            referenced.extend(symbols.refs[index].iter().map(String::as_str));
+        }
+    }
+    let mut unresolved: Vec<String> = referenced
+        .into_iter()
+        .filter(|symbol| !defined.contains(symbol) && !symbols.globals.contains(*symbol))
+        .filter(|symbol| !symbols.strings.contains_key(*symbol))
+        .filter(|symbol| has_program_index(symbol))
+        .map(str::to_string)
+        .collect();
+    unresolved.sort();
+    unresolved.dedup();
+    unresolved
+}
+
+/// Returns whether a symbol name ends in a numeric suffix, as per-compilation names do.
+fn has_program_index(symbol: &str) -> bool {
+    symbol
+        .rsplit(|c: char| !c.is_ascii_alphanumeric())
+        .next()
+        .map(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
+/// Returns `line` without its trailing `//` comment, keeping `//` that sits inside a literal.
+fn strip_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        let character = bytes[index] as char;
+        if escaped {
+            escaped = false;
+        } else if in_string && character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            in_string = !in_string;
+        } else if !in_string && character == '/' && bytes[index + 1] == b'/' {
+            return line[..index].trim_end();
+        }
+        index += 1;
+    }
+    line
+}
+
+/// Returns whether every string opened in `payload` is closed.
+///
+/// An escaped quote does not close a literal, which is why a plain quote count is not enough.
+fn quotes_balanced(payload: &str) -> bool {
+    let mut open = false;
+    let mut escaped = false;
+    for character in payload.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' => escaped = true,
+            '"' => open = !open,
+            _ => {}
+        }
+    }
+    !open
+}
+
+/// Rewrites whole symbol tokens in `text` according to `renames`, leaving every other byte alone.
+fn rewrite_symbols(text: &str, renames: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' || character == '.' || character == '$'
+        {
+            token.push(character);
+            continue;
+        }
+        flush_token(&mut out, &mut token, renames);
+        out.push(character);
+    }
+    flush_token(&mut out, &mut token, renames);
+    out
+}
+
+/// Appends `token` to `out`, renamed when `renames` covers it, and clears it.
+fn flush_token(out: &mut String, token: &mut String, renames: &HashMap<String, String>) {
+    if token.is_empty() {
+        return;
+    }
+    match renames.get(token.as_str()) {
+        Some(renamed) => out.push_str(renamed),
+        None => out.push_str(token),
+    }
+    token.clear();
+}
+
+/// Returns the 64-bit FNV-1a hash of `bytes`, used to name a literal after its own content.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// Returns the symbols each unit must declare global so the other can reach them.
@@ -214,6 +382,8 @@ struct SymbolScan {
     refs: Vec<HashSet<String>>,
     /// Symbols referenced from outside every span.
     outside_refs: HashSet<String>,
+    /// String literals of the data section, keyed by their per-compilation symbol name.
+    strings: HashMap<String, String>,
 }
 
 /// Collects the global, defined, and referenced symbols of an assembly text.
@@ -232,19 +402,30 @@ fn scan_symbols(asm: &str, spans: &[Range<usize>]) -> SymbolScan {
     // References are collected first and escapes derived afterwards, because a symbol's escape
     // status depends on references that appear later in the text.
     let mut outside_refs: HashSet<String> = HashSet::new();
+    let mut pending_string: Option<(String, String)> = None;
     let mut line_start = 0usize;
     for line in asm.split_inclusive('\n') {
         let span = span_at(&ordered, line_start);
         line_start += line.len();
-        let trimmed = line.trim_start();
-        let code = match trimmed.find("//") {
-            Some(index) => &trimmed[..index],
-            None => trimmed,
-        };
-        let code = code.trim_end();
-        if code.is_empty() {
+        let trimmed = line.trim_start().trim_end();
+        if trimmed.is_empty() {
             continue;
         }
+        // A string literal is `_str_N:` followed by its data. A literal may contain a raw newline
+        // and `//` inside a URL, so its lines are taken verbatim: the block runs until its quotes
+        // balance, and a second `.ascii` line for the same symbol belongs to it too.
+        if let Some((symbol, payload)) = pending_string.take() {
+            let continues = trimmed.starts_with(".ascii ") || !quotes_balanced(&payload);
+            if continues {
+                let mut payload = payload;
+                payload.push('\n');
+                payload.push_str(trimmed);
+                pending_string = Some((symbol, payload));
+                continue;
+            }
+            scan.strings.insert(symbol, payload);
+        }
+        let code = strip_comment(trimmed);
         if let Some(rest) = code.strip_prefix(".globl ") {
             scan.globals.insert(rest.trim().to_string());
             continue;
@@ -259,7 +440,10 @@ fn scan_symbols(asm: &str, spans: &[Range<usize>]) -> SymbolScan {
         let instruction = match split_definition(code) {
             Some((Some(symbol), rest)) => {
                 if let Some(index) = span {
-                    scan.defs[index].insert(symbol);
+                    scan.defs[index].insert(symbol.clone());
+                }
+                if symbol.starts_with("_str_") {
+                    pending_string = Some((symbol, String::new()));
                 }
                 rest
             }
@@ -276,6 +460,10 @@ fn scan_symbols(asm: &str, spans: &[Range<usize>]) -> SymbolScan {
                 }
             }
         }
+    }
+    // The last literal of the file has no following line to flush it.
+    if let Some((symbol, payload)) = pending_string {
+        scan.strings.insert(symbol, payload);
     }
     scan.outside_refs = outside_refs;
     scan
@@ -400,5 +588,60 @@ mod tests {
             split.catalog
         );
         assert_eq!(split.program, "program:\n    bl _helper\n");
+    }
+
+    /// A literal a catalog function references moves into the catalog unit under a hashed name.
+    #[test]
+    fn attributes_referenced_literals_to_the_catalog_unit() {
+        let asm = ".globl _inner\n_inner:\n    adrp x0, _str_7@PAGE\n    ret\n.data\n_str_7:\n    .ascii \"hello\"\nprogram:\n    ret\n";
+        let start = asm.find(".globl _inner").expect("start");
+        let end = start + ".globl _inner\n_inner:\n    adrp x0, _str_7@PAGE\n    ret\n".len();
+        let split = split_catalog_unit(asm, &[start..end]);
+        assert!(
+            !split.catalog.contains("_str_7"),
+            "the literal must be renamed: {}",
+            split.catalog
+        );
+        assert!(split.catalog.contains(".data\n_catalog_str_s"));
+        assert!(split.catalog.contains(".ascii \"hello\""));
+        assert!(split.program_dependent_symbols.is_empty());
+        assert!(
+            split.program.contains("_str_7:"),
+            "the program keeps its own copy: {}",
+            split.program
+        );
+    }
+
+    /// The same literal reached from two catalog functions is emitted once, under one name.
+    #[test]
+    fn attributes_a_shared_literal_once() {
+        let asm = ".globl _a\n_a:\n    adrp x0, _str_3@PAGE\n.globl _b\n_b:\n    adrp x1, _str_3@PAGE\n.data\n_str_3:\n    .ascii \"shared\"\n";
+        let a_end = ".globl _a\n_a:\n    adrp x0, _str_3@PAGE\n".len();
+        let split = split_catalog_unit(asm, &[0..a_end, a_end..asm.len() - ".data\n_str_3:\n    .ascii \"shared\"\n".len()]);
+        assert_eq!(split.catalog.matches(".ascii \"shared\"").count(), 1);
+        assert!(!split.catalog.contains("_str_3"));
+    }
+
+    /// A literal containing a raw newline is captured whole, not just its first line.
+    #[test]
+    fn captures_multi_line_literals_whole() {
+        let asm = ".globl _inner\n_inner:\n    adrp x0, _str_2@PAGE\n    ret\n.data\n_str_2:\n    .ascii \"phar:\nhttps://example.test\"\nprogram:\n    ret\n";
+        let start = asm.find(".globl _inner").expect("start");
+        let end = start + ".globl _inner\n_inner:\n    adrp x0, _str_2@PAGE\n    ret\n".len();
+        let split = split_catalog_unit(asm, &[start..end]);
+        assert!(
+            split.catalog.contains(".ascii \"phar:\nhttps://example.test\""),
+            "the whole literal must move: {}",
+            split.catalog
+        );
+    }
+
+    /// An external symbol numbered per compilation is reported as program-dependent.
+    #[test]
+    fn reports_program_dependent_external_symbols() {
+        let asm = ".globl _inner\n_inner:\n    bl _class_propinit_12\n    bl __rt_heap_alloc\n";
+        let start = asm.find(".globl _inner").expect("start");
+        let split = split_catalog_unit(asm, &[start..asm.len()]);
+        assert_eq!(split.program_dependent_symbols, vec!["_class_propinit_12".to_string()]);
     }
 }
