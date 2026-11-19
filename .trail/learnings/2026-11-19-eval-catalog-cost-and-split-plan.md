@@ -122,3 +122,29 @@ branch: perf/eval-catalog-cache
   no fixture that produced dynamic-`new` thunks.
 - Lesson: a content-addressed cache is also a determinism test. It found in one run what the
   existing suites did not cover.
+
+## Step 3: the catalog is four objects (daea809153)
+- `split_catalog_units(asm, spans, 4)`: functions that share an assembler-local `L` label are
+  grouped first (union-find over def/ref), then each group is placed whole on the currently
+  smallest unit. Splitting a shared `L` label across objects cannot work: Mach-O drops those
+  labels from the symbol table whatever their declared binding.
+- Every non-local symbol a unit defines is promoted there, since any other unit may reach it by
+  name; the visibility pass still hides all of them, so no exports and no dead-strip roots.
+- Measured on the opaque fixture: four units of 24.2 / 10.9 / 10.6 / 10.4 MB, assembly 241.02 s
+  (sequential two units) → **156.19 s** cold, **89.46 s** on a cache hit that runs only the
+  program assembler. Totals on that host (1332 s / 1102 s) are contention, not the compiler.
+- Numeric labels (`1:`) are assembler-local too and must never be promoted; a definition filter
+  that only accepts names starting like a symbol is what keeps `.globl 1` out of the units.
+- The program-dependent metric must count only real crossings: counting every promotion reported
+  2,828 symbols where 12 actually cross (436e0c4dce).
+
+## What a3sl still requires (not implemented)
+- Skipping lowering needs the catalog list *before* the bodies are lowered, plus placeholder
+  `Function`s with correct names and signatures so the program unit's by-name calls still resolve
+  and codegen never emits them. The cached object then supplies the bodies.
+- The cache key for that cannot be the emitted text (it is computed after emission). It must be a
+  trusted signature over the lowering inputs, which is a correctness bet the text key does not
+  make: a wrong key here miscompiles instead of missing.
+- Safe scope for the next session: land the placeholders behind a flag, keep the text key as the
+  source of truth, and only promote the signature key once a determinism soak (the existing
+  `compiler_determinism_tests` harness) covers an opaque-eval fixture.
