@@ -194,3 +194,29 @@ fn enum_heavy_program_emits_identical_assembly_across_processes() {
     let outputs = emit_asm_repeatedly("enums", &source, 3);
     assert_all_identical("enums", &outputs);
 }
+
+/// `new $c(...)` builds constructor thunks, one per class whose constructor has defaults.
+///
+/// Regression: those thunks were added to the module while walking `class_infos`, a hash map, so
+/// two runs of an unchanged source emitted the same functions in a different order. The catalog
+/// unit of an opaque-`eval` program inherited that reordering and could never be cached by
+/// content, which is how the bug was found.
+#[test]
+fn dynamic_new_thunks_emit_identical_assembly_across_processes() {
+    let mut source = String::from("<?php\n");
+    for index in 0..10 {
+        source.push_str(&format!(
+            "class Widget{index} {{\n    public function __construct(int $size = {index}, string $tag = \"w{index}\") {{\n        \
+             $this->size = $size; $this->tag = $tag;\n    }}\n    public int $size;\n    public string $tag;\n}}\n"
+        ));
+    }
+    source.push_str("$total = 0;\n");
+    for index in 0..10 {
+        source.push_str(&format!(
+            "$name{index} = 'Widget{index}'; $w{index} = new $name{index}(); $total = $total + $w{index}->size;\n"
+        ));
+    }
+    source.push_str("echo $total;\n");
+    let outputs = emit_asm_repeatedly("dynamic-new-thunks", &source, 3);
+    assert_all_identical("dynamic-new-thunks", &outputs);
+}

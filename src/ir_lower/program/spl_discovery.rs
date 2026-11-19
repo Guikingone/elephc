@@ -426,11 +426,21 @@ pub(super) fn lower_dynamic_constructor_thunks(
     // The MODULE's ClassInfo, not the checker's: codegen forms the thunk symbol from
     // `module.class_infos[..].class_id`, and looking the class up anywhere else risks naming a
     // symbol nothing will call.
-    let classes = module
+    //
+    // Sorted by class id: `class_infos` is a hash map, and a walk in its iteration order would add
+    // the thunks to `module.functions` in an order that changes with the per-process hasher seed,
+    // which reorders the emitted assembly of two runs of the same source.
+    let mut classes = module
         .class_infos
         .iter()
         .map(|(name, info)| (name.clone(), info.clone()))
         .collect::<Vec<_>>();
+    classes.sort_by(|left, right| {
+        left.1
+            .class_id
+            .cmp(&right.1.class_id)
+            .then_with(|| left.0.cmp(&right.0))
+    });
     for (class_name, class_info) in classes {
         if !is_dynamic_new_mixed_metadata_candidate(&class_name) {
             continue;
