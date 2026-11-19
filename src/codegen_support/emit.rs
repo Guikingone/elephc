@@ -16,6 +16,12 @@ use super::platform::{Arch, Platform, Target};
 /// Assembly emitter.
 pub struct Emitter {
     buf: String,
+    /// Byte ranges of the assembly emitted for the opaque-eval catalog functions.
+    ///
+    /// A program whose `eval()` source is only known at run time lowers the whole builtin
+    /// catalog; the ranges let the pipeline move those functions into their own assembly unit
+    /// without re-parsing the text. Recorded by the emission loop, consumed by the split.
+    pub catalog_spans: Vec<std::ops::Range<usize>>,
     pub target: Target,
     pub platform: Platform,
     /// When `true`, the `emit_*_symbol_*` helpers in `codegen::abi::symbols`
@@ -73,6 +79,7 @@ impl Emitter {
     pub fn new(target: Target) -> Self {
         Self {
             buf: String::with_capacity(4096),
+            catalog_spans: Vec::new(),
             target,
             platform: target.platform,
             pic_data_refs: false,
@@ -111,6 +118,16 @@ impl Emitter {
         let mut emitter = Self::new(target);
         emitter.cdylib_boundary = true;
         emitter
+    }
+
+    /// Returns the current length of the assembly buffer, for span recording.
+    pub fn asm_len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Records the assembly emitted for one catalog function, from `start` to now.
+    pub fn record_catalog_function(&mut self, start: usize) {
+        self.catalog_spans.push(start..self.buf.len());
     }
 
     /// Emits a single assembly instruction with standard indentation.
@@ -690,5 +707,18 @@ mod tests {
         let mut darwin = Emitter::new(Target::new(Platform::MacOS, Arch::X86_64));
         darwin.sysv_callee_saved_entry("__elephc_web_handler_rust_entry", "__elephc_web_handler");
         assert!(darwin.output().contains("__elephc_web_handler_rust_entry:\n    push rbx\n"));
+    }
+
+    /// The catalog spans record one range per synthetic function, inside the emitted text.
+    #[test]
+    fn catalog_spans_record_one_range_each() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        let start = emitter.asm_len();
+        emitter.instruction("nop");
+        emitter.record_catalog_function(start);
+        assert_eq!(emitter.catalog_spans.len(), 1);
+        assert_eq!(emitter.catalog_spans[0].start, start);
+        assert_eq!(emitter.catalog_spans[0].end, emitter.asm_len());
+        assert!(emitter.catalog_spans[0].start < emitter.catalog_spans[0].end);
     }
 }

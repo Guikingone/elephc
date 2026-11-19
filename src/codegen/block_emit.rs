@@ -249,21 +249,33 @@ pub(super) fn emit_module(
         .iter()
         .filter(|function| !is_main(function))
     {
+        let start = emitter.asm_len();
         if let Some(survivor) = body_aliases.get(&function.name) {
             emit_folded_body(function, survivor, emitter)?;
-            continue;
+        } else {
+            emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
         }
-        emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
+        if is_catalog_function(function) {
+            emitter.record_catalog_function(start);
+        }
     }
     for method in &module.class_methods {
+        let start = emitter.asm_len();
         if let Some(survivor) = body_aliases.get(&method.name) {
             emit_folded_body(method, survivor, emitter)?;
-            continue;
+        } else {
+            emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
         }
-        emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
+        if is_catalog_function(method) {
+            emitter.record_catalog_function(start);
+        }
     }
     for closure in &module.closures {
+        let start = emitter.asm_len();
         emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
+        if is_catalog_function(closure) {
+            emitter.record_catalog_function(start);
+        }
     }
     emit_eir_fiber_wrappers(module, emitter);
     // Enum case materializers are plain out-of-line functions that any user body,
@@ -2096,4 +2108,12 @@ mod exit_hook_tests {
             assert!(asm.contains(CHAINED_EXIT_HOOKS), "{asm}");
         }
     }
+}
+
+/// Returns whether this function is part of the opaque-eval builtin catalog.
+///
+/// The catalog is synthetic and has no source declaration, which distinguishes it from the
+/// program's own functions and closures.
+fn is_catalog_function(function: &crate::ir::Function) -> bool {
+    function.flags.is_synthetic && function.source_name.is_none()
 }
