@@ -161,3 +161,18 @@ branch: perf/eval-catalog-cache
 - Still NOT cached: lowering and the EIR optimizer for catalog functions (~24.7 s and ~67.7 s of
   the 208 s baseline). Skipping the optimizer needs the inliner to stop inlining catalog bodies
   into program functions first, which is a design change, not a flag.
+
+## The first a3sl reuse broke the opaque link (7f885cc00d)
+- Symptom: on a reuse build the binary was never produced and `ld` reported `_static_*` symbols
+  undefined, referenced from both units.
+- Cause: the module-level eval helper block (`emit_eval_property_helpers`, static-property helpers,
+  inventory, callable support, ...) is emitted in `finalize_user_asm` and lands INSIDE the catalog
+  unit. Skipping the catalog functions therefore left the unit with only the helper block, and the
+  helper block's own definitions moved, so symbols the program unit names went missing.
+- Fix: the cache stores the function bodies only. The helper block is rebuilt on every build (it
+  reads module state the key does not cover: slots, class usage), then joined with the cached
+  bodies and split using the recorded per-function boundaries.
+- Known limitation: after a reuse the split can differ from the one that filled the object cache
+  (3 units on the miss, 4 on the reuse in the token fixture), so the catalog is assembled again on
+  a reuse. The emission win stands; making the two splits agree needs the emission to record the
+  exact span boundaries it would produce, which is the next refinement.
