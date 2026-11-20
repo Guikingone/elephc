@@ -35,16 +35,26 @@ struct CatalogEmission {
     moved_functions: usize,
     /// Symbols that still bind the units to the program, for the timing note.
     program_dependent_symbols: Vec<String>,
-    /// Catalog unit texts, in emission order, before the visibility pass.
-    units: Vec<String>,
+    /// Text of the catalog function bodies, before the visibility pass.
+    ///
+    /// The module-level eval helper block is emitted on every build and is not part of this
+    /// text: it reads module state that the cache key does not cover.
+    functions_text: String,
+    /// Byte length of each function body inside `functions_text`, in emission order.
+    ///
+    /// Keeping the boundaries lets a reuse split the text exactly as the emission that filled the
+    /// cache did, so the assembled objects stay cacheable too.
+    function_lengths: Vec<usize>,
 }
 
 /// A catalog emission recovered from the cache.
 pub(crate) struct ReusedCatalog {
     /// Functions to skip during emission.
     pub(crate) functions: HashSet<String>,
-    /// Unit texts to assemble instead of emitting them.
-    pub(crate) units: Vec<String>,
+    /// Text of the catalog function bodies to assemble instead of emitting them.
+    pub(crate) functions_text: String,
+    /// Byte length of each function body inside [`Self::functions_text`].
+    pub(crate) function_lengths: Vec<usize>,
     /// Number of function spans the units hold.
     pub(crate) moved_functions: usize,
     /// Symbols that still bind the units to the program.
@@ -114,7 +124,8 @@ pub(crate) fn load(module: &Module) -> Option<ReusedCatalog> {
     let functions: HashSet<String> = entry.functions.into_iter().collect();
     Some(ReusedCatalog {
         functions,
-        units: entry.units,
+        functions_text: entry.functions_text,
+        function_lengths: entry.function_lengths,
         moved_functions: entry.moved_functions,
         program_dependent_symbols: entry.program_dependent_symbols,
     })
@@ -123,11 +134,12 @@ pub(crate) fn load(module: &Module) -> Option<ReusedCatalog> {
 /// Stores the catalog emission of `module` so the next build can skip emitting it.
 pub(crate) fn store(
     module: &Module,
-    units: &[String],
+    functions_text: &str,
+    function_lengths: &[usize],
     moved_functions: usize,
     program_dependent_symbols: &[String],
 ) {
-    if units.is_empty() {
+    if functions_text.is_empty() {
         return;
     }
     let entry = CatalogEmission {
@@ -137,7 +149,8 @@ pub(crate) fn store(
             .collect(),
         moved_functions,
         program_dependent_symbols: program_dependent_symbols.to_vec(),
-        units: units.to_vec(),
+        functions_text: functions_text.to_string(),
+        function_lengths: function_lengths.to_vec(),
     };
     let Ok(bytes) = serde_json::to_vec(&entry) else {
         return;

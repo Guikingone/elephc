@@ -454,6 +454,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         shared,
         regalloc_linear,
         reused_catalog,
+        !skipped_catalog.is_empty(),
     )
 }
 
@@ -468,8 +469,12 @@ fn finalize_user_asm(
     mut shared: shared_state::SharedCodegenState,
     regalloc_linear: bool,
     reused_catalog: Option<catalog_reuse::ReusedCatalog>,
+    reuse_active: bool,
 ) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
+    // Spans recorded so far come from the emission loops; the eval helper block recorded below is
+    // module state, re-emitted every build, and must not be stored with the function bodies.
+    let function_span_count = emitter.catalog_spans.len();
     mbstring_configuration::emit(module, &mut emitter, &mut data);
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
@@ -655,30 +660,79 @@ fn finalize_user_asm(
     // and `--emit asm` and source maps are read as one file by people and tools. The split runs
     // after the data section is appended so a catalog symbol reached from a vtable is promoted
     // like any other cross-object reference.
+    // The catalog function bodies are the spans the emission loops produced; the helper block
+    // finalize emits afterwards is always rebuilt, because it reads module state the cache key
+    // does not cover.
+    let helper_start = catalog_spans
+        .get(function_span_count)
+        .map(|span| span.start)
+        .unwrap_or(user_asm.len())
+        .min(user_asm.len());
+    let emitted_functions = || -> String {
+        let mut text = String::new();
+        for span in catalog_spans.iter().take(function_span_count) {
+            if span.end <= user_asm.len() {
+                text.push_str(&user_asm[span.start..span.end]);
+            }
+        }
+        text
+    };
+
     let (user_asm, catalog_asms, moved_catalog_functions, catalog_program_dependent_symbols) =
-        if emit == Emit::Executable && !catalog_spans.is_empty() {
-            // Either no entry existed, or verification mode forced this emission.
+        if emit == Emit::Executable && reuse_active {
+            // The function bodies come from the cache; the helper block was just emitted. Joining
+            // them rebuilds the catalog text a full emission would have produced.
+            let reused = reused_catalog.expect("reuse_active implies an entry");
+            let mut combined = reused.functions_text.clone();
+            let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+            let mut cursor = 0usize;
+            for length in &reused.function_lengths {
+                spans.push(cursor..cursor + length);
+                cursor += length;
+            }
+            spans.push(cursor..cursor + (user_asm.len() - helper_start));
+            combined.push_str(&user_asm[helper_start..]);
+            let split = crate::codegen_support::catalog_unit::split_catalog_units(
+                &combined,
+                &spans,
+                CATALOG_UNITS,
+            );
+            (
+                user_asm,
+                split.catalogs,
+                reused.moved_functions,
+                reused.program_dependent_symbols,
+            )
+        } else if emit == Emit::Executable && !catalog_spans.is_empty() {
             let split = crate::codegen_support::catalog_unit::split_catalog_units(
                 &user_asm,
                 &catalog_spans,
                 CATALOG_UNITS,
             );
             match &reused_catalog {
-                // Verification mode: the entry should describe exactly what we just emitted.
-                Some(reused) if reused.units != split.catalogs => {
+                // Verification mode forced this emission: compare with the stored bodies.
+                Some(reused) if reused.functions_text != emitted_functions() => {
                     eprintln!(
-                        "warning: cached catalog units differ from the emitted ones ({} vs {} bytes); the cache key misses an input",
-                        reused.units.iter().map(String::len).sum::<usize>(),
-                        split.catalogs.iter().map(String::len).sum::<usize>()
+                        "warning: cached catalog bodies differ from the emitted ones ({} vs {} bytes); the cache key misses an input",
+                        reused.functions_text.len(),
+                        emitted_functions().len()
                     );
                 }
                 Some(_) => {}
-                None => catalog_reuse::store(
-                    module,
-                    &split.catalogs,
-                    split.moved_functions,
-                    &split.program_dependent_symbols,
-                ),
+                None => {
+                    let lengths: Vec<usize> = catalog_spans
+                        .iter()
+                        .take(function_span_count)
+                        .map(|span| span.end - span.start)
+                        .collect();
+                    catalog_reuse::store(
+                        module,
+                        &emitted_functions(),
+                        &lengths,
+                        split.moved_functions,
+                        &split.program_dependent_symbols,
+                    );
+                }
             }
             (
                 split.program,
@@ -686,16 +740,10 @@ fn finalize_user_asm(
                 split.moved_functions,
                 split.program_dependent_symbols,
             )
-        } else if let Some(reused) = reused_catalog {
-            (
-                user_asm,
-                reused.units,
-                reused.moved_functions,
-                reused.program_dependent_symbols,
-            )
         } else {
             (user_asm, Vec::new(), 0, Vec::new())
         };
+
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))
