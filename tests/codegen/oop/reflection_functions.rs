@@ -508,6 +508,27 @@ foreach ($set->getAttributes() as $attribute) { echo $attribute->getName(), '|';
     assert_eq!(out, "Marker|Setter|");
 }
 
+/// Verifies `final` on a property hook surfaces through hook ReflectionMethod metadata.
+#[test]
+fn test_property_hook_reflection_keeps_final_flag() {
+    let out = compile_and_run(
+        r#"<?php
+class Hooked {
+    public int $value = 0 {
+        final get => $this->value;
+        final set => $value;
+    }
+}
+$get = (new ReflectionProperty('Hooked', 'value'))->getHook(PropertyHookType::Get);
+$set = (new ReflectionProperty('Hooked', 'value'))->getHook(PropertyHookType::Set);
+echo $get->isFinal() ? 'y' : 'n';
+echo $set->isFinal() ? 'y' : 'n';
+"#,
+    );
+
+    assert_eq!(out, "yy");
+}
+
 /// Verifies a Reflection object codegen builds INSIDE another one can be stringified.
 ///
 /// `ReflectionParameter::getDeclaringFunction()` hands back a `ReflectionFunction` that codegen
