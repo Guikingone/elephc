@@ -192,3 +192,27 @@ fn modulo_and_shift_ranges_are_used() {
     assert_proven(src, 3, ArithKind::Mul);
     assert_proven(src, 3, ArithKind::Add);
 }
+
+#[test]
+fn lockstep_counter_inherits_its_twin_bound() {
+    let src = "<?php\n$n = $argc & 255; $j = 0;\nfor ($i = 0; $i < $n; $i++, $j++) {\n  echo $j;\n}\n";
+    assert_proven(src, 3, ArithKind::Inc);
+}
+
+#[test]
+fn lockstep_counter_written_in_body_stays_checked() {
+    let src = "<?php\n$n = $argc & 255; $j = 0;\nfor ($i = 0; $i < $n; $i++, $j++) {\n  $j = $j * 2;\n}\n";
+    assert_not_proven(src, 3, ArithKind::Inc);
+}
+
+#[test]
+fn lockstep_counters_with_different_starts_stay_checked() {
+    let src = "<?php\n$n = $argc & 255; $j = 1;\nfor ($i = 0; $i < $n; $i++, $j++) {\n  echo $j;\n}\n";
+    assert_not_proven(src, 3, ArithKind::Inc);
+}
+
+#[test]
+fn lockstep_counter_bound_by_reference_stays_checked() {
+    let src = "<?php\n$n = $argc & 255; $j = 0; $r = &$j;\nfor ($i = 0; $i < $n; $i++, $j++) {\n  $r = PHP_INT_MAX;\n}\n";
+    assert_not_proven(src, 3, ArithKind::Inc);
+}

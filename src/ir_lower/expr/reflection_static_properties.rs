@@ -391,6 +391,17 @@ pub(super) fn store_static_property_by_class_name_with_op(
     if crate::ir_lower::property_default_errors::for_class(ctx, class_name, span).is_some() {
         return;
     }
+    // A range-proven int reaching a declared float, bool or string slot converts like any
+    // weak-mode property store (`coerce_typed_assign_value`) instead of storing raw int bits.
+    let value = match reflection_class_static_property_target(ctx, class_name, property) {
+        Some((_, ty)) if matches!(ty.codegen_repr(), PhpType::Float | PhpType::Bool | PhpType::Str)
+            && matches!(ctx.builder.value_php_type(value).codegen_repr(), PhpType::Int | PhpType::Float) =>
+        {
+            let source = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+            crate::ir_lower::stmt::coerce_typed_assign_value(ctx, source, &ty, span).value
+        }
+        _ => value,
+    };
     let (value, argument_pins) = if reflection_class_static_property_target(ctx, class_name, property)
         .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
     {

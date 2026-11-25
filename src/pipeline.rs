@@ -1006,7 +1006,12 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     // lowering keep them as native ints instead of the boxed "int or float" form. PHP semantics
     // are unchanged: only sites whose every integer execution stays in range are proven.
     let phase_started = Instant::now();
-    let overflow_facts = crate::int_range::analyze_program(&ast, web);
+    // `--no-ir-opt` keeps every site on the checked form, like the EIR integer-range pass.
+    let overflow_facts = if ir_opt {
+        crate::int_range::analyze_program(&ast, web)
+    } else {
+        crate::int_range::OverflowFacts::default()
+    };
     crate::int_range::install(overflow_facts.clone());
     timings.record_since("int-range", phase_started);
 
@@ -1173,7 +1178,11 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     // Lowering only trusts sites proven both before type checking and on the final AST, so a
     // post-check rewrite can never extend a proof to a context that was not analyzed.
     let phase_started = Instant::now();
-    let final_overflow_facts = crate::int_range::analyze_program(&ast, web);
+    let final_overflow_facts = if ir_opt {
+        crate::int_range::analyze_program(&ast, web)
+    } else {
+        crate::int_range::OverflowFacts::default()
+    };
     crate::int_range::install(overflow_facts.intersect(&final_overflow_facts));
     timings.record_since("int-range", phase_started);
 

@@ -51,7 +51,7 @@ fn test_cse_distinct_subexpressions_preserved() {
 /// Structural proof that CSE actually deduplicates `($n + 1) * ($n + 1)` (the
 /// previous output-only tests passed even when it did not fire): the constant `1`
 /// operands are unified by value, so `main` contains exactly one `iadd` with ir-opt
-/// on (two without). `$n = $argc` is bounded (argv holds at most `i32::MAX` entries),
+/// on (two checked adds without, since `--no-ir-opt` skips the range proof). `$n = $argc` is bounded (argv holds at most `i32::MAX` entries),
 /// so `crate::int_range` proves `$n + 1` overflow-free and it lowers to a pure `iadd`.
 /// An unbounded operand keeps the checked, allocating `ichecked_add`, which CSE must not
 /// collapse. Guards the constant-operand canonicalization against regression.
@@ -90,7 +90,7 @@ fn test_cse_collapses_constant_operand_subexpression() {
 
     // Proven overflow-free: pure `iadd`, collapsed by CSE.
     let bounded = "<?php $n = $argc; echo ($n + 1) * ($n + 1);\n";
-    assert_eq!(count_adds(bounded, "bounded.php", &["--no-ir-opt"]), (2, 0), "unoptimized keeps both adds");
+    assert_eq!(count_adds(bounded, "bounded.php", &["--no-ir-opt"]), (0, 2), "unoptimized keeps both checked adds");
     assert_eq!(count_adds(bounded, "bounded.php", &[]), (1, 0), "CSE collapses the proven pure add");
 
     // Unbounded operand: `ichecked_add` allocates a Mixed box (not pure), so CSE keeps both.

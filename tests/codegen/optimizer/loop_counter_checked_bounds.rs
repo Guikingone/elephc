@@ -279,7 +279,7 @@ echo compoundCount($argc + 7), "\n";
     );
     assert!(op_lines(body, "str_inc_dec").is_empty(), "no string-aware update:\n{body}");
     assert!(!op_lines(body, "icmp").is_empty(), "loop test is a raw integer compare:\n{body}");
-    assert!(body.contains("origin: integer_range"), "update is range-proven:\n{body}");
+    assert!(!body.contains("= ichecked_"), "update is range-proven:\n{body}");
     for optimized in [false, true] {
         assert_eq!(run(source, optimized, true), "8\n");
     }

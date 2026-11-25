@@ -9,7 +9,8 @@
 //!   with a float accumulator, a unit induction, and a constant integer addend.
 //! - The body must be exactly the boxed checked-add, sqrt call, release, float add and
 //!   unit latch scaffold plus nops/concat resets; any other instruction or observation
-//!   rejects the rewrite.
+//!   rejects the rewrite. A body whose addend `crate::int_range` already proved is matched
+//!   in its plain `iadd`/`i_to_f` form (`proven_body_plan`).
 //! - `__rt_sqrt_sum_range` adds every square root in source order, so PHP's exact float
 //!   result and its checked-add overflow promotion are preserved. The induction value must
 //!   not be observed after the loop; accumulator uses after the loop are replaced by the
@@ -169,7 +170,8 @@ fn reduction_plan(
     if !dominance.dominates(preheader, *else_target) {
         return None;
     }
-    let body_plan = body_plan(function, body, loop_ref, accumulator, counter)?;
+    let body_plan = body_plan(function, body, loop_ref, accumulator, counter)
+        .or_else(|| proven_body_plan(function, body, loop_ref, accumulator, counter))?;
     if !induction_has_no_external_uses(function, loop_ref, counter) {
         return None;
     }
@@ -354,6 +356,146 @@ fn body_plan(
     Some(BodyPlan {
         addend: Some(addend),
     })
+}
+
+/// Recovers the body when `crate::int_range` already proved `$i + c` overflow-free.
+///
+/// The front-end proof lowers the addend to a plain `iadd` converted with `i_to_f`, and CSE
+/// may share that `iadd` with the `$i++` latch when `c` is `1`. The body is then exactly:
+/// `a = iadd counter, c`, `f = i_to_f a`, `r = sqrt f`, `acc' = fadd acc, r`, plus the unit
+/// latch (`a` itself or its own `iadd counter, 1`). Every value must be used only by that
+/// scaffold, so no observation of the loop is lost.
+fn proven_body_plan(
+    function: &Function,
+    body: BlockId,
+    loop_ref: &NaturalLoop,
+    accumulator: ValueId,
+    counter: ValueId,
+) -> Option<BodyPlan> {
+    let block = function.block(body)?;
+    let mut adds = Vec::new();
+    let mut to_float = None;
+    let mut sqrt_call = None;
+    let mut float_add = None;
+    for &id in &block.instructions {
+        let inst = function.instruction(id)?;
+        match inst.op {
+            Op::Nop | Op::ConcatReset => {}
+            Op::IAdd if inst.result.is_some() && adds.len() < 2 => adds.push(id),
+            Op::IToF if to_float.is_none() && inst.result.is_some() => to_float = Some(id),
+            Op::RuntimeCall
+                if sqrt_call.is_none()
+                    && inst.result.is_some()
+                    && matches!(
+                        inst.immediate,
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Sqrt)))
+                    ) =>
+            {
+                sqrt_call = Some(id)
+            }
+            Op::FAdd if float_add.is_none() && inst.result.is_some() => float_add = Some(id),
+            _ => return None,
+        }
+    }
+    let (to_float, sqrt_call, float_add) = (to_float?, sqrt_call?, float_add?);
+    let counter_operand = |id: InstId| -> Option<(ValueId, ValueId)> {
+        let inst = function.instruction(id)?;
+        if inst.operands.len() != 2 || !matches!(inst.immediate, None | Some(Immediate::Bool(false))) {
+            return None;
+        }
+        let other = if inst.operands[0] == counter {
+            inst.operands[1]
+        } else if inst.operands[1] == counter {
+            inst.operands[0]
+        } else {
+            return None;
+        };
+        Some((inst.result?, other))
+    };
+    let conversion = function.instruction(to_float)?;
+    let [sqrt_input] = conversion.operands.as_slice() else { return None };
+    let sum_add = *adds.iter().find(|&&id| function.instruction(id).and_then(|i| i.result) == Some(*sqrt_input))?;
+    let (sum_value, addend) = counter_operand(sum_add)?;
+    constant_i64(function, addend)?;
+    let latch_add = match adds.as_slice() {
+        [only] if *only == sum_add => sum_add,
+        [first, second] => if *first == sum_add { *second } else { *first },
+        _ => return None,
+    };
+    let (latch_value, one) = counter_operand(latch_add)?;
+    if constant_i64(function, one) != Some(1) {
+        return None;
+    }
+    let float_value = conversion.result?;
+    let sqrt = function.instruction(sqrt_call)?;
+    if sqrt.operands.as_slice() != [float_value] {
+        return None;
+    }
+    let sqrt_result = sqrt.result?;
+    let fadd = function.instruction(float_add)?;
+    if fadd.operands.len() != 2
+        || !(fadd.operands.contains(&accumulator) && fadd.operands.contains(&sqrt_result))
+    {
+        return None;
+    }
+    let float_add_result = fadd.result?;
+    let Some(Terminator::Br { target, args }) = block.terminator.as_ref() else {
+        return None;
+    };
+    if *target != loop_ref.header {
+        return None;
+    }
+    let header = function.block(loop_ref.header)?;
+    let accumulator_position = header.params.iter().position(|&param| param == accumulator)?;
+    let counter_position = header.params.iter().position(|&param| param == counter)?;
+    if *args.get(accumulator_position)? != float_add_result || *args.get(counter_position)? != latch_value {
+        return None;
+    }
+    if !single_use(function, float_value, sqrt_call)
+        || !single_use(function, sqrt_result, float_add)
+        || !single_terminator_use(function, float_add_result, body)
+    {
+        return None;
+    }
+    if latch_add == sum_add {
+        if !value_uses_are(function, sum_value, &[to_float], Some(body)) {
+            return None;
+        }
+    } else if !value_uses_are(function, sum_value, &[to_float], None)
+        || !single_terminator_use(function, latch_value, body)
+    {
+        return None;
+    }
+    Some(BodyPlan { addend: Some(addend) })
+}
+
+/// Returns true when `value` is used exactly by `instructions` (once each) and, when
+/// `terminator_block` is given, once by that block's terminator and no other.
+fn value_uses_are(
+    function: &Function,
+    value: ValueId,
+    instructions: &[InstId],
+    terminator_block: Option<BlockId>,
+) -> bool {
+    let mut seen = 0;
+    for (raw, inst) in function.instructions.iter().enumerate() {
+        if inst.operands.contains(&value) {
+            if !instructions.contains(&InstId::from_raw(raw as u32)) {
+                return false;
+            }
+            seen += 1;
+        }
+    }
+    let mut terminator_uses = 0;
+    for candidate in &function.blocks {
+        if candidate.terminator.as_ref().is_some_and(|term| term.used_values().contains(&value)) {
+            if Some(candidate.id) != terminator_block {
+                return false;
+            }
+            terminator_uses += 1;
+        }
+    }
+    seen == instructions.len() && terminator_uses == usize::from(terminator_block.is_some())
 }
 
 /// Returns true when the checked-add result is used only by the sqrt call and its release.

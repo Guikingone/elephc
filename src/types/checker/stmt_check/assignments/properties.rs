@@ -552,7 +552,8 @@ fn check_object_property_write(
         // Its uninitialized branch still enforces that type at the runtime property store.
         let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed)
             || crate::types::object_boundary::runtime_object_boundary(&expected_ty, val_ty).is_some()
-            || readonly_write_guard;
+            || readonly_write_guard
+            || Checker::weakly_coerces_scalar_to_string(&expected_ty, val_ty);
         if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             checker.require_compatible_arg_type(
                 &expected_ty,

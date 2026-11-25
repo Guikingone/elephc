@@ -212,8 +212,10 @@ function observed(array $src): void {
     $after = memory_get_allocations();
     echo $sum, " observed=", $after - $before < count($src) ? "fixed" : "per-entry", "\n";
 }
+// A Mixed key base keeps the hash on boxed storage, whose key cells the loop can reuse.
 $map = [];
-for ($i = 0; $i < 6; $i++) { $map[$i * 3 + $argc] = "v" . $i; }
+$base = json_decode((string)$argc);
+for ($i = 0; $i < 6; $i++) { $map[$i * 3 + $base] = "v" . $i; }
 retained($map);
 observed($map);
 "#;

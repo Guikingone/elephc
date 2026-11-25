@@ -135,7 +135,8 @@ fn test_integer_range_rewrites_bounded_example() {
     assert!(body.contains("br bb1("), "body returns directly to the header: {optimized}");
     assert!(update.trim().starts_with("unreachable"), "{optimized}");
     assert!(!update.contains("= ichecked_add_to_int "), "{optimized}");
-    assert!(optimized.contains("origin: integer_range"), "{optimized}");
+    // The front-end range proof lowers these sites unchecked, so no `ichecked_*` survives.
+    assert!(!optimized.contains("= ichecked_"), "{optimized}");
 
     let plain_run = run_variant(source, false);
     let optimized_run = run_variant(source, true);
@@ -152,7 +153,6 @@ fn test_integer_range_narrows_boxed_checked_output() {
     assert!(plain.contains("= ichecked_add "), "{plain}");
     assert!(!optimized.contains("= ichecked_add "), "{optimized}");
     assert!(optimized.contains("= iadd "), "{optimized}");
-    assert!(optimized.contains("origin: integer_range"), "{optimized}");
     assert_eq!(run_variant(source, false), run_variant(source, true));
 }
 
@@ -467,9 +467,10 @@ function boxed_spaceship_probe(int $input): int {
                 let compare = if target == "linux-x86_64" { "cmp r10, rax" } else { "cmp x10, x0" };
                 assert!(assembly.contains(compare), "{target}");
             }
-            assert!(assembly.contains("op=php_rel_cmp"), "{target}");
+            // Proven operands compare natively; `< true` then orders truth values.
+            assert_eq!(assembly.contains("op=php_rel_cmp"), !optimized, "{target}");
             assert!(assembly.contains("op=spaceship"), "{target}");
-            assert!(assembly.contains("op=ichecked_add"), "{target}");
+            assert_eq!(assembly.contains("op=ichecked_add"), !optimized, "{target}");
         }
     }
 }
@@ -525,8 +526,9 @@ function boxed_consumer_probe(int $input): void {
     ] {
         for optimized in [false, true] {
             let assembly = target_assembly(source, target, optimized);
-            assert!(assembly.contains("op=ichecked_add"), "{target}, optimized={optimized}");
-            assert!(assembly.contains("op=cast"), "{target}, optimized={optimized}");
+            // Optimized code proves the sums and converts the raw int at the store instead.
+            assert_eq!(assembly.contains("op=ichecked_add"), !optimized, "{target}, optimized={optimized}");
+            assert_eq!(assembly.contains("op=cast"), !optimized, "{target}, optimized={optimized}");
             assert!(assembly.contains("op=store_static_property"), "{target}, optimized={optimized}");
         }
     }

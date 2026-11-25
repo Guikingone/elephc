@@ -147,6 +147,22 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
     if source_ty == target_ty {
         return value;
     }
+    // Weak-mode typing converts an int or float stored into a `string` slot to its decimal
+    // text, exactly as `(string)` does (`Checker::weakly_coerces_scalar_to_string`).
+    if target_ty == PhpType::Str && matches!(source_ty, PhpType::Int | PhpType::Float) {
+        return crate::ir_lower::expr::coerce_to_string_at_span(ctx, value, Some(span));
+    }
+    // A `bool` slot keeps the truthiness of an int or float (`$flag = 3` stores `true`).
+    if target_ty == PhpType::Bool && matches!(source_ty, PhpType::Int | PhpType::Float) {
+        return ctx.emit_value(
+            Op::IsTruthy,
+            vec![value.value],
+            None,
+            PhpType::Bool,
+            Op::IsTruthy.default_effects(),
+            Some(span),
+        );
+    }
     let container_value = coerce_container_to_mixed_payload(
         ctx,
         value,

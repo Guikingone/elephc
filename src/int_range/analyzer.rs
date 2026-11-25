@@ -136,6 +136,79 @@ impl<'a> Analyzer<'a> {
         self.all_pinned = saved;
     }
 
+    // ----- lock-step counters ---------------------------------------------------------------
+
+    /// Groups `for` counters that always hold the same value at the loop head: every member is
+    /// stepped once in the same direction by the update clause (`$i++, $j++`), written nowhere
+    /// else in the loop, not pinned, and holds the same constant on entry. Their header ranges
+    /// can then be intersected, so a counter that is never tested (`$j`) inherits the bound
+    /// proven for its twin.
+    fn lockstep_groups(
+        &self,
+        update: &Stmt,
+        condition: Option<&Expr>,
+        body: &[Stmt],
+        entry: &State,
+    ) -> Vec<Vec<String>> {
+        let pieces: Vec<&Stmt> = match &update.kind {
+            StmtKind::Synthetic(stmts) => stmts.iter().collect(),
+            _ => return Vec::new(),
+        };
+        let mut steps: Vec<(String, bool)> = Vec::new();
+        for piece in pieces {
+            let StmtKind::ExprStmt(expr) = &piece.kind else { return Vec::new() };
+            match &expr.kind {
+                ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name) => steps.push((name.clone(), true)),
+                ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => steps.push((name.clone(), false)),
+                _ => return Vec::new(),
+            }
+        }
+        let mut elsewhere = HashSet::new();
+        collect_writes_stmts(body, &mut elsewhere);
+        if let Some(condition) = condition {
+            collect_writes_expr(condition, &mut elsewhere);
+        }
+        let mut groups: Vec<(bool, i64, Vec<String>)> = Vec::new();
+        for (name, increments) in &steps {
+            if steps.iter().filter(|(other, _)| other == name).count() != 1
+                || elsewhere.contains(name)
+                || self.is_pinned(name)
+            {
+                continue;
+            }
+            let AbsVal::Int(lo, hi) = self.read(entry, name) else { continue };
+            if lo != hi {
+                continue;
+            }
+            match groups.iter_mut().find(|(dir, start, _)| dir == increments && *start == lo) {
+                Some((_, _, members)) => members.push(name.clone()),
+                None => groups.push((*increments, lo, vec![name.clone()])),
+            }
+        }
+        groups.into_iter().filter(|(_, _, members)| members.len() > 1).map(|(_, _, members)| members).collect()
+    }
+
+    /// Narrows every lock-step group to the intersection of its members' header ranges.
+    fn clamp_lockstep(&self, mut head: State, groups: &[Vec<String>]) -> State {
+        for members in groups {
+            let mut lo = MIN;
+            let mut hi = MAX;
+            for name in members {
+                if let AbsVal::Int(member_lo, member_hi) = self.read(&head, name) {
+                    lo = lo.max(member_lo);
+                    hi = hi.min(member_hi);
+                }
+            }
+            if lo > hi {
+                continue;
+            }
+            for name in members {
+                self.write(&mut head, name, AbsVal::Int(lo, hi));
+            }
+        }
+        head
+    }
+
     // ----- variables -----------------------------------------------------------------------
 
     /// Returns `true` when a variable may change behind the analysis' back.
@@ -265,7 +338,12 @@ impl<'a> Analyzer<'a> {
                 if let Some(init) = init {
                     state = self.stmt(init, state);
                 }
+                let lockstep = update
+                    .as_deref()
+                    .map(|update| self.lockstep_groups(update, condition.as_ref(), body, &state))
+                    .unwrap_or_default();
                 self.run_loop(state, false, &mut |a, head| {
+                    let head = a.clamp_lockstep(head, &lockstep);
                     let (inside, outside) = match condition {
                         Some(condition) => a.cond(condition, head),
                         None => (head, None),
@@ -907,7 +985,7 @@ impl<'a> Analyzer<'a> {
                             },
                             _ => None,
                         };
-                        self.record(state, expr, kind, result.is_some());
+                        self.record(state, expr, kind, result.is_some_and(stays_off_null_sentinel));
                         result.unwrap_or(AbsVal::Top)
                     }
                     BinOp::Mod => ops::rem(l, r),
@@ -932,7 +1010,7 @@ impl<'a> Analyzer<'a> {
             },
             None => None,
         };
-        self.record(state, expr, kind, new.is_some());
+        self.record(state, expr, kind, new.is_some_and(stays_off_null_sentinel));
         let new = new.unwrap_or(AbsVal::Top);
         self.write(state, name, new);
         if post { old } else { new }
@@ -1113,4 +1191,13 @@ fn apply_cmp(
         state = narrow(state, name, right_bounds.0, right_bounds.1);
     }
     state
+}
+
+/// Returns whether a proven result can be stored as a raw integer under the active null
+/// representation. Legacy `--null-repr=sentinel` marks null in-band with `PHP_INT_MAX - 1`,
+/// so a result that may equal it keeps the checked (boxed) form that tells the two apart.
+fn stays_off_null_sentinel(value: AbsVal) -> bool {
+    use crate::codegen_support::sentinels::{null_repr_is_tagged, NULL_SENTINEL};
+    null_repr_is_tagged()
+        || value.bounds().is_some_and(|(lo, hi)| !(lo <= NULL_SENTINEL && NULL_SENTINEL <= hi))
 }

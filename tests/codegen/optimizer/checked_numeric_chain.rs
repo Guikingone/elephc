@@ -89,10 +89,11 @@ fn compile_and_run_variant(source: &str, extra_args: &[&str]) -> (String, String
 
 /// Replaces the benchmark's boxed multiply/add region with one fused scalar EIR instruction.
 /// An explicit integer bound and strict comparison make the counter's raw representation provable.
+/// `intval()` hides the seed's range so the accumulator keeps its checked overflow form.
 #[test]
 fn test_checked_numeric_chain_fuses_benchmark_shape() {
     let source = r#"<?php
-$h = $argc;
+$h = intval("$argc");
 $n = (int)($argc + 4);
 for ($i = 1; $i < $n; $i++) {
     $h = ($h * 31 + $i) & 0x3fffffff;
@@ -112,7 +113,7 @@ echo $h;
 /// Checks signed-overflow guards and float suffixes via Linux x86_64 and AArch64 targets.
 #[test]
 fn test_checked_numeric_chain_has_target_aware_fast_and_slow_paths() {
-    let source = "<?php $h = $argc; echo ($h * 31 + $argc) & 0x3fffffff;";
+    let source = "<?php $h = intval(\"$argc\"); echo ($h * 31 + $argc) & 0x3fffffff;";
     let x86 = emit_target_assembly(source, "linux-x86_64");
     assert!(x86.contains("op=ichecked_numeric_chain_to_int"));
     assert!(x86.contains("imul rax"));

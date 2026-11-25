@@ -213,3 +213,29 @@ fn test_skipped_for_counter_write_keeps_php_keys() {
     );
     assert_eq!(out, "{\"0\":0,\"2\":2,\"3\":3}");
 }
+
+/// A range-proven int (or any int/float) stored into a declared `string` property is
+/// converted under weak-mode typing, for static and instance properties alike.
+#[test]
+fn test_int_and_float_stores_into_string_properties_convert() {
+    let out = compile_and_run(
+        "<?php class S { public static string $t = \"\"; public string $u = \"\"; } \
+         $x = ($argc & 255) + 2; S::$t = $x; $o = new S; $o->u = $x; var_dump(S::$t, $o->u); \
+         S::$t = 5; $o->u = 2.5; var_dump(S::$t, $o->u);",
+    );
+    assert_eq!(out, "string(1) \"3\"\nstring(1) \"3\"\nstring(1) \"5\"\nstring(3) \"2.5\"\n");
+}
+
+/// Ordering a scalar against `true`, `false` or `null` compares both sides as booleans.
+#[test]
+fn test_scalar_ordering_against_bool_and_null_uses_truthiness() {
+    let out = compile_and_run(
+        "<?php $x = $argc & 255; $f = $x + 0.5; var_dump(($x + 2) <=> true, ($x - 2) <=> null, \
+         null <=> ($x - 2), ($x - 2) < null, ($x - 1) > null, ($x + 2) >= true, \
+         ($x - 1) <=> false, $f <=> null, null < $f, true <=> false);",
+    );
+    assert_eq!(
+        out,
+        "int(0)\nint(1)\nint(-1)\nbool(false)\nbool(false)\nbool(true)\nint(0)\nint(1)\nbool(true)\nint(1)\n"
+    );
+}

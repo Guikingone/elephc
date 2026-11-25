@@ -160,7 +160,10 @@ fn test_rematerialization_example_and_target_assembly() {
         fixture.compile(true, true, &options);
         let asm = fs::read_to_string(fixture.0.join("main.s")).unwrap();
         let arm = target != "linux-x86_64";
-        assert!(asm.contains(if arm { "#0xff" } else { "and rax, 255" }), "{target}: {asm}");
-        assert!(asm.contains(if arm { "cmp x0, #8" } else { "cmp rax, 8" }), "{target}: {asm}");
+        // The mask and the bound stay immediates whichever register the allocator picks.
+        let has_line = |prefix: &str, suffix: &str| asm.lines().map(str::trim)
+            .any(|line| line.starts_with(prefix) && line.ends_with(suffix));
+        assert!(if arm { asm.contains("#0xff") } else { has_line("and ", ", 255") }, "{target}: {asm}");
+        assert!(if arm { has_line("cmp x", ", #8") } else { has_line("cmp r", ", 8") }, "{target}: {asm}");
     }
 }

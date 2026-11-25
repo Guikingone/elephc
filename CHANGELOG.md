@@ -19,6 +19,10 @@ Releases are listed newest first.
 - The default runtime heap is now 128 MB, matching PHP's default `memory_limit` (which `ini_get('memory_limit')` already reported); untouched heap pages cost no resident memory.
 - The shared string scratch area grew from 64 KiB to 64 MiB, so large `json_encode()` (including `JSON_PRETTY_PRINT`) and other string results no longer overrun it and corrupt neighbouring runtime state.
 - `crc32()` is now table-driven (one lookup per byte instead of eight bit iterations).
+- Fixed ordering a bool, int or float against `true`, `false` or `null` (`3 <=> true`, `$n < null`): both sides now compare as booleans like PHP, instead of comparing raw payloads or failing in the backend with `icmp for PHP type Void`.
+- Declared `string` properties (static and instance) accept `int` and `float` values and store their decimal text, as PHP's weak-mode typing does, instead of rejecting `$obj->name = 5` at compile time.
+- The integer-range proof is disabled by `--no-ir-opt` and never narrows a result that may equal the legacy `--null-repr=sentinel` null marker (`PHP_INT_MAX - 1`).
+- The integer-range proof carries a tested counter's bound to `for` counters stepped in lock-step with it (`for (...; $i < $n; $i++, $j++)`), so upstream counter coalescing still applies, and the `sqrt()` range reducer also recognizes loops whose addend is already proven.
 ## [0.27.9] - 2026-11-20
 
 - Added PHP 8.5's `uri` extension: `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, `Uri\UriComparisonMode`, `Uri\WhatWg\UrlValidationError` and their exceptions, linked automatically when a program uses `Uri\` (or forced with `--with-uri`) on PHP 8.5 profiles and checked against 332 cases ported from php-src's `ext/uri` tests.

@@ -86,6 +86,34 @@ fn lower_compare_values(
             return result;
         }
     }
+    // PHP orders a bool or null against a bool, int or float by comparing both sides as
+    // booleans (`5 <=> null` is `true <=> false`, `3 <=> true` is `0`). The integer and float
+    // comparison backends would compare the raw payloads instead, so fold both operands to a
+    // 0/1 truth value first; null's `is_truthy` answers false.
+    if matches!(op, BinOp::Spaceship | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
+        let is_boolish = |ctx: &LoweringContext<'_, '_>, value: LoweredValue| {
+            value.ir_type == IrType::Void
+                || matches!(
+                    ctx.builder.value_php_type(value.value),
+                    PhpType::Void | PhpType::Bool | PhpType::False
+                )
+        };
+        let is_plain_scalar = |ctx: &LoweringContext<'_, '_>, value: LoweredValue| {
+            is_boolish(ctx, value)
+                || matches!(
+                    ctx.builder.value_php_type(value.value).codegen_repr(),
+                    PhpType::Int | PhpType::Float
+                )
+        };
+        if (is_boolish(ctx, lhs) || is_boolish(ctx, rhs))
+            && is_plain_scalar(ctx, lhs)
+            && is_plain_scalar(ctx, rhs)
+            && !(is_bool_typed(ctx, lhs) && is_bool_typed(ctx, rhs))
+        {
+            lhs = truth_value(ctx, lhs, left.span);
+            rhs = truth_value(ctx, rhs, right.span);
+        }
+    }
     // Two strings ORDER through the runtime rule, not through `StrCmp`. `__rt_strcmp` is
     // byte-lexicographic — which is right for `strcmp()` and wrong for `<`, because PHP
     // compares two NUMERIC strings numerically: `"10" > "9"` is true, where byte order says
@@ -275,4 +303,25 @@ pub(super) fn cmp_predicate(op: &BinOp) -> CmpPredicate {
         BinOp::GtEq => CmpPredicate::Sge,
         _ => CmpPredicate::Eq,
     }
+}
+
+/// Returns whether a comparison operand already holds a PHP bool (a 0/1 payload).
+fn is_bool_typed(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    value.ir_type == IrType::I64
+        && matches!(ctx.builder.value_php_type(value.value), PhpType::Bool | PhpType::False)
+}
+
+/// Folds a scalar comparison operand to PHP's 0/1 truth value for bool-versus-scalar ordering.
+fn truth_value(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
+    if is_bool_typed(ctx, value) {
+        return value;
+    }
+    ctx.emit_value(
+        Op::IsTruthy,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsTruthy.default_effects(),
+        Some(span),
+    )
 }

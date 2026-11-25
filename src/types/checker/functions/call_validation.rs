@@ -876,6 +876,13 @@ impl Checker {
         }
     }
 
+    /// Returns whether PHP's weak-mode typing turns an `actual` int or float into the declared
+    /// `string` slot (`$obj->text = 3` stores `"3"`). Property stores lower this through
+    /// `coerce_typed_assign_value`; booleans are left out because `false` becomes `""`.
+    pub(crate) fn weakly_coerces_scalar_to_string(expected: &PhpType, actual: &PhpType) -> bool {
+        matches!(expected, PhpType::Str) && matches!(actual, PhpType::Int | PhpType::Float)
+    }
+
     /// Returns `Ok(())` if `actual` is compatible with `expected` (via `types_compatible` or
     /// `type_accepts`), otherwise returns a `CompileError` describing the type mismatch.
     pub(crate) fn require_compatible_arg_type(
