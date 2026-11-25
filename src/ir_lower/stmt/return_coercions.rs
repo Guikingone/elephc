@@ -169,7 +169,9 @@ fn declared_int_return_boundary(
     ) {
         return None;
     }
-    let prefix = format!("{}(): Return value must be of type int, ", ctx.owner_name());
+    // PHP names an anonymous function `{closure}` in its diagnostics.
+    let owner = if ctx.owner_name().starts_with("__eir_closure") { "{closure}" } else { ctx.owner_name() };
+    let prefix = format!("{}(): Return value must be of type int, ", owner);
     let data = ctx.intern_string(&prefix);
     let verified = ctx.emit_value(
         Op::ReturnBoundaryMixedToInt,

@@ -101,16 +101,64 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
         terminate_return(ctx, None);
         return;
     }
+    if let Some(value_expr) = value_expr {
+        if lower_int_function_return(ctx, value_expr, span) {
+            return;
+        }
+    }
     let value = if let Some(value_expr) = value_expr {
         lower_return_expr(ctx, value_expr)
     } else {
         emit_null_value(ctx, Some(span))
     };
+    finish_return(ctx, value_expr, value, span);
+}
+
+/// Applies the return-boundary coercion and ownership steps to a lowered value and returns it.
+fn finish_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value_expr: Option<&Expr>,
+    value: LoweredValue,
+    span: Span,
+) {
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Lowers `return` shapes of an `int` function without boxing their common case.
+///
+/// `return c ? a : b` becomes two returns: the merged ternary value would otherwise be a boxed
+/// `int|float` whenever an arm can overflow, while each arm on its own keeps the checked
+/// arithmetic that the return-boundary sink fuses into a native `int` result. PHP semantics are
+/// unchanged. Returns `false` before lowering anything when the shape is not handled.
+fn lower_int_function_return(ctx: &mut LoweringContext<'_, '_>, value_expr: &Expr, span: Span) -> bool {
+    if ctx.by_ref_return
+        || ctx.return_type != IrType::I64
+        || ctx.return_php_type.codegen_repr() != PhpType::Int
+    {
+        return false;
+    }
+    match &value_expr.kind {
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            let then_block = ctx.builder.create_named_block("return.then", Vec::new());
+            let else_block = ctx.builder.create_named_block("return.else", Vec::new());
+            crate::ir_lower::expr::lower_condition(ctx, condition, then_block, else_block);
+            let split_initialized = ctx.initialized_slots_snapshot();
+            let join = super::conditionals::ExprBranchJoin::at_split(ctx);
+            ctx.builder.position_at_end(then_block);
+            join.enter_arm(ctx);
+            lower_return(ctx, Some(then_expr), span);
+            ctx.builder.position_at_end(else_block);
+            ctx.restore_initialized_slots(split_initialized);
+            join.enter_arm(ctx);
+            lower_return(ctx, Some(else_expr), span);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Lowers the value of a by-reference `return`, which must transport a managed cell.

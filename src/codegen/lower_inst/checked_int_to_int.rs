@@ -156,6 +156,20 @@ pub(super) fn lower_checked_int_to_int(
                 .get(data_id.as_raw() as usize)
                 .cloned()
                 .unwrap_or_default();
+            // PHP coerces the promoted double back to an int when it still fits (an overflow
+            // landing exactly on -2^63 returns PHP_INT_MIN); only a double outside the int range
+            // reaches the TypeError.
+            if let Some(index) = constant_index {
+                load_integer_operand(ctx, inst.operands[index], cold_rhs, inst)?;
+            }
+            emit_overflow_conversion(ctx, op, cold_lhs, cold_rhs);
+            let does_not_fit = ctx.next_label("checked_int_to_int_return_type_error");
+            super::mixed_narrowing::emit_float_result_fits_i64_or_jump(ctx, &does_not_fit);
+            if let Some(home) = direct_home.as_deref() {
+                abi::emit_reg_move(ctx.emitter, home, result_reg);
+            }
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&does_not_fit);
             let message = format!("{prefix}float returned");
             super::exceptions::emit_type_error(ctx, &message);
         } else if matches!(inst.immediate, Some(Immediate::Bool(true))) {
