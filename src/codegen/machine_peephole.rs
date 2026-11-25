@@ -101,7 +101,10 @@ pub(super) fn optimize_region(text: &str, target: Target) -> Option<String> {
                     try_remove_redundant_move(&mut lines, index, arch)
                         || try_forward_store(&mut lines, index, arch)
                 }
-                b's' => try_forward_store(&mut lines, index, arch),
+                b's' => {
+                    try_remove_dead_stack_spill(&mut lines, index, arch)
+                        || try_forward_store(&mut lines, index, arch)
+                }
                 b'b' | b'c' | b'j' => {
                     region_labels
                         .as_ref()
@@ -230,6 +233,82 @@ fn try_remove_redundant_move(lines: &mut [Line<'_>], index: usize, arch: Arch) -
     // After `dst = src`, copying `dst` back into `src` changes nothing.
     lines[next] = Line::Removed;
     true
+}
+
+/// Deletes a one-slot stack spill whose slot is popped without being read.
+///
+/// Argument staging pushes a value and pops it into its argument register; once the pop's
+/// reload is forwarded from the register (`try_forward_store`), the slot is dead:
+/// - x86_64: `sub rsp, 16` / `mov QWORD PTR [rsp], R` / register moves / `add rsp, 16`;
+/// - AArch64: `str R, [sp, #-16]!` / `ldr D, [sp]` / `add sp, sp, #16`, which becomes `mov D, R`.
+///
+/// Only register-to-register moves that leave the stack pointer alone may sit between the push
+/// and the pop, so nothing can read the slot or observe the stack pointer.
+fn try_remove_dead_stack_spill(lines: &mut [Line<'_>], index: usize, arch: Arch) -> bool {
+    match arch {
+        Arch::X86_64 => {
+            if inst_at(lines, index) != Some("sub rsp, 16") {
+                return false;
+            }
+            let Some(store) = next_significant(lines, index) else { return false; };
+            let stores_slot = inst_at(lines, store)
+                .and_then(|inst| parse_store(arch, inst))
+                .is_some_and(|(reg, address, class)| {
+                    class == MemClass::Gpr && address == "[rsp]" && reg != "rsp"
+                });
+            if !stores_slot {
+                return false;
+            }
+            let mut cursor = store;
+            loop {
+                let Some(next) = next_significant(lines, cursor) else { return false; };
+                let Some(inst) = inst_at(lines, next) else { return false; };
+                if inst == "add rsp, 16" {
+                    lines[index] = Line::Removed;
+                    lines[store] = Line::Removed;
+                    lines[next] = Line::Removed;
+                    return true;
+                }
+                match reg_move(arch, inst) {
+                    Some((dst, src)) if dst != "rsp" && src != "rsp" => cursor = next,
+                    _ => return false,
+                }
+            }
+        }
+        Arch::AArch64 => {
+            let Some(pushed) = inst_at(lines, index)
+                .and_then(|inst| inst.strip_prefix("str "))
+                .and_then(|rest| rest.strip_suffix(", [sp, #-16]!"))
+            else {
+                return false;
+            };
+            if !is_gpr64(arch, pushed) {
+                return false;
+            }
+            let Some(load) = next_significant(lines, index) else { return false; };
+            let Some(popped) = inst_at(lines, load)
+                .and_then(|inst| inst.strip_prefix("ldr "))
+                .and_then(|rest| rest.strip_suffix(", [sp]"))
+            else {
+                return false;
+            };
+            if !is_gpr64(arch, popped) {
+                return false;
+            }
+            let Some(release) = next_significant(lines, load) else { return false; };
+            if inst_at(lines, release) != Some("add sp, sp, #16") {
+                return false;
+            }
+            let replacement = (popped != pushed).then(|| format!("mov {popped}, {pushed}"));
+            lines[index] = Line::Removed;
+            lines[release] = Line::Removed;
+            lines[load] = match replacement {
+                Some(text) => Line::Inst(Cow::Owned(text)),
+                None => Line::Removed,
+            };
+            true
+        }
+    }
 }
 
 /// Register class of a forwarded memory value.
@@ -548,6 +627,26 @@ mod tests {
     }
 
     /// Verifies self-moves and move-backs disappear, while 32-bit zero-extending moves stay.
+    #[test]
+    fn removes_dead_argument_spills() {
+        let x86 = "    sub rsp, 16\n    mov QWORD PTR [rsp], rax\n    mov rdi, rax\n    add rsp, 16\n    call _fn_f\n";
+        assert_eq!(optimize(x86, linux(Arch::X86_64)), "    mov rdi, rax\n    call _fn_f\n");
+        let arm = "    str x1, [sp, #-16]!\n    ldr x0, [sp]\n    add sp, sp, #16\n    bl _fn_f\n";
+        assert_eq!(optimize(arm, linux(Arch::AArch64)), "    mov x0, x1\n    bl _fn_f\n");
+        let same = "    str x0, [sp, #-16]!\n    ldr x0, [sp]\n    add sp, sp, #16\n    bl _fn_f\n";
+        assert_eq!(optimize(same, linux(Arch::AArch64)), "    bl _fn_f\n");
+    }
+
+    #[test]
+    fn keeps_stack_spills_that_are_read_or_span_calls() {
+        let read = "    sub rsp, 16\n    mov QWORD PTR [rsp], rax\n    call _fn_f\n    add rsp, 16\n";
+        assert_eq!(optimize(read, linux(Arch::X86_64)), read);
+        let label = "    sub rsp, 16\n    mov QWORD PTR [rsp], rax\n.L1:\n    add rsp, 16\n";
+        assert_eq!(optimize(label, linux(Arch::X86_64)), label);
+        let arm = "    str x0, [sp, #-16]!\n    bl _fn_f\n    ldr x0, [sp]\n    add sp, sp, #16\n";
+        assert_eq!(optimize(arm, linux(Arch::AArch64)), arm);
+    }
+
     #[test]
     fn removes_redundant_register_moves() {
         let x86 = "    mov rax, rax\n    mov rsi, rax\n    # note\n    mov rax, rsi\n    mov eax, eax\n";

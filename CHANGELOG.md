@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- A late machine peephole drops the dead stack spill around single-argument calls (`sub rsp, 16` / `mov [rsp], rax` / `add rsp, 16` on x86_64, `str x0, [sp, #-16]!` / `ldr` / `add sp` on AArch64), about 5% fewer instructions on recursive call-heavy code such as `fib`.
 - `int` functions return `c ? a : b` as two returns instead of merging the arms into a boxed `int|float` only to unbox it at the return boundary; each arm keeps the native fused checked arithmetic (recursive fib: 44.4G → 6.1G instructions). An overflowing checked `+`/`-`/`*` fused into an `int` return whose promoted double still fits (`PHP_INT_MIN - 1` lands exactly on -2^63) now returns that int like PHP instead of throwing, and the return `TypeError` names an anonymous function `{closure}`.
 
 - Added an integer-range analysis (`crate::int_range`) that proves `+`, `-`, `*`, `++` and `--` sites overflow-free (loop counters bounded by their condition, masked/modulo accumulators, guarded recursion arguments, `count()`/`strlen()` bounds, ...). Proven sites compile to native machine arithmetic instead of the checked `int|float` form that boxed every result into a `mixed` cell; semantics are unchanged because only sites whose every integer execution stays in range are proven. A 50M-iteration integer loop drops from ~5 s to ~0.17 s on x86_64.
