@@ -2430,8 +2430,16 @@ fn test_typed_by_ref_param_can_detach_and_rebind() {
 #[test]
 fn test_typed_property_stays_strict() {
     expect_error(
-        "<?php class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
+        "<?php declare(strict_types=1); class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
         "Property C::$s expects string, got int",
+    );
+}
+
+/// Without strict_types, PHP weakly converts an int stored into a `string` property.
+#[test]
+fn test_typed_string_property_accepts_int_in_weak_mode() {
+    expect_no_error(
+        "<?php class C { public string $s = \"a\"; } $c = new C(); $c->s = 5;",
     );
 }
 
