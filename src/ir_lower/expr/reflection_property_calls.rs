@@ -300,6 +300,23 @@ pub(super) fn lower_reflection_property_set_static_value(
     lower_ignored_reflection_argument(ctx, &ignored_object);
     let value = lower_expr(ctx, &value_arg);
     let value = retype_reflection_static_property_value(ctx, declaring_class, property, value, expr.span);
+    // A string is persisted into the slot and the source released, exactly as the direct
+    // `Class::$prop = ...` store does (`static_property_writes.rs`): many producers hand back a
+    // slice of the shared concat scratch, which the next string operation overwrites.
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str {
+        let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(expr.span));
+        store_reflection_static_property_by_class_name(
+            ctx,
+            declaring_class,
+            property,
+            stored.value,
+            expr.span,
+        );
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        }
+        return Some(lower_null(ctx, expr));
+    }
     store_reflection_static_property_by_class_name(
         ctx,
         declaring_class,

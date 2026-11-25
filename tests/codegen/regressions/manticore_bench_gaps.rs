@@ -239,3 +239,30 @@ fn test_scalar_ordering_against_bool_and_null_uses_truthiness() {
         "int(0)\nint(1)\nint(-1)\nbool(false)\nbool(false)\nbool(true)\nint(0)\nint(1)\nbool(true)\nint(1)\n"
     );
 }
+
+/// `declare(strict_types=1)` keeps PHP's `TypeError` for a proven int stored into a `bool`
+/// property instead of converting it.
+#[test]
+#[ignore = "typed property stores do not enforce strict_types yet (a mixed value is stored too)"]
+fn test_strict_types_int_into_bool_property_throws() {
+    let out = compile_and_run(
+        "<?php declare(strict_types=1); class F { public bool $flag = false; } $f = new F; \
+         try { $f->flag = ($argc & 255) + 2; echo \"stored\\n\"; } \
+         catch (TypeError $e) { echo get_class($e), \"\\n\"; }",
+    );
+    assert_eq!(out, "TypeError\n");
+}
+
+/// A string converted from a proven int by `ReflectionProperty::setValue()` survives later
+/// string building.
+#[test]
+fn test_reflection_static_string_store_persists_converted_int() {
+    let out = compile_and_run(
+        "<?php class C { public static string $t = \"\"; } \
+         (new ReflectionProperty(C::class, \"t\"))->setValue(null, ($argc & 255) + 12344); \
+         $x = str_repeat(\"z\", 9) . \"y\"; echo C::$t, \"|\", $x, \"\\n\"; \
+         $a = \"ab\" . $argc; (new ReflectionProperty(C::class, \"t\"))->setValue(null, $a . \"cd\"); \
+         $x = str_repeat(\"q\", 9) . \"y\"; echo C::$t, \"|\", $x, \"\\n\";",
+    );
+    assert_eq!(out, "12345|zzzzzzzzzy\nab1cd|qqqqqqqqqy\n");
+}

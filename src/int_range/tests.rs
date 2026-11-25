@@ -216,3 +216,9 @@ fn lockstep_counter_bound_by_reference_stays_checked() {
     let src = "<?php\n$n = $argc & 255; $j = 0; $r = &$j;\nfor ($i = 0; $i < $n; $i++, $j++) {\n  $r = PHP_INT_MAX;\n}\n";
     assert_not_proven(src, 3, ArithKind::Inc);
 }
+
+#[test]
+fn unbounded_lockstep_counters_stay_checked() {
+    let src = "<?php\nfor ($i = PHP_INT_MAX - 1, $j = PHP_INT_MAX - 1, $k = 0; $k < 4; $k++, $i++, $j++) {\n  echo $i * 1;\n}\n";
+    assert_not_proven(src, 3, ArithKind::Mul);
+}

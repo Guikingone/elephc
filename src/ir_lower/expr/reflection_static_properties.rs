@@ -398,7 +398,17 @@ pub(super) fn store_static_property_by_class_name_with_op(
             && matches!(ctx.builder.value_php_type(value).codegen_repr(), PhpType::Int | PhpType::Float) =>
         {
             let source = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
-            crate::ir_lower::stmt::coerce_typed_assign_value(ctx, source, &ty, span).value
+            let converted = crate::ir_lower::stmt::coerce_typed_assign_value(ctx, source, &ty, span);
+            if ctx.builder.value_php_type(converted.value).codegen_repr() != PhpType::Str {
+                converted.value
+            } else {
+                // The decimal text lives in the concat scratch: persist it like any string store.
+                let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, converted, Some(span));
+                if ctx.value_is_owning_temporary(converted) {
+                    crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(span));
+                }
+                stored.value
+            }
         }
         _ => value,
     };

@@ -59,7 +59,7 @@ pub(super) fn check_static_property_assign(
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
 
     if target.property_has_declared_type
-        && !Checker::weakly_coerces_scalar_to_string(&target.prop_ty, &val_ty)
+        && !checker.weakly_coerces_scalar_to_string(&target.prop_ty, &val_ty)
     {
         checker.require_compatible_arg_type(
             &target.prop_ty,

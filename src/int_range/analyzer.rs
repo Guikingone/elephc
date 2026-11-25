@@ -193,13 +193,17 @@ impl<'a> Analyzer<'a> {
         for members in groups {
             let mut lo = MIN;
             let mut hi = MAX;
+            let mut bounded = false;
             for name in members {
                 if let AbsVal::Int(member_lo, member_hi) = self.read(&head, name) {
                     lo = lo.max(member_lo);
                     hi = hi.min(member_hi);
+                    bounded = true;
                 }
             }
-            if lo > hi {
+            // `Top` may be a float already; only a member still known to be an int can vouch
+            // for the group.
+            if !bounded || lo > hi {
                 continue;
             }
             for name in members {

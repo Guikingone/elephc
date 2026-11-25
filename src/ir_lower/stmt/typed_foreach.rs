@@ -147,6 +147,14 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
     if source_ty == target_ty {
         return value;
     }
+    // Under `declare(strict_types=1)` an int or float headed for a `string` or `bool` slot keeps
+    // PHP's runtime `TypeError`: box it so the store's strict guard sees the original value.
+    if crate::source::current_strict_types()
+        && matches!(target_ty, PhpType::Str | PhpType::Bool)
+        && matches!(source_ty, PhpType::Int | PhpType::Float)
+    {
+        return ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span));
+    }
     // Weak-mode typing converts an int or float stored into a `string` slot to its decimal
     // text, exactly as `(string)` does (`Checker::weakly_coerces_scalar_to_string`).
     if target_ty == PhpType::Str && matches!(source_ty, PhpType::Int | PhpType::Float) {

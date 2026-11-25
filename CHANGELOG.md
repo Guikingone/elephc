@@ -22,6 +22,7 @@ Releases are listed newest first.
 - `crc32()` is now table-driven (one lookup per byte instead of eight bit iterations).
 - Fixed ordering a bool, int or float against `true`, `false` or `null` (`3 <=> true`, `$n < null`): both sides now compare as booleans like PHP, instead of comparing raw payloads or failing in the backend with `icmp for PHP type Void`.
 - Declared `string` properties (static and instance) accept `int` and `float` values and store their decimal text, as PHP's weak-mode typing does, instead of rejecting `$obj->name = 5` at compile time.
+- Fixed `ReflectionProperty::setValue(null, $value)` on a static `string` property storing a pointer into the shared concat scratch, so the next string operation overwrote the stored value; the string is now persisted like a direct `Class::$prop = ...` store.
 - The integer-range proof is disabled by `--no-ir-opt` and never narrows a result that may equal the legacy `--null-repr=sentinel` null marker (`PHP_INT_MAX - 1`).
 - The integer-range proof carries a tested counter's bound to `for` counters stepped in lock-step with it (`for (...; $i < $n; $i++, $j++)`), so upstream counter coalescing still applies, and the `sqrt()` range reducer also recognizes loops whose addend is already proven.
 ## [0.27.9] - 2026-11-20
