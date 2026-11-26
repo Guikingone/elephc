@@ -84,6 +84,7 @@ use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
 use super::fresh_mixed_transfer::FreshMixedTransfer;
+use super::owned_acquire_transfer::OwnedAcquireTransfer;
 use super::identity_arith::IdentityArith;
 use super::immutable_local_loads::ImmutableLocalLoads;
 use super::integer_range::IntegerRange;
@@ -236,6 +237,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ConcatResetElim),
         Box::new(ConcatResetHoist),
         Box::new(FreshMixedTransfer),
+        Box::new(OwnedAcquireTransfer),
     ]
 }
 

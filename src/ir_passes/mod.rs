@@ -81,6 +81,7 @@ mod dead_store;
 mod dominance;
 mod driver;
 mod fresh_mixed_transfer;
+mod owned_acquire_transfer;
 mod identity_arith;
 mod inline;
 mod numeric_closure_calls;

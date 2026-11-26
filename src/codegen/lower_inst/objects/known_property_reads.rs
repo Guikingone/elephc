@@ -54,10 +54,41 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'
     if let Some(class_name) = extern_receiver_class(ctx, &ctx.value_php_type(object)?) {
         return lower_extern_prop_get(ctx, inst, object, &class_name, &property);
     }
-    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
+        && !is_instance_method_this(ctx.function, object)
+    {
         return lower_object_prop_get_with_null_guard(ctx, inst, object, &property);
     }
     lower_prop_get_nonnull(ctx, inst, object, &property)
+}
+
+/// Returns true when `object` is a read of `$this` inside an instance method.
+///
+/// PHP rejects every assignment, reference and `unset()` of `$this`, and an instance method
+/// is only entered with a bound object, so such a read can never be null.
+pub(in crate::codegen::lower_inst) fn is_instance_method_this(
+    function: &crate::ir::Function,
+    object: ValueId,
+) -> bool {
+    if !function.flags.is_method || function.flags.is_static || function.flags.is_closure {
+        return false;
+    }
+    let Some(crate::ir::ValueDef::Instruction { inst, .. }) = function.value(object).map(|v| v.def)
+    else {
+        return false;
+    };
+    let Some(load) = function.instruction(inst) else {
+        return false;
+    };
+    let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+        return false;
+    };
+    load.op == Op::LoadLocal
+        && function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+            local.id == slot
+                && local.kind == crate::ir::LocalKind::PhpLocal
+                && local.name.as_deref() == Some("this")
+        })
 }
 
 /// Guards statically typed object receivers before selecting declared, dynamic,

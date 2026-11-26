@@ -529,7 +529,9 @@ pub(super) fn emit_function_prologue_with_label(
     let stack_ok_label = ctx.next_label("stack_ok");
     stack_guard::emit_stack_limit_check(ctx.emitter, &stack_ok_label);
     emit_call_counter_increment(ctx, entry_label);
-    capture_concat_base(ctx);
+    if function_resets_concat_buffer(ctx.function) {
+        capture_concat_base(ctx);
+    }
     emit_callee_saved_saves(ctx);
 
     // Save every incoming argument before any parameter post-processing can call
@@ -792,6 +794,15 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
     // `emit_store` performs the string persist itself; other refcounted values
     // were retained explicitly above and are stored without another incref.
     abi::emit_store(emitter, ty, offset);
+}
+
+/// Returns true when a function body can restore `_concat_off` to its frame base: only a
+/// `concat_reset` or a store of a concatenation result reads the captured base back.
+fn function_resets_concat_buffer(function: &crate::ir::Function) -> bool {
+    function
+        .instructions
+        .iter()
+        .any(|inst| matches!(inst.op, Op::ConcatReset | Op::StrConcat))
 }
 
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.

@@ -43,6 +43,7 @@ mod dead_store_test;
 mod dominance_test;
 mod driver_test;
 mod fresh_mixed_transfer_test;
+mod owned_acquire_transfer_test;
 mod guard_facts_test;
 mod identity_arith_test;
 mod inline_test;
