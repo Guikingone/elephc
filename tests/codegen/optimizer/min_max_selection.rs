@@ -364,11 +364,13 @@ fn test_min_max_selection_emits_on_every_target() {
 function generic(mixed $a, mixed $b): mixed { return max($a, $b); }
 function hot(int $count): void {
     $sum = 0.0;
-    for ($i = 0; $i < $count; $i++) { $sum += min($i, $count - 1); }
+    for ($i = 0; $i < $count; $i++) { $sum += min($i + 0.5, $count - 1); }
     echo $sum;
 }
 echo generic($argc, 2.5);
-hot($argc);
+// The range proof does not follow user function results: keeps the bound opaque.
+function opaque(int $v): int { return $v; }
+hot(opaque($argc));
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let generic = function_assembly(source, name, "generic");
@@ -493,10 +495,12 @@ function wide(array $a, array $b, int $count): void {
     foreach ($a as $x) { $seen = $x; }
     foreach ($b as $y) { $seen = $y; }
     $sum = 0.0;
-    for ($i = 0; $i < $count; $i++) { $sum += min($count - 1, $i); }
+    for ($i = 0; $i < $count; $i++) { $sum += min($count - opaque(1), $i); }
     echo $seen, " ", $sum, "\n";
 }
-wide([1, 2], [3, 4], 4 + $argc);
+// The range proof does not follow user function results: keeps the bound opaque.
+function opaque(int $v): int { return $v; }
+wide([1, 2], [3, 4], opaque(4 + $argc));
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
         let assembly = function_assembly(source, name, "wide");

@@ -179,7 +179,9 @@ function targetSeed(int $n): int {
     for ($i = $n - 1; $i >= 0; $i--) { $count += 1; }
     return $count;
 }
-echo targetCounter($argc + 2), targetIndex($argc, 31, 7), targetSeed($argc + 2);
+// The range proof does not follow user function results: keeps the bound opaque.
+function opaque(int $v): int { return $v; }
+echo targetCounter(opaque($argc + 2)), targetIndex(opaque($argc), 31, 7), targetSeed(opaque($argc + 2));
 "#).unwrap();
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let mut command = elephc_cli_command(&fixture.0);

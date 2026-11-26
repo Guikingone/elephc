@@ -243,7 +243,7 @@ pub(super) fn lower_hash_flip(
 
 /// Returns the source value type when `__rt_hash_flip` can flip a hash faithfully.
 ///
-/// Only `Int` and `Str` values are accepted. A `Mixed`-valued hash is refused ON PURPOSE:
+/// `Int`, `Str`, `Float` and `Bool` values are accepted. A `Mixed`-valued hash is refused ON PURPOSE:
 /// building a heterogeneous associative array currently mis-tags its entries UPSTREAM of this
 /// lowering — `$a["k1"] = 1; $a["k2"] = "s";` stores the string payload under the int tag, which
 /// `var_dump()` of the source array already renders as `int(<pointer>)` without `array_flip()`
@@ -254,7 +254,9 @@ pub(super) fn hash_flip_source_value_type(source_ty: &PhpType) -> Result<PhpType
     match source_ty {
         PhpType::AssocArray { value, .. } => {
             let value = value.codegen_repr();
-            if matches!(value, PhpType::Int | PhpType::Str) {
+            // A typed float or bool hash tags every entry with its own scalar kind, which the
+            // helper warns about and skips exactly like PHP refuses those values as keys.
+            if matches!(value, PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool) {
                 return Ok(value);
             }
             Err(CodegenIrError::unsupported(format!(

@@ -96,6 +96,16 @@ impl<'a> Analyzer<'a> {
 
     /// Analyzes a function-like body in a fresh scope.
     fn analyze_function(&mut self, params: &[Param], body: &[Stmt], extra_pins: &[String]) {
+        self.analyze_function_seeded(params, body, extra_pins, None);
+    }
+
+    /// Analyzes a function body whose `int` parameters may carry call-site ranges.
+    ///
+    /// `seeds[i]` is the join of every direct call's argument `i` (see `ProgramInfo::seedable`):
+    /// a definite range narrows the parameter, anything else leaves it at the full `int` range.
+    fn analyze_function_seeded(
+        &mut self, params: &[Param], body: &[Stmt], extra_pins: &[String], seeds: Option<&[AbsVal]>,
+    ) {
         for param in params {
             if let Some(default) = &param.2 {
                 self.eval_detached(default);
@@ -105,10 +115,14 @@ impl<'a> Analyzer<'a> {
         let mut pinned = scan.pinned;
         pinned.extend(extra_pins.iter().cloned());
         let mut env = Env::default();
-        for (name, type_expr, default, by_ref) in params {
+        for (index, (name, type_expr, default, by_ref)) in params.iter().enumerate() {
             let null_default = matches!(default.as_ref().map(|d| &d.kind), Some(ExprKind::Null));
             if !by_ref && !null_default && matches!(type_expr, Some(TypeExpr::Int)) {
-                env.set(name, AbsVal::FULL_INT);
+                let seeded = seeds.and_then(|seeds| seeds.get(index)).copied();
+                env.set(name, match seeded {
+                    Some(AbsVal::Int(lo, hi)) => AbsVal::Int(lo, hi),
+                    _ => AbsVal::FULL_INT,
+                });
             }
         }
         let mut child = Analyzer::new(self.info, &mut *self.facts, body, pinned, scan.unanalyzable);
@@ -499,9 +513,10 @@ impl<'a> Analyzer<'a> {
                 self.eval_operands(&[index, value], &mut state);
                 state
             }
-            StmtKind::FunctionDecl { params, body, .. } => {
+            StmtKind::FunctionDecl { name, params, body, .. } => {
                 if self.recording {
-                    self.analyze_function(params, body, &[]);
+                    let seeds = self.info.param_seeds.get(&symbol_key(name)).cloned();
+                    self.analyze_function_seeded(params, body, &[], seeds.as_deref());
                 }
                 state
             }
@@ -1038,6 +1053,9 @@ impl<'a> Analyzer<'a> {
         let values = self.eval_operands(&refs, state);
         let positional = args.iter().all(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
         if self.info.is_user_function(name) {
+            if self.recording && state.is_some() {
+                self.info.observe_call(name, &values, positional);
+            }
             return if self.info.user_function_returns_int(name) { AbsVal::FULL_INT } else { AbsVal::Top };
         }
         let ints = || values.iter().map(|value| value.bounds()).collect::<Option<Vec<_>>>();

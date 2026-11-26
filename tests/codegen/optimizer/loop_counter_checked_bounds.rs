@@ -49,7 +49,9 @@ function runs(array $ends): string {
     }
     return $out;
 }
-echo pairCount($argc + 9), '|', inclusivePairs($argc + 4), '|', runs([3, 3, 6]), "\n";
+// The range proof does not follow user function results: keeps the bound opaque.
+function opaque(int $v): int { return $v; }
+echo pairCount(opaque($argc + 9)), '|', inclusivePairs(opaque($argc + 4)), '|', runs([3, 3, 6]), "\n";
 "#;
 
 /// The buffer-backed run scan of Ivory's grid broadphase: entries `starts[c]..starts[c + 1]`.

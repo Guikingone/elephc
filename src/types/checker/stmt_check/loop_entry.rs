@@ -9,7 +9,7 @@
 //! - Speculative expression inference restores source-ordered guard and capture facts.
 
 use std::collections::HashSet;
-use crate::parser::ast::{Expr, ExprKind, Stmt};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
@@ -251,8 +251,36 @@ pub(super) fn prepare_for_update_reads(checker: &mut Checker, update: Option<&St
         if matches!(value, super::super::loop_storage::AssignedValue::Increment(_))
             && env.get(name) == Some(&PhpType::Int)
             && !checker.has_fixed_tagged_reference_storage(name, env)
+            && !update_steps_are_proven(update, name)
         {
             env.insert(name.to_string(), PhpType::Union(vec![PhpType::Int, PhpType::Float]));
         }
     }
+}
+
+/// Returns true when every `++`/`--` of `name` in a `for` update clause is proven overflow-free
+/// by `crate::int_range`, so the counter stays an `int` across iterations as the step's own
+/// typing (`incremented_local_type`) and the EIR lowering already treat it.
+fn update_steps_are_proven(update: &Stmt, name: &str) -> bool {
+    let pieces: Vec<&Stmt> = match &update.kind {
+        StmtKind::Synthetic(stmts) => stmts.iter().collect(),
+        _ => vec![update],
+    };
+    let mut seen = false;
+    for piece in pieces {
+        let StmtKind::ExprStmt(expr) = &piece.kind else { continue };
+        match &expr.kind {
+            ExprKind::PreIncrement(var)
+            | ExprKind::PostIncrement(var)
+            | ExprKind::PreDecrement(var)
+            | ExprKind::PostDecrement(var) if var == name => {
+                if !crate::int_range::is_proven_step(expr) {
+                    return false;
+                }
+                seen = true;
+            }
+            _ => {}
+        }
+    }
+    seen
 }

@@ -266,3 +266,43 @@ fn test_reflection_static_string_store_persists_converted_int() {
     );
     assert_eq!(out, "12345|zzzzzzzzzy\nab1cd|qqqqqqqqqy\n");
 }
+
+/// A `for` counter passed bare to a by-value user function keeps the filled array packed,
+/// while a by-reference callee that advances the counter still yields PHP's sparse keys.
+#[test]
+fn test_packed_counter_survives_by_value_calls_only() {
+    let out = compile_and_run(
+        "<?php function v(int $i): float { return $i * 0.5; } \
+         function bump(&$i): float { $i++; return 1.0; } \
+         function build(int $n): array { $o = []; for ($i = 0; $i < $n; $i++) { $o[$i] = v($i); } return $o; } \
+         function skip(int $n): array { $o = []; for ($i = 0; $i < $n; $i++) { $o[$i] = bump($i); } return $o; } \
+         echo json_encode(build(4)), json_encode(skip(5)), \"\\n\";",
+    );
+    assert_eq!(out, "[0,0.5,1,1.5]{\"1\":1,\"3\":1,\"5\":1}\n");
+}
+
+/// Integer parameters of functions only called directly take the call sites' ranges, so
+/// `$i + $j` inside the callee is native arithmetic; an unbounded call keeps it checked.
+#[test]
+fn test_direct_call_ranges_prove_callee_arithmetic() {
+    let bounded = "<?php function a(int $i, int $j): float { $n = $i + $j; return 1.0 / ($n + 1); }\n\
+        $s = 0.0; for ($i = 0; $i < 50; $i++) { for ($j = 0; $j < 50; $j++) { $s += a($i, $j); } }\n\
+        printf(\"%.6f\\n\", $s);\n";
+    assert_eq!(compile_and_run(bounded), "68.817218\n");
+    let unbounded = "<?php function a(int $i, int $j) { return $i + $j; }\n\
+        echo a(1, 2), \" \"; var_dump(a(PHP_INT_MAX, 1));\n";
+    assert_eq!(compile_and_run(unbounded), "3 float(9.223372036854776E+18)\n");
+}
+
+/// A negative key written into a list a proven `for` counter filled still promotes it to a
+/// hash like PHP, when the bound comes from a range-proven function argument.
+#[test]
+fn test_negative_key_after_counter_filled_list_promotes_to_hash() {
+    let out = compile_and_run(
+        "<?php function s(int $n): string { $arr = []; \
+         for ($i = 0; $i < $n; $i++) { $arr[] = $i * 10; } \
+         $arr[$n - 10] = 99; $arr[-1 + $n * 0] = 7; return json_encode($arr); } \
+         echo s($argc + 3), \"\\n\";",
+    );
+    assert_eq!(out, "{\"0\":0,\"1\":10,\"2\":20,\"3\":30,\"-6\":99,\"-1\":7}\n");
+}

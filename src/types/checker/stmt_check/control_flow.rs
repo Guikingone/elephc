@@ -978,15 +978,30 @@ impl Checker {
                 // before the loop lets `$r += 2` inside it advance `$i` with nothing in the body
                 // naming `$i`. `ref_aliased_locals` holds every local of this body a reference
                 // can reach, permanently, so such a counter takes hash storage.
-                self.packed_loop_counter =
-                    crate::types::checker::packed_counter::packed_for_counter(
+                // Direct calls to functions that take every argument by value cannot advance
+                // the counter even when it is passed bare (`a($i, $j)`).
+                let mut loop_code = body.to_vec();
+                if let Some(condition) = condition {
+                    loop_code.push(Stmt::new(StmtKind::ExprStmt(condition.clone()), condition.span));
+                }
+                let by_value_callees = crate::int_range::called_function_names(&loop_code)
+                    .into_iter()
+                    .filter(|name| {
+                        !crate::types::checker::mixed_storage_scan::callee_may_bind_arguments_by_ref(self, name)
+                    })
+                    .map(|name| name.as_str().to_string())
+                    .collect();
+                self.packed_loop_counter = crate::types::checker::packed_counter::with_by_value_callees(
+                    by_value_callees,
+                    || crate::types::checker::packed_counter::packed_for_counter(
                         init.as_deref(),
                         condition.as_ref(),
                         update.as_deref(),
                         body,
                         self.local_conditional_depth,
-                    )
-                    .filter(|counter| !self.ref_aliased_locals.contains(&counter.name));
+                    ),
+                )
+                .filter(|counter| !self.ref_aliased_locals.contains(&counter.name));
                 // Cloned first: the stabilizer takes `&mut Checker`, so the name cannot be
                 // borrowed out of `self` across the call.
                 let packed_counter_name = self

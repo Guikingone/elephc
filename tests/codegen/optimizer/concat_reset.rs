@@ -148,7 +148,9 @@ function build_and_count(int $n): string {
     }
     return $prefix . ":" . $total;
 }
-echo build_and_count($argc + 3), "\n";
+// The range proof does not follow user function results: keeps the bound opaque.
+function opaque(int $v): int { return $v; }
+echo build_and_count(opaque($argc + 3)), "\n";
 "#;
     let fixture = Fixture::new(source);
     let opt_ir = fixture.function_ir(true, "build_and_count");

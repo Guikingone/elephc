@@ -22,5 +22,5 @@ function scaled(int $value): string
     return ($x * 31) . " " . ($x * 10) . " " . ($x * -8) . " " . ($x * 11);
 }
 
-echo "hash=", rolling_hash(1000 * $argc, 0), "\n";
+echo "hash=", rolling_hash(1000 * $argc, (int) getenv("ROLLING_HASH_SEED")), "\n";
 echo "scaled=", scaled(1234 * $argc), "\n";

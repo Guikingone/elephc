@@ -222,3 +222,33 @@ fn unbounded_lockstep_counters_stay_checked() {
     let src = "<?php\nfor ($i = PHP_INT_MAX - 1, $j = PHP_INT_MAX - 1, $k = 0; $k < 4; $k++, $i++, $j++) {\n  echo $i * 1;\n}\n";
     assert_not_proven(src, 3, ArithKind::Mul);
 }
+
+#[test]
+fn direct_call_arguments_seed_int_parameters() {
+    let src = "<?php\nfunction a(int $i, int $j): float {\n  $n = $i + $j;\n  return 1.0 / ($n + 1);\n}\nfunction m(int $n): float {\n  $s = 0.0;\n  for ($i = 0; $i < $n; $i++) { for ($j = 0; $j < $n; $j++) { $s += a($i, $j); } }\n  return $s;\n}\necho m(500);\n";
+    assert_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn dynamic_calls_disable_parameter_seeding() {
+    let src = "<?php\nfunction a(int $i, int $j): int {\n  return $i + $j;\n}\necho a(1, 2);\n$f = 'strlen';\necho $f('x');\n";
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn function_named_in_a_string_is_not_seeded() {
+    let src = "<?php\nfunction a(int $i, int $j): int {\n  return $i + $j;\n}\necho a(1, 2);\necho call_user_func('a', PHP_INT_MAX, 1);\n";
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn unbounded_call_site_keeps_parameter_checked() {
+    let src = "<?php\nfunction a(int $i, int $j): int {\n  return $i + $j;\n}\necho a(1, 2);\necho a(intval(\"9\"), 2);\n";
+    assert_not_proven(src, 3, ArithKind::Add);
+}
+
+#[test]
+fn recursive_seeding_stays_sound() {
+    let src = "<?php\nfunction f(int $n): int {\n  if ($n > 1000) { return 0; }\n  return f($n * 2 + 1) + $n;\n}\necho f(1);\n";
+    assert_not_proven(src, 4, ArithKind::Add);
+}

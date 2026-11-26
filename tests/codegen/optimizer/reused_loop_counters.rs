@@ -38,7 +38,9 @@ final class Boxes {
         return $total + $box;
     }
 }
-echo reusedCounter($argc + 9), '|', reversedCounter($argc + 9), '|',
+// The range proof does not follow user function results: keeps the bound opaque.
+function opaque(int $v): int { return $v; }
+echo reusedCounter(opaque($argc + 9)), '|', reversedCounter(opaque($argc + 9)), '|',
     (new Boxes($argc + 4))->sweep();
 "#;
 

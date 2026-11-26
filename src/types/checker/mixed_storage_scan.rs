@@ -1355,7 +1355,7 @@ fn disqualify_call_arguments(facts: &mut Facts, args: &[Expr]) {
 /// Answers `true` whenever the callee cannot be resolved statically: an unknown callee could hold
 /// a reference to the local for the rest of the body, and over-disqualifying only narrows the
 /// feature, while under-disqualifying would box a local a reference still reaches.
-fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
+pub(super) fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
     let raw = name.as_str();
     let trimmed = raw.trim_start_matches('\\');
     // Language constructs the registry does not carry, all of which only READ their operand.

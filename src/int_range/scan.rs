@@ -83,6 +83,65 @@ pub(crate) struct ProgramInfo {
     /// Set when `$GLOBALS` is written through a key this scan cannot name (a dynamic key, a
     /// nested write, or a reference): every top-level variable may then change behind its back.
     pub(crate) all_top_level_pinned: bool,
+    /// User functions that only direct, positional-or-named calls in this program can enter, so
+    /// their `int` parameters may be seeded with the join of every call site's argument range.
+    /// Empty when the program can reach a function by a runtime name (dynamic calls, callback
+    /// builtins, reflection, `eval`, includes); a function whose name is spelled in a string
+    /// literal is excluded individually.
+    pub(crate) seedable: HashSet<String>,
+    /// Per seedable function, the parameter ranges assumed while analyzing its body.
+    pub(crate) param_seeds: HashMap<String, Vec<crate::int_range::domain::AbsVal>>,
+    /// Per seedable function, the join of the argument ranges observed at its call sites in the
+    /// current analysis round (`AbsVal::Top` for an unknown or missing argument).
+    /// `None` slots have not been observed yet; a named or spread call marks the function in
+    /// `unmapped_calls` instead, which drops every seed for it.
+    pub(crate) observed_args: std::cell::RefCell<HashMap<String, Vec<Option<crate::int_range::domain::AbsVal>>>>,
+    /// Seedable functions entered by a named or spread call in the current round.
+    pub(crate) unmapped_calls: std::cell::RefCell<HashSet<String>>,
+}
+
+/// Number of leading parameters whose call-site ranges are tracked.
+pub(crate) const SEEDED_PARAMS: usize = 16;
+
+/// Builtins that invoke a callable argument (mirrors the shared builtin callback contract, plus
+/// the registration helpers that do the same).
+const CALLBACK_BUILTINS: &[&str] = &[
+    "array_all", "array_any", "array_filter", "array_find", "array_find_key", "array_map",
+    "array_reduce", "array_udiff", "array_uintersect", "array_udiff_assoc", "array_udiff_uassoc",
+    "array_uintersect_assoc", "array_uintersect_uassoc", "array_diff_uassoc", "array_diff_ukey",
+    "array_intersect_uassoc", "array_intersect_ukey", "array_walk", "array_walk_recursive",
+    "call_user_func", "call_user_func_array", "forward_static_call", "forward_static_call_array",
+    "iterator_apply", "mb_ereg_replace_callback", "ob_start", "pcntl_signal",
+    "preg_replace_callback", "preg_replace_callback_array", "register_shutdown_function",
+    "register_tick_function", "header_register_callback", "set_error_handler",
+    "set_exception_handler", "spl_autoload_register", "spl_autoload_unregister", "uasort",
+    "uksort", "usort", "is_callable", "function_exists", "func_get_args", "eval",
+    "session_set_save_handler", "stream_wrapper_register", "xml_set_element_handler",
+    "xml_set_character_data_handler", "sapi_windows_set_ctrl_handler",
+];
+
+/// Returns true when `expr` can make the program enter a user function through a runtime name.
+fn reaches_functions_dynamically(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ExprCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::IncludeValue { .. }
+        | ExprKind::NewDynamic { .. }
+        | ExprKind::NewDynamicObject { .. } => true,
+        ExprKind::FunctionCall { name, args } => {
+            let key = symbol_key(name.as_str());
+            CALLBACK_BUILTINS.contains(&key.as_str())
+                && !args.iter().all(|arg| matches!(arg.kind, ExprKind::Closure { .. }))
+        }
+        ExprKind::NewObject { class_name, .. } => {
+            symbol_key(class_name.as_str()).contains("reflection")
+        }
+        ExprKind::StaticMethodCall { method, .. } => {
+            method.eq_ignore_ascii_case("fromCallable")
+        }
+        _ => false,
+    }
 }
 
 impl ProgramInfo {
@@ -92,13 +151,28 @@ impl ProgramInfo {
         let mut names = HashSet::new();
         let mut globals_targets = HashSet::new();
         let mut globals_unknown = false;
+        let mut dynamic_entry = false;
+        let mut string_names = HashSet::new();
+        let mut declared = HashSet::new();
         walk_stmts(program, true, &mut |node| match node {
             Node::Stmt(stmt) => {
+                if let StmtKind::FunctionDecl { name, type_params, .. } = &stmt.kind {
+                    if type_params.is_empty() {
+                        declared.insert(symbol_key(name));
+                    }
+                }
+                if matches!(stmt.kind, StmtKind::Include { .. }) {
+                    dynamic_entry = true;
+                }
                 info.observe_stmt(stmt);
                 stmt_writes(stmt, &mut names);
                 note_globals_write(stmt, &mut globals_targets, &mut globals_unknown);
             }
             Node::Expr(expr) => {
+                if let ExprKind::StringLiteral(text) = &expr.kind {
+                    string_names.insert(symbol_key(text));
+                }
+                dynamic_entry |= reaches_functions_dynamically(expr);
                 expr_writes(expr, &mut names);
                 if let ExprKind::Variable(name) = &expr.kind {
                     names.insert(name.clone());
@@ -129,7 +203,30 @@ impl ProgramInfo {
         }
         info.top_level_pinned.extend(globals_targets);
         info.all_top_level_pinned = globals_unknown;
+        if !dynamic_entry {
+            info.seedable = declared.difference(&string_names).cloned().collect();
+        }
         info
+    }
+
+    /// Records the argument ranges of one direct call to a seedable user function.
+    pub(crate) fn observe_call(&self, name: &str, args: &[crate::int_range::domain::AbsVal], positional: bool) {
+        let key = symbol_key(name);
+        if !self.seedable.contains(&key) {
+            return;
+        }
+        if !positional {
+            self.unmapped_calls.borrow_mut().insert(key);
+            return;
+        }
+        let mut observed = self.observed_args.borrow_mut();
+        // Slots cover the first `SEEDED_PARAMS` parameters; later ones are never seeded.
+        let entry = observed.entry(key).or_insert_with(|| vec![None; SEEDED_PARAMS]);
+        for (index, slot) in entry.iter_mut().enumerate() {
+            // A missing trailing argument takes the parameter's default: forget its range.
+            let value = args.get(index).copied().unwrap_or(crate::int_range::domain::AbsVal::Top);
+            *slot = Some(slot.map_or(value, |seen| seen.join(value)));
+        }
     }
 
     /// Records the declaration facts carried by one statement.
