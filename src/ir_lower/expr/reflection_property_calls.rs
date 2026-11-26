@@ -300,10 +300,13 @@ pub(super) fn lower_reflection_property_set_static_value(
     lower_ignored_reflection_argument(ctx, &ignored_object);
     let value = lower_expr(ctx, &value_arg);
     let value = retype_reflection_static_property_value(ctx, declaring_class, property, value, expr.span);
-    // A string is persisted into the slot and the source released, exactly as the direct
+    // A string offset byte is already a stable view and keeps its direct store. Any other
+    // string is persisted into the slot and the source released, exactly as the direct
     // `Class::$prop = ...` store does (`static_property_writes.rs`): many producers hand back a
     // slice of the shared concat scratch, which the next string operation overwrites.
-    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str {
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str
+        && !is_stable_byte_view(ctx, value)
+    {
         let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(expr.span));
         store_reflection_static_property_by_class_name(
             ctx,
@@ -490,4 +493,13 @@ pub(super) fn reflection_function_reflected_target(
         };
         ctx.reflection_function_local(name)
     })
+}
+
+/// Returns true for a string-offset byte read, whose result never aliases the concat scratch.
+fn is_stable_byte_view(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    let function = ctx.builder.function();
+    let Some(crate::ir::ValueDef::Instruction { inst, .. }) = function.value(value.value).map(|v| v.def) else {
+        return false;
+    };
+    function.instruction(inst).is_some_and(|producer| producer.op == Op::StrCharAt)
 }

@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Method calls on a temporary receiver (`$shapes[$i]->area()`) transfer the fetched reference to the call instead of taking and dropping a second one, reads of `$this->prop` inside an instance method skip the null-receiver guard (`$this` can never be null there), and functions without string concatenation no longer save the concat-buffer offset in their prologue (polymorphic-call benchmark: 8.5G → 7.0G instructions).
+- `ReflectionProperty::setValue()` on a static `string` property keeps its direct store for a string-offset byte, which is already a stable view; every other string is still persisted into the slot.
 - A late machine peephole drops the dead stack spill around single-argument calls (`sub rsp, 16` / `mov [rsp], rax` / `add rsp, 16` on x86_64, `str x0, [sp, #-16]!` / `ldr` / `add sp` on AArch64), about 5% fewer instructions on recursive call-heavy code such as `fib`.
 - `int` functions return `c ? a : b` as two returns instead of merging the arms into a boxed `int|float` only to unbox it at the return boundary; each arm keeps the native fused checked arithmetic (recursive fib: 44.4G → 6.1G instructions). An overflowing checked `+`/`-`/`*` fused into an `int` return whose promoted double still fits (`PHP_INT_MIN - 1` lands exactly on -2^63) now returns that int like PHP instead of throwing, and the return `TypeError` names an anonymous function `{closure}`.
 
