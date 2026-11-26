@@ -212,7 +212,23 @@ pub(super) fn lower_static_callable_call(
                 ctx, &mut arg_values, Some(&signature), &return_alias, &php_type, expr.span,
             );
             let mut operands = arg_values.clone();
-            append_closure_capture_operands(&mut operands, &captures);
+            // A by-value capture is a trailing parameter the closure may return unchanged
+            // (`fn() => $k`). The call result is then released as the caller's owner, so the
+            // capture is leased first and the lease retired against the result afterwards,
+            // as alias-returning string arguments are; the source local keeps its own owner.
+            let capture_leases =
+                lease_returnable_closure_captures(ctx, &captures, &signature, &php_type, expr.span);
+            let leased_captures: Vec<ClosureCapture> = captures
+                .iter()
+                .map(|capture| ClosureCapture {
+                    value: capture_leases
+                        .iter()
+                        .find(|(source, _)| *source == capture.value)
+                        .map_or(capture.value, |(_, lease)| *lease),
+                    by_ref_local: capture.by_ref_local.clone(),
+                })
+                .collect();
+            append_closure_capture_operands(&mut operands, &leased_captures);
             let data = ctx.intern_function_name(&name);
             let call = ctx.emit_value(
                 Op::Call,
@@ -222,6 +238,15 @@ pub(super) fn lower_static_callable_call(
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
             );
+            for (_, lease) in &capture_leases {
+                ctx.emit_void(
+                    Op::ReleaseUnlessAliases,
+                    vec![*lease, call.value],
+                    None,
+                    Op::ReleaseUnlessAliases.default_effects(),
+                    Some(expr.span),
+                );
+            }
             ctx.invalidate_callable_capture_locals(&captures);
             ctx.invalidate_callable_ref_argument_locals(Some(&signature), &operands);
             let call = finish_reference_return_call(
@@ -300,6 +325,38 @@ pub(super) fn resolve_static_string_callable(
 }
 
 /// Appends captured closure values after caller-visible operands for hidden ABI params.
+/// Leases each by-value string capture a direct closure call may hand back as its result,
+/// returning `(source, lease)` pairs. A returned string parameter comes back as the same
+/// payload, unlike containers and boxes, which the callee retains on return. Objects (including
+/// `$this`), reference captures and by-reference returns keep the borrowed capture.
+fn lease_returnable_closure_captures(
+    ctx: &mut LoweringContext<'_, '_>,
+    captures: &[ClosureCapture],
+    signature: &crate::types::FunctionSig,
+    result_type: &PhpType,
+    span: Span,
+) -> Vec<(ValueId, ValueId)> {
+    if signature.by_ref_return || result_type.codegen_repr() != PhpType::Str {
+        return Vec::new();
+    }
+    let mut leases = Vec::new();
+    for capture in captures {
+        if capture.by_ref_local.is_some() || leases.iter().any(|(source, _)| *source == capture.value) {
+            continue;
+        }
+        let ty = ctx.builder.value_php_type(capture.value).codegen_repr();
+        if ty != PhpType::Str {
+            continue;
+        }
+        let value = LoweredValue { value: capture.value, ir_type: ctx.builder.value_type(capture.value) };
+        let lease = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
+        if lease.value != capture.value {
+            leases.push((capture.value, lease.value));
+        }
+    }
+    leases
+}
+
 pub(super) fn append_closure_capture_operands(operands: &mut Vec<ValueId>, captures: &[ClosureCapture]) {
     operands.extend(captures.iter().map(|capture| capture.value));
 }

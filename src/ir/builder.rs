@@ -308,6 +308,14 @@ impl<'f> Builder<'f> {
                 }
                 continue;
             }
+            // A native static-property read lends the property slot (the retained eval getter
+            // is emitted `Owned` and skipped above), so its release would free the property.
+            if source_inst.op == Op::LoadStaticProperty {
+                if Ownership::php_type_needs_lifetime_tracking(&value.php_type) {
+                    prune.push(index);
+                }
+                continue;
+            }
             if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }

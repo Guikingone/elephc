@@ -1630,3 +1630,28 @@ fn test_global_counter_advanced_by_callee_keeps_sparse_keys() {
     );
     assert_eq!(nested, "{\"2\":1,\"5\":1,\"8\":1}\n");
 }
+
+/// An untyped static property used as an array key lends its slot, so the write must not
+/// release it (the second call read a freed string).
+#[test]
+fn test_static_property_array_key_is_not_released() {
+    let out = compile_and_run(
+        "<?php class A { public static $sp; } \
+         function f() { $o = []; $o[A::$sp] = 1; $o[A::$sp] .= \"x\"; return $o; } \
+         A::$sp = str_repeat(\"s\", $argc + 2); \
+         echo json_encode(f()), json_encode(f()), A::$sp, \"\\n\";",
+    );
+    assert_eq!(out, "{\"sss\":\"1x\"}{\"sss\":\"1x\"}sss\n");
+}
+
+/// A closure called directly that returns its by-value capture (`fn() => $k`) hands back an
+/// owner of its own: releasing the result must not free the captured source variable.
+#[test]
+fn test_direct_closure_call_returning_capture_keeps_source() {
+    let out = compile_and_run(
+        "<?php $k = str_repeat(\"k\", $argc + 2); \
+         for ($z = 0; $z < 3; $z++) { $r = []; $c = fn() => $k; $r[] = $c(); echo json_encode($r); } \
+         $d = function () use ($k) { return $k; }; echo $d(); $d = null; echo $k, \"\\n\";",
+    );
+    assert_eq!(out, "[\"kkk\"][\"kkk\"][\"kkk\"]kkkkkk\n");
+}
