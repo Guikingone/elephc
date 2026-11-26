@@ -986,7 +986,12 @@ impl Checker {
                         body,
                         self.local_conditional_depth,
                     )
-                    .filter(|counter| !self.ref_aliased_locals.contains(&counter.name));
+                    .filter(|counter| !self.ref_aliased_locals.contains(&counter.name))
+                    // Storage another frame can write is not provable from the body either: a
+                    // callee's `global $i`, a recursive call's `static $i`, or the caller behind
+                    // a by-reference parameter or capture can move the counter during any call
+                    // the body makes, so `$a[$i] = f()` would land past the array's end.
+                    .filter(|counter| self.counter_storage_is_frame_private(&counter.name));
                 // Cloned first: the stabilizer takes `&mut Checker`, so the name cannot be
                 // borrowed out of `self` across the call.
                 let packed_counter_name = self

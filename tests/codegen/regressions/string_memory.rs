@@ -1597,3 +1597,36 @@ echo implode(",", $kept);
     assert_eq!(out.stdout, "a0,aa10,aaa20,a30");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A bare `global` variable used as an array key is read straight from the global cell, so the
+/// write must not release it: doing so freed the variable while it was still bound.
+#[test]
+fn test_global_variable_array_key_is_not_released() {
+    let key = compile_and_run(
+        "<?php function f() { global $k; $o = []; for ($n = 0; $n < 5; $n++) { $o[$k] = $n; } return $o; } \
+         $k = $argc > 5 ? 1 : \"a\"; echo json_encode(f()), $k, \"\\n\";",
+    );
+    assert_eq!(key, "{\"a\":4}a\n");
+    let string_key = compile_and_run(
+        "<?php function f() { global $s; $o = []; $o[$s] = 1; $o[$s . \"y\"] = 2; return $o; } \
+         $s = str_repeat(\"k\", $argc + 2); echo json_encode(f()), $s, \"\\n\";",
+    );
+    assert_eq!(string_key, "{\"kkk\":1,\"kkky\":2}kkk\n");
+}
+
+/// A top-level `for` counter a callee advances through `global $i` keys the array PHP's way
+/// (the key is read after the call), without freeing the counter.
+#[test]
+fn test_global_counter_advanced_by_callee_keeps_sparse_keys() {
+    let top = compile_and_run(
+        "<?php $i = 0; function g(): int { global $i; $i += 2; return 1; } \
+         $o = []; for ($i = 0; $i < 7; $i++) { $o[$i] = g(); } echo json_encode($o), \"\\n\";",
+    );
+    assert_eq!(top, "{\"2\":1,\"5\":1,\"8\":1}\n");
+    let nested = compile_and_run(
+        "<?php function g(): int { global $i; $i += 2; return 1; } \
+         function m() { global $i; $o = []; for ($i = 0; $i < 7; $i++) { $o[$i] = g(); } return $o; } \
+         echo json_encode(m()), \"\\n\";",
+    );
+    assert_eq!(nested, "{\"2\":1,\"5\":1,\"8\":1}\n");
+}

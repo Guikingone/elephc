@@ -1053,6 +1053,20 @@ impl Checker {
         self.null_probe_scope_is_top_level && self.program_global_names.contains(name)
     }
 
+    /// Returns `true` when no other frame can write the local `name`: it is neither a `global`
+    /// or `static` binding, nor a by-reference parameter or capture, nor a top-level variable
+    /// some function-like body declares `global`.
+    pub(crate) fn counter_storage_is_frame_private(&self, name: &str) -> bool {
+        !self.active_globals.contains(name)
+            && !self.active_statics.contains(name)
+            && !self.active_ref_params.contains(name)
+            && !self.active_external_ref_bindings.contains(name)
+            && !(self.current_function.is_none()
+                && self.current_class.is_none()
+                && self.closure_depth == 0
+                && self.program_global_names.contains(name))
+    }
+
     /// Enters a fresh local-binding eligibility scope for one function/method/closure/top-level
     /// body, seeding the parameters (all of them at binding depth 0, and the type-hinted ones
     /// additionally as declared).

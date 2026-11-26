@@ -298,6 +298,16 @@ impl<'f> Builder<'f> {
             let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
                 continue;
             };
+            // A global load reads the boxed global cell's word without retaining it, so a
+            // provisional release of a same-storage view would free the variable itself.
+            if source_inst.op == Op::LoadGlobal {
+                if Ownership::php_type_needs_lifetime_tracking(&value.php_type)
+                    && !local_load_coercion_owns_result(&PhpType::Mixed, &value.php_type)
+                {
+                    prune.push(index);
+                }
+                continue;
+            }
             if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }
