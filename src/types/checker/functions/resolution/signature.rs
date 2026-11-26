@@ -296,15 +296,7 @@ impl Checker {
                     )?;
                 }
             }
-            // A direct-only function's exact `array` return takes the body's concrete array type
-            // too: every caller is a direct call this checker types against that signature.
-            // Only scalar-element shapes are specialized: a mixed, array or object element keeps
-            // the boxed contract the builtins that consume a returned array expect.
-            let direct_array_return = declared_ret.is_php_array()
-                && crate::int_range::is_direct_only_function(name)
-                && inferred_specific_array_type_from_infos(&all_return_infos)
-                    .is_some_and(|ty| scalar_element_array(&ty));
-            return_type = if (Self::is_generic_array_hint(&declared_ret) || direct_array_return)
+            return_type = if Self::is_generic_array_hint(&declared_ret)
                 && matches!(inferred_specific_array_type_from_infos(&all_return_infos), Some(_))
             {
                 inferred_specific_array_type_from_infos(&all_return_infos).unwrap()
@@ -537,14 +529,4 @@ fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
         }
     }
     sig
-}
-
-/// Returns true for a list or hash whose element type is one concrete scalar.
-fn scalar_element_array(ty: &PhpType) -> bool {
-    let element = match ty {
-        PhpType::Array(element) => element.as_ref(),
-        PhpType::AssocArray { value, .. } => value.as_ref(),
-        _ => return false,
-    };
-    matches!(element.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool)
 }

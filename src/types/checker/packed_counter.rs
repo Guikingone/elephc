@@ -362,34 +362,11 @@ fn expr_preserves_counter(expr: &Expr, counter: &str) -> bool {
     preserved
 }
 
-thread_local! {
-    /// Named functions the running checker resolved as taking every argument by value. Filled
-    /// by `with_by_value_callees` around one `packed_for_counter` query; empty otherwise, so a
-    /// query without it keeps rejecting every call that names the counter.
-    static BY_VALUE_CALLEES: std::cell::RefCell<HashSet<String>> = std::cell::RefCell::new(HashSet::new());
-}
-
-/// Runs `query` with `by_value` as the set of callees known to bind no argument by reference.
-pub(super) fn with_by_value_callees<R>(by_value: HashSet<String>, query: impl FnOnce() -> R) -> R {
-    BY_VALUE_CALLEES.with(|cell| *cell.borrow_mut() = by_value);
-    let result = query();
-    BY_VALUE_CALLEES.with(|cell| cell.borrow_mut().clear());
-    result
-}
-
 /// Returns whether a call can pass the counter's storage to a reference parameter.
 fn call_may_alias_counter(expr: &Expr, counter: &str) -> bool {
-    if let ExprKind::FunctionCall { name, args } = &expr.kind {
-        let by_value = BY_VALUE_CALLEES.with(|cell| cell.borrow().contains(name.as_str()));
-        // A by-value callee only receives a copy; spread and named arguments still bind by
-        // the callee's declaration, which is all by value too.
-        if by_value {
-            return false;
-        }
-        return args.iter().any(|arg| argument_names_counter(arg, counter));
-    }
     let args = match &expr.kind {
-        ExprKind::ClosureCall { args, .. }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
         | ExprKind::ExprCall { args, .. }
         | ExprKind::MethodCall { args, .. }
         | ExprKind::NullsafeMethodCall { args, .. }

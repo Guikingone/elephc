@@ -157,7 +157,9 @@ impl ProgramInfo {
         walk_stmts(program, true, &mut |node| match node {
             Node::Stmt(stmt) => {
                 if let StmtKind::FunctionDecl { name, type_params, .. } = &stmt.kind {
-                    if type_params.is_empty() {
+                    // An `#[Export]` function is a host entry point: hosts call it with any
+                    // argument, so its call sites never bound its parameters.
+                    if type_params.is_empty() && !crate::exports::has_export_attribute(stmt) {
                         declared.insert(symbol_key(name));
                     }
                 }

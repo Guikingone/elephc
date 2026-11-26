@@ -50,8 +50,6 @@ pub(crate) type Facts = HashMap<(Span, ArithKind), bool>;
 #[derive(Debug, Default, Clone)]
 pub struct OverflowFacts {
     facts: Facts,
-    /// User functions (symbol keys) the program can only enter through direct calls.
-    direct_only: std::collections::HashSet<String>,
 }
 
 impl OverflowFacts {
@@ -64,7 +62,6 @@ impl OverflowFacts {
     pub fn intersect(mut self, other: &OverflowFacts) -> OverflowFacts {
         self.facts
             .retain(|key, proven| *proven && other.facts.get(key).copied().unwrap_or(false));
-        self.direct_only.retain(|name| other.direct_only.contains(name));
         self
     }
 }
@@ -94,7 +91,7 @@ pub fn analyze_program(program: &Program, web: bool) -> OverflowFacts {
         facts = Facts::new();
         analyzer::Analyzer::analyze_script(&info, &mut facts, program, web);
     }
-    OverflowFacts { facts, direct_only: info.seedable.clone() }
+    OverflowFacts { facts }
 }
 
 /// Maximum number of seeding rounds after the first analysis (one per call-chain level).
@@ -133,16 +130,6 @@ pub fn is_proven(span: Span, kind: ArithKind) -> bool {
     })
 }
 
-/// Returns `true` when the installed facts show that the user function `name` is only ever
-/// entered through direct calls (no runtime-name dispatch can reach it), so a signature derived
-/// from its call sites binds every call.
-pub fn is_direct_only_function(name: &str) -> bool {
-    let key = scan::symbol_key(name);
-    ACTIVE.with(|active| {
-        active.borrow().as_ref().is_some_and(|facts| facts.direct_only.contains(&key))
-    })
-}
-
 /// Returns `true` when the installed facts prove a binary `+`, `-` or `*` site overflow-free.
 pub fn is_proven_binop(op: &crate::parser::ast::BinOp, span: Span) -> bool {
     use crate::parser::ast::BinOp;
@@ -164,19 +151,6 @@ pub fn is_proven_step(expr: &crate::parser::ast::Expr) -> bool {
         _ => return false,
     };
     is_proven(expr.span, kind)
-}
-
-/// Returns the names of every direct function call in `body`, nested bodies included.
-pub(crate) fn called_function_names(body: &[crate::parser::ast::Stmt]) -> Vec<crate::names::Name> {
-    let mut names = Vec::new();
-    scan::walk_stmts(body, true, &mut |node| {
-        if let scan::Node::Expr(expr) = node {
-            if let crate::parser::ast::ExprKind::FunctionCall { name, .. } = &expr.kind {
-                names.push(name.clone());
-            }
-        }
-    });
-    names
 }
 
 #[cfg(test)]

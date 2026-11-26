@@ -252,3 +252,9 @@ fn recursive_seeding_stays_sound() {
     let src = "<?php\nfunction f(int $n): int {\n  if ($n > 1000) { return 0; }\n  return f($n * 2 + 1) + $n;\n}\necho f(1);\n";
     assert_not_proven(src, 4, ArithKind::Add);
 }
+
+#[test]
+fn exported_function_is_not_seeded() {
+    let src = "<?php\n#[Export]\nfunction a(int $i, int $j): int {\n  return $i + $j;\n}\necho a(1, 2);\n";
+    assert_not_proven(src, 4, ArithKind::Add);
+}

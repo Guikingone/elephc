@@ -281,21 +281,15 @@ impl Checker {
                 .is_some_and(|(_, ty)| {
                     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                 });
-            // An exact `array` hint of a function only ever entered by direct calls joins its
-            // call sites too; a runtime-name call could otherwise bind any layout.
-            let direct_php_array = seen_idx < regular_param_count
-                && param_types.get(seen_idx).is_some_and(|(_, ty)| ty.is_php_array())
-                && !stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
-                && crate::int_range::is_direct_only_function(name);
             if seen_idx < regular_param_count
-                && (!declared || generic_array_param || direct_php_array)
+                && (!declared || generic_array_param)
                 && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
                 && (!matches!(actual_ty, PhpType::Void)
                     || crate::codegen::sentinels::null_repr_is_tagged())
             {
                 let key = (name.to_string(), seen_idx);
                 let seen = self.param_specialization_seen.contains(&key);
-                if (Self::is_generic_array_hint(&param_types[seen_idx].1) || direct_php_array)
+                if Self::is_generic_array_hint(&param_types[seen_idx].1)
                     && !seen
                     && is_specializable_array_argument(&actual_ty)
                 {
@@ -307,10 +301,9 @@ impl Checker {
                     // array-typed instead of widening to `Mixed`. The seen set marks the discard,
                     // so every LATER call widens instead of re-adopting.
                     self.param_specialization_seen.insert(key);
-                    let specialized = Self::specialize_direct_array_param_hint(
+                    let specialized = Self::specialize_generic_array_param_hint(
                         &param_types[seen_idx].1,
                         &actual_ty,
-                        direct_php_array,
                     );
                     if param_types[seen_idx].1 != specialized {
                         param_types[seen_idx].1 = specialized;

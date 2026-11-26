@@ -615,11 +615,7 @@ impl Checker {
                     ) {
                         declared_ty.clone()
                     } else {
-                        Self::specialize_direct_array_param_hint(
-                            &declared_ty,
-                            &ty,
-                            !supplied_reference && crate::int_range::is_direct_only_function(name),
-                        )
+                        Self::specialize_generic_array_param_hint(&declared_ty, &ty)
                     };
                     param_types.push((decl.params[arg_idx].clone(), specialized_ty));
                     arg_idx += 1;

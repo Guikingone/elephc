@@ -523,24 +523,6 @@ impl Checker {
     /// one call site is not a valid contract for later calls. Indexed object arrays therefore
     /// stay `Array(Mixed)`, while associative arrays retain their key/storage shape but erase an
     /// object value to `Mixed`. Scalar element types remain specialized for existing inference.
-    /// Specializes a by-value parameter of a direct-only function (see
-    /// `crate::int_range::is_direct_only_function`): an exact PHP `array` hint is then joined
-    /// over every call site like the generic `array<mixed>` hint, because no runtime-name call
-    /// can bind it with a layout the call sites did not show.
-    pub(crate) fn specialize_direct_array_param_hint(
-        declared_ty: &PhpType,
-        actual_ty: &PhpType,
-        direct_by_value: bool,
-    ) -> PhpType {
-        if direct_by_value && declared_ty.is_php_array() {
-            return Self::specialize_generic_array_param_hint(
-                &PhpType::Array(Box::new(PhpType::Mixed)),
-                actual_ty,
-            );
-        }
-        Self::specialize_generic_array_param_hint(declared_ty, actual_ty)
-    }
-
     pub(crate) fn specialize_generic_array_param_hint(
         declared_ty: &PhpType,
         actual_ty: &PhpType,

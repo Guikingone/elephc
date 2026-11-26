@@ -267,10 +267,10 @@ fn test_reflection_static_string_store_persists_converted_int() {
     assert_eq!(out, "12345|zzzzzzzzzy\nab1cd|qqqqqqqqqy\n");
 }
 
-/// A `for` counter passed bare to a by-value user function keeps the filled array packed,
-/// while a by-reference callee that advances the counter still yields PHP's sparse keys.
+/// A `for` counter passed to a by-value user function fills a list, while a by-reference
+/// callee that advances the counter yields PHP's sparse keys.
 #[test]
-fn test_packed_counter_survives_by_value_calls_only() {
+fn test_counter_filled_array_keys_follow_callee_writes() {
     let out = compile_and_run(
         "<?php function v(int $i): float { return $i * 0.5; } \
          function bump(&$i): float { $i++; return 1.0; } \
