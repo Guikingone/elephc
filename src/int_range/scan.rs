@@ -120,6 +120,14 @@ const CALLBACK_BUILTINS: &[&str] = &[
     "xml_set_character_data_handler", "sapi_windows_set_ctrl_handler",
 ];
 
+/// Builtin classes whose constructor stores a callable and invokes it later.
+const CALLBACK_CLASSES: &[&str] = &[
+    "fiber", "callbackfilteriterator", "recursivecallbackfilteriterator",
+];
+
+/// Builtin methods that invoke a callable argument (`ArrayObject`/`ArrayIterator` sorting).
+const CALLBACK_METHODS: &[&str] = &["uasort", "uksort"];
+
 /// Returns true when `expr` can make the program enter a user function through a runtime name.
 fn reaches_functions_dynamically(expr: &Expr) -> bool {
     match &expr.kind {
@@ -134,8 +142,17 @@ fn reaches_functions_dynamically(expr: &Expr) -> bool {
             CALLBACK_BUILTINS.contains(&key.as_str())
                 && !args.iter().all(|arg| matches!(arg.kind, ExprKind::Closure { .. }))
         }
-        ExprKind::NewObject { class_name, .. } => {
-            symbol_key(class_name.as_str()).contains("reflection")
+        ExprKind::NewObject { class_name, args } => {
+            let key = symbol_key(class_name.as_str());
+            key.contains("reflection")
+                || (CALLBACK_CLASSES.contains(&key.trim_start_matches('\\'))
+                    && !args.iter().all(|arg| matches!(arg.kind, ExprKind::Closure { .. })))
+        }
+        // `value |> $callable` invokes whatever the right-hand side names at run time.
+        ExprKind::Pipe { callable, .. } => !matches!(callable.kind, ExprKind::Closure { .. }),
+        ExprKind::MethodCall { method, args, .. } | ExprKind::NullsafeMethodCall { method, args, .. } => {
+            CALLBACK_METHODS.iter().any(|name| method.eq_ignore_ascii_case(name))
+                && !args.iter().all(|arg| matches!(arg.kind, ExprKind::Closure { .. }))
         }
         ExprKind::StaticMethodCall { method, .. } => {
             method.eq_ignore_ascii_case("fromCallable")

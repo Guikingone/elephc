@@ -258,3 +258,16 @@ fn exported_function_is_not_seeded() {
     let src = "<?php\n#[Export]\nfunction a(int $i, int $j): int {\n  return $i + $j;\n}\necho a(1, 2);\n";
     assert_not_proven(src, 4, ArithKind::Add);
 }
+
+#[test]
+fn native_callable_consumers_disable_parameter_seeding() {
+    for entry in [
+        "$f = new Fiber(chr(96 + $argc));\n$f->start(1);\n",
+        "$it = new CallbackFilterIterator(new ArrayIterator([1]), chr(96 + $argc));\n",
+        "$c = chr(96 + $argc);\necho 1 |> $c;\n",
+        "$o = new ArrayObject([2, 1]);\n$o->uasort(chr(96 + $argc));\n",
+    ] {
+        let src = format!("<?php\nfunction a(int $i, int $j): int {{\n  return $i + $j;\n}}\necho a(1, 2);\n{entry}");
+        assert_not_proven(&src, 3, ArithKind::Add);
+    }
+}
