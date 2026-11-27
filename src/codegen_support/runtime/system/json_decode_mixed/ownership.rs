@@ -87,7 +87,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_json_active_flags", 0);
 
     // -- restore throwing semantics only after the recursive parser has unwound --
+    emitter.instruction("call __rt_json_match_build");                          // pair deep brackets once so element scans skip nested containers
     emitter.instruction("call __rt_json_decode_mixed_value");                   // build the fresh graph or release partial owners and return zero
+    super::match_table::emit_release_x86_64(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the completed parser result
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the original complete flag mask
     abi::emit_store_reg_to_symbol(emitter, "r10", "_json_active_flags", 0);

@@ -809,6 +809,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_preg_exec_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
     out.push_str(&comm_directive("_json_active_depth", 8, target));
+    out.push_str(&comm_directive("_json_match_table", 8, target));
     out.push_str(&comm_directive("_json_indent_depth", 8, target));
     out.push_str(&comm_directive("_json_depth_limit", 8, target));
     out.push_str(&comm_directive("_json_validate_idx", 8, target));

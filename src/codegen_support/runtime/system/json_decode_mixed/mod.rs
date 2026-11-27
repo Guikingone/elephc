@@ -15,6 +15,7 @@ mod aarch64;
 mod arrays;
 mod integer_prefix;
 mod integers;
+mod match_table;
 mod objects;
 mod ownership;
 mod whitespace;
@@ -54,6 +55,7 @@ pub(crate) fn emit_json_decode_mixed(emitter: &mut Emitter) {
     integers::emit(emitter);
     if emitter.target.arch == Arch::X86_64 {
         whitespace::emit(emitter);
+        match_table::emit_x86_64(emitter);
         x86_64::emit(emitter);
         arrays::emit_x86_64(emitter);
         objects::emit_x86_64(emitter);

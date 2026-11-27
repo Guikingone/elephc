@@ -450,6 +450,9 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_decode_object_real_value_done_x");        // branch on the current JSON decoder condition
     emitter.instruction("jmp __rt_json_decode_object_real_value_advance_x");    // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_open_x");
+    super::match_table::emit_scanner_skip_x86_64(
+        emitter, "__rt_json_decode_object_real_value_advance_x", "__rt_json_decode_object_real_value",
+    );
     emitter.instruction("add r10, 1");                                          // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_object_real_value_advance_x");    // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_object_real_value_close_inner_x");

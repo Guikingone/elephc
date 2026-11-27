@@ -76,6 +76,8 @@ mod coordinate_regressions;
 
 #[path = "json/token_dispatch.rs"]
 mod token_dispatch;
+#[path = "json/deep_matching.rs"]
+mod deep_matching;
 
 #[path = "json/packed_integer.rs"]
 mod packed_integer;

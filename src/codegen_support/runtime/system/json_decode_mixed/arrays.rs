@@ -356,6 +356,9 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_decode_array_real_scan_done_x");          // comma at depth 0 → element separator
     emitter.instruction("jmp __rt_json_decode_array_real_scan_advance_x");      // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_array_real_scan_open_x");
+    super::match_table::emit_scanner_skip_x86_64(
+        emitter, "__rt_json_decode_array_real_scan_advance_x", "__rt_json_decode_array_real_scan",
+    );
     emitter.instruction("add r10, 1");                                          // update the JSON decoder cursor or counter
     emitter.instruction("jmp __rt_json_decode_array_real_scan_advance_x");      // continue in the JSON decoder control path
     emitter.label("__rt_json_decode_array_real_scan_close_x");
