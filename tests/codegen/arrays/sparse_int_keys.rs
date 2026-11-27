@@ -504,3 +504,64 @@ echo (string)($y ?? -1), "\n";
 "#);
     assert_eq!(out, "1\n");
 }
+
+/// A proven `array<float>` (and a typed clone's own float-list result) passed to an untyped
+/// `array` parameter reaches a float-typed clone: chained calls stay typed, a callee write with
+/// a negative or skipping key still promotes the copy to a hash, and a dynamic call with a mixed
+/// list keeps the original.
+#[test]
+fn test_float_list_reaches_typed_clone_of_untyped_param() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function A($i, $j) { return 1.0 / ((($i + $j) * ($i + $j + 1) >> 1) + $i + 1); }
+function Av($n, $v) {
+    $out = [];
+    for ($i = 0; $i < $n; $i++) { $s = 0.0; for ($j = 0; $j < $n; $j++) { $s += A($i, $j) * $v[$j]; } $out[$i] = $s; }
+    return $out;
+}
+function scale($v, $k) { $v[$k] = -1.5; return $v; }
+function run(int $n) {
+    $u = [];
+    for ($i = 0; $i < $n; $i++) { $u[$i] = 1.0; }
+    $v = Av($n, $u);
+    $w = Av($n, $v);
+    $x = scale($w, -3);
+    $y = scale($w, $n + 2);
+    $f = 'Av';
+    $z = $f($n, [1, 2.5, "3"]);
+    return json_encode($u) . " " . json_encode($w) . " " . json_encode($x) . " " . json_encode($y) . " " . json_encode($z);
+}
+echo run(3), "\n";
+var_dump(function_exists('Av'));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[1,1,1] [2.1678418803418804,0.7593376068376068,0.39209949594564975] {\"0\":2.1678418803418804,\"1\":0.7593376068376068,\"2\":0.39209949594564975,\"-3\":-1.5} {\"0\":2.1678418803418804,\"1\":0.7593376068376068,\"2\":0.39209949594564975,\"5\":-1.5} [3,1.2083333333333333,0.6752136752136753]\nbool(true)\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A `for` counter passed by value to a user function keeps its packed array, while a counter a
+/// by-reference closure capture, a by-reference parameter or a `global` binding advances still
+/// produces PHP's sparse hash.
+#[test]
+fn test_counter_aliasing_callees_keep_sparse_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function fill($a, $n) { for ($k = 0; $k < $n; $k++) { $a[$k] = $k * 0.5; } return $a; }
+function bump(&$i) { $i += 3; }
+function viaglobal() { global $i; $i += 3; }
+function run(int $n) {
+    $o = [];
+    for ($i = 0; $i < $n; $i++) { $o[$i] = 1.0; $c = function () use (&$i) { $i += 2; }; $c(); }
+    $p = [];
+    for ($i = 0; $i < $n; $i++) { $p[$i] = 2.0; bump($i); }
+    $q = [];
+    for ($i = 0; $i < $n; $i++) { $q[$i] = fill([], 2)[1]; }
+    return json_encode($o) . " " . json_encode($p) . " " . json_encode($q);
+}
+echo run(9), "\n";
+$r = [];
+for ($i = 0; $i < 9; $i++) { $r[$i] = 0.25; viaglobal(); }
+echo json_encode($r), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"0\":1,\"3\":1,\"6\":1} {\"0\":2,\"4\":2,\"8\":2} [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]\n{\"0\":0.25,\"4\":0.25,\"8\":0.25}\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

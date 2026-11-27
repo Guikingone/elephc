@@ -352,6 +352,8 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
 fn expr_preserves_counter(expr: &Expr, counter: &str) -> bool {
     if assignment_target_name(expr).is_some_and(|name| name == counter)
         || call_may_alias_counter(expr, counter)
+        || closure_captures_counter_by_ref(expr, counter)
+        || calls_scope_builtin(expr)
     {
         return false;
     }
@@ -362,11 +364,53 @@ fn expr_preserves_counter(expr: &Expr, counter: &str) -> bool {
     preserved
 }
 
+thread_local! {
+    /// `(callee, position)` pairs the running checker resolved as a user function binding that
+    /// positional argument by value. Filled by `with_by_value_counter_args` around one
+    /// `packed_for_counter` query; empty otherwise, so a query without it keeps rejecting every
+    /// call that names the counter.
+    static BY_VALUE_COUNTER_ARGS: std::cell::RefCell<HashSet<(String, usize)>> =
+        std::cell::RefCell::new(HashSet::new());
+}
+
+/// Runs `query` with `by_value` as the positional arguments known to bind by value.
+pub(super) fn with_by_value_counter_args<R>(
+    by_value: HashSet<(String, usize)>,
+    query: impl FnOnce() -> R,
+) -> R {
+    BY_VALUE_COUNTER_ARGS.with(|cell| *cell.borrow_mut() = by_value);
+    let result = query();
+    BY_VALUE_COUNTER_ARGS.with(|cell| cell.borrow_mut().clear());
+    result
+}
+
+/// Returns the name a by-value pair is keyed by.
+pub(super) fn counter_callee_key(name: &str) -> String {
+    name.trim_start_matches('\\').to_string()
+}
+
 /// Returns whether a call can pass the counter's storage to a reference parameter.
+///
+/// A direct call to a user function that declares the counter's position by value only receives
+/// a copy. A named or spread argument list keeps the conservative answer: its binding is not
+/// positional. What the callee can still reach (a `global`, `static` or by-reference counter) is
+/// excluded by the caller's frame-private filter, and a closure capturing the counter by
+/// reference by `expr_preserves_counter`.
 fn call_may_alias_counter(expr: &Expr, counter: &str) -> bool {
+    if let ExprKind::FunctionCall { name, args } = &expr.kind {
+        let positional = !args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
+        let key = counter_callee_key(name.as_str());
+        return args.iter().enumerate().any(|(position, arg)| {
+            argument_names_counter(arg, counter)
+                && !(positional
+                    && BY_VALUE_COUNTER_ARGS
+                        .with(|cell| cell.borrow().contains(&(key.clone(), position))))
+        });
+    }
     let args = match &expr.kind {
-        ExprKind::FunctionCall { args, .. }
-        | ExprKind::ClosureCall { args, .. }
+        ExprKind::ClosureCall { args, .. }
         | ExprKind::ExprCall { args, .. }
         | ExprKind::MethodCall { args, .. }
         | ExprKind::NullsafeMethodCall { args, .. }
@@ -380,6 +424,21 @@ fn call_may_alias_counter(expr: &Expr, counter: &str) -> bool {
         _ => return false,
     };
     args.iter().any(|arg| argument_names_counter(arg, counter))
+}
+
+/// Returns whether `expr` is a closure that captures the counter by reference: calling it, here
+/// or from any callee it is handed to, can advance the counter with nothing in the body naming it.
+fn closure_captures_counter_by_ref(expr: &Expr, counter: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Closure { capture_refs, .. }
+        if capture_refs.iter().any(|name| name == counter))
+}
+
+/// Returns whether `expr` calls a builtin that can rebind any local of the scope (`extract`).
+fn calls_scope_builtin(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::FunctionCall { name, .. }
+        if ["eval", "extract", "compact", "get_defined_vars", "parse_str"]
+            .iter()
+            .any(|builtin| name.as_str().trim_start_matches('\\').eq_ignore_ascii_case(builtin)))
 }
 
 /// Unwraps a named argument before checking whether it names the counter local.

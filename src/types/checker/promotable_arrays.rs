@@ -365,20 +365,45 @@ impl Checker {
             })
             .map(|(position, _)| position)
             .collect();
-        if positions.is_empty() {
+        // A bare local the checker types as a packed `array<float>` is a float list at run time:
+        // a non-promotable typed array never holds hash storage. A parameter the body only reads
+        // (no reassignment, element write, reference, capture or by-reference pass) behaves the
+        // same under `array<float>` as under the untyped or bare `array` contract, whose only
+        // check (`is_array`) the argument already passes.
+        let float_positions: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(position, arg)| {
+                let position = *position;
+                position < decl.params.len()
+                    && !positions.contains(&position)
+                    && decl.param_types.get(position).is_some_and(|declared| {
+                        declared.as_ref().is_none_or(declared_bare_array)
+                    })
+                    && decl.defaults.get(position).is_none_or(Option::is_none)
+                    && !decl.ref_params.get(position).copied().unwrap_or(true)
+                    && candidates.read_only_clonable_param(&decl.params[position])
+                    && self.is_typed_float_list_arg(arg, env)
+            })
+            .map(|(position, _)| position)
+            .collect();
+        if positions.is_empty() && float_positions.is_empty() {
             return None;
         }
-        let clone = crate::generics::promotable_clones::promotable_clone_name(callee, &positions);
+        let clone = crate::generics::promotable_clones::promotable_clone_name(
+            callee, &positions, &float_positions,
+        );
         if !self.fn_decls.contains_key(&clone) {
             let decl = self.fn_decls.get(callee)?.clone();
             let source_id = crate::generics::promotable_clones::fresh_clone_source_id(decl.span);
-            let clone_decl = promotable_clone_decl(decl, &positions, source_id);
+            let clone_decl = promotable_clone_decl(decl, &positions, &float_positions, source_id);
             self.publish_function_declaration(clone.clone(), clone_decl);
             self.requested_promotable_clones.push(
                 crate::generics::promotable_clones::PromotableCloneRequest {
                     base: callee.to_string(),
                     clone: clone.clone(),
                     positions,
+                    float_positions,
                     source_id,
                 },
             );
@@ -393,6 +418,7 @@ impl Checker {
                     base: callee.to_string(),
                     clone: clone.clone(),
                     positions,
+                    float_positions,
                     source_id: 0,
                 },
             );
@@ -400,6 +426,28 @@ impl Checker {
         self.generic_call_sites
             .insert((self.current_loop_storage_scope.clone(), call_span), clone.clone());
         Some(clone)
+    }
+
+    /// Returns whether a call argument is a typed packed `array<float>` at run time: a bare
+    /// non-promotable local the checker types so, or a direct call an earlier walk of this body
+    /// already redirected to a clone that returns a typed float list.
+    fn is_typed_float_list_arg(&self, arg: &Expr, env: &crate::types::TypeEnv) -> bool {
+        let float_list = |ty: &PhpType| matches!(ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Float);
+        match &arg.kind {
+            ExprKind::Variable(name) => {
+                !self.is_promotable_array_local(name) && env.get(name).is_some_and(float_list)
+            }
+            ExprKind::FunctionCall { .. } => self
+                .generic_call_sites
+                .get(&(self.current_loop_storage_scope.clone(), arg.span))
+                .filter(|target| {
+                    crate::generics::promotable_clones::promotable_clone_source_name(target)
+                        .is_some()
+                })
+                .and_then(|target| self.functions.get(target))
+                .is_some_and(|sig| float_list(&sig.return_type)),
+            _ => false,
+        }
     }
 
     /// Returns the cached candidate scan of user function `callee`'s body.
@@ -583,11 +631,23 @@ impl Checker {
 
 /// Builds the checker's copy of a typed clone, matching what
 /// `generics::promotable_clones::splice_promotable_clones` splices from the same request.
-fn promotable_clone_decl(mut decl: super::FnDecl, positions: &[usize], source_id: u32) -> super::FnDecl {
-    use crate::generics::promotable_clones::{promotable_param_type, retag_body, retag_expr, retag_span};
+fn promotable_clone_decl(
+    mut decl: super::FnDecl,
+    positions: &[usize],
+    float_positions: &[usize],
+    source_id: u32,
+) -> super::FnDecl {
+    use crate::generics::promotable_clones::{
+        float_list_param_type, promotable_param_type, retag_body, retag_expr, retag_span,
+    };
     for position in positions {
         if let Some(declared) = decl.param_types.get_mut(*position) {
             *declared = Some(promotable_param_type());
+        }
+    }
+    for position in float_positions {
+        if let Some(declared) = decl.param_types.get_mut(*position) {
+            *declared = Some(float_list_param_type());
         }
     }
     decl.defaults = decl
@@ -598,6 +658,11 @@ fn promotable_clone_decl(mut decl: super::FnDecl, positions: &[usize], source_id
     decl.body = retag_body(decl.body, source_id);
     decl.span = retag_span(decl.span, source_id);
     decl
+}
+
+/// Returns whether a declared parameter type is the bare `array` keyword (no element contract).
+fn declared_bare_array(declared: &crate::parser::ast::TypeExpr) -> bool {
+    matches!(declared, crate::parser::ast::TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("array"))
 }
 
 /// The locals of one body that may hold a promotable `array<int>`: every local no construct can
@@ -617,6 +682,8 @@ pub(crate) struct PromotableCandidates {
     assigned: HashSet<String>,
     /// Locals the body writes under a key that may skip a slot (`Scan::keyed`).
     keyed: HashSet<String>,
+    /// Locals the body writes by element at all (`Scan::written`).
+    written: HashSet<String>,
     /// Whether the body holds a construct a typed clone would duplicate.
     clone_blocked: bool,
 }
@@ -637,6 +704,12 @@ impl PromotableCandidates {
     /// a candidate the body never reassigns as a whole, in a body a clone can duplicate.
     fn clonable_param(&self, name: &str) -> bool {
         self.contains(name) && !self.clone_blocked && !self.assigned.contains(name)
+    }
+
+    /// Returns whether a typed clone may declare parameter `name` as a typed float list: a
+    /// clonable parameter the body never writes by element either, so it is only ever read.
+    fn read_only_clonable_param(&self, name: &str) -> bool {
+        self.clonable_param(name) && !self.written.contains(name)
     }
 
     /// Disqualifies more locals, such as those a reference reaches.
@@ -665,13 +738,14 @@ pub(crate) fn find_candidates(checker: &Checker, body: &[Stmt]) -> PromotableCan
         disqualified,
         assigned: scan.assigned,
         keyed: scan.keyed,
+        written: scan.written,
         clone_blocked: scan.clone_blocked,
     }
 }
 
 impl Checker {
     /// Returns whether the user function `callee` binds argument `position` by value.
-    fn user_function_takes_by_value(&self, callee: &str, position: usize) -> bool {
+    pub(crate) fn user_function_takes_by_value(&self, callee: &str, position: usize) -> bool {
         // A conditionally declared function picks one of several declarations at run time.
         let conditional = self.function_variant_groups.get(callee).is_some_and(|variants| {
             variants.len() != 1 || variants[0] != callee

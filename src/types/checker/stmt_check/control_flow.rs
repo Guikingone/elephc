@@ -978,13 +978,17 @@ impl Checker {
                 // before the loop lets `$r += 2` inside it advance `$i` with nothing in the body
                 // naming `$i`. `ref_aliased_locals` holds every local of this body a reference
                 // can reach, permanently, so such a counter takes hash storage.
+                let by_value_args = self.by_value_user_call_args(body);
                 self.packed_loop_counter =
-                    crate::types::checker::packed_counter::packed_for_counter(
-                        init.as_deref(),
-                        condition.as_ref(),
-                        update.as_deref(),
-                        body,
-                        self.local_conditional_depth,
+                    crate::types::checker::packed_counter::with_by_value_counter_args(
+                        by_value_args,
+                        || crate::types::checker::packed_counter::packed_for_counter(
+                            init.as_deref(),
+                            condition.as_ref(),
+                            update.as_deref(),
+                            body,
+                            self.local_conditional_depth,
+                        ),
                     )
                     .filter(|counter| !self.ref_aliased_locals.contains(&counter.name))
                     // Storage another frame can write is not provable from the body either: a

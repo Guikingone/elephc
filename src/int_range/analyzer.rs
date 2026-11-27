@@ -514,7 +514,13 @@ impl<'a> Analyzer<'a> {
                 state
             }
             StmtKind::FunctionDecl { name, params, body, .. } => {
-                if self.recording {
+                // A typed clone is the original body under a clone source identity, and its
+                // sites resolve to the original's facts (`promotable_clones::original_span`).
+                // No call names it, so analyzing it would only feed full-range arguments of its
+                // calls into the callees' seeds.
+                if self.recording
+                    && crate::generics::promotable_clones::promotable_clone_source_name(name).is_none()
+                {
                     let seeds = self.info.param_seeds.get(&symbol_key(name)).cloned();
                     self.analyze_function_seeded(params, body, &[], seeds.as_deref());
                 }

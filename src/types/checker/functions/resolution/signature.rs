@@ -300,6 +300,8 @@ impl Checker {
                 && matches!(inferred_specific_array_type_from_infos(&all_return_infos), Some(_))
             {
                 inferred_specific_array_type_from_infos(&all_return_infos).unwrap()
+            } else if let Some(typed) = float_list_clone_return(name, &declared_ret, &all_return_infos) {
+                typed
             } else {
                 declared_ret
             };
@@ -450,6 +452,41 @@ impl Checker {
         }
         self.type_accepts(declared_ret, &PhpType::Object("Generator".to_string()))
     }
+}
+
+/// Returns the typed list a float-list clone returns in place of its bare `array` hint.
+///
+/// Only a typed clone (`crate::generics::promotable_clones`) that declares some parameter
+/// `array<float>` qualifies: the call sites routed to it are exactly the ones that pass typed
+/// lists, so returning the list it builds raw keeps a `f(g($v))` chain typed instead of boxing
+/// every element into the bare hint's `mixed` storage and re-checking it at the next call. Every
+/// `return` must yield the same packed scalar list (`Void` entries are the hint-covered paths the
+/// coverage check already proved unreachable); any other shape keeps the declared hint.
+fn float_list_clone_return(
+    name: &str,
+    declared_ret: &PhpType,
+    return_infos: &[super::super::returns::ReturnInfo],
+) -> Option<PhpType> {
+    let (_, positions) = name.split_once("#__promotable_")?;
+    if !positions.split('_').any(|position| position.ends_with('f')) || !declared_ret.is_php_array() {
+        return None;
+    }
+    let mut typed: Option<&PhpType> = None;
+    for return_info in return_infos {
+        if !return_info.has_value {
+            return None;
+        }
+        match &return_info.ty {
+            PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Float | PhpType::Int) => {}
+            _ => return None,
+        }
+        match typed {
+            None => typed = Some(&return_info.ty),
+            Some(existing) if existing == &return_info.ty => {}
+            Some(_) => return None,
+        }
+    }
+    typed.cloned()
 }
 
 /// Infers a concrete array type from return info when the declared return type is a generic `array` hint.

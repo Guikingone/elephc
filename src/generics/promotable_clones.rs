@@ -36,6 +36,9 @@ const CLONE_MARKER: &str = "#__promotable_";
 std::thread_local! {
     /// Source identities handed to clone bodies in this compile, for the warning filter.
     static CLONE_SOURCE_IDS: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
+    /// The original declaration's source identity behind each clone identity.
+    static CLONE_ORIGINS: RefCell<std::collections::HashMap<u32, u32>> =
+        RefCell::new(std::collections::HashMap::new());
 }
 
 /// One clone a direct call asked for.
@@ -47,13 +50,21 @@ pub struct PromotableCloneRequest {
     pub clone: String,
     /// The undeclared by-value parameters the clone declares `array<int>`.
     pub positions: Vec<usize>,
+    /// The read-only parameters (undeclared or declared bare `array`) the clone declares
+    /// `array<float>`, because every call routed to it passes a typed float list there.
+    pub float_positions: Vec<usize>,
     /// The source identity the clone body is retagged with.
     pub source_id: u32,
 }
 
-/// Returns the name of the clone of `base` that declares `positions` as `array<int>`.
-pub fn promotable_clone_name(base: &str, positions: &[usize]) -> String {
-    let positions: Vec<String> = positions.iter().map(usize::to_string).collect();
+/// Returns the name of the clone of `base` that declares `positions` as `array<int>` and
+/// `float_positions` as `array<float>` (suffixed `f`).
+pub fn promotable_clone_name(base: &str, positions: &[usize], float_positions: &[usize]) -> String {
+    let positions: Vec<String> = positions
+        .iter()
+        .map(usize::to_string)
+        .chain(float_positions.iter().map(|position| format!("{position}f")))
+        .collect();
     format!("{}{}{}", base, CLONE_MARKER, positions.join("_"))
 }
 
@@ -70,7 +81,21 @@ pub fn fresh_clone_source_id(origin: Span) -> u32 {
         Span::register_source_path(source_id, path);
     }
     CLONE_SOURCE_IDS.with(|ids| ids.borrow_mut().insert(source_id));
+    CLONE_ORIGINS.with(|origins| origins.borrow_mut().insert(source_id, origin.source_id()));
     source_id
+}
+
+/// Returns the original body's span a clone-body span was retagged from.
+///
+/// A clone body is the original body under another source identity at the same coordinates, so
+/// a fact the integer-range proof established for the original site (analyzed with every direct
+/// call site, those later redirected to the clone included) holds for the clone's copy.
+pub fn original_span(span: Span) -> Option<Span> {
+    if !span.identifies_a_node() {
+        return None;
+    }
+    let origin = CLONE_ORIGINS.with(|origins| origins.borrow().get(&span.source_id()).copied())?;
+    Some(Span::with_end_from(Span::new_in_source(span.line, span.col, origin), span))
 }
 
 /// Returns whether `span` lies inside a clone body.
@@ -82,6 +107,11 @@ pub fn is_clone_span(span: Span) -> bool {
 /// Returns the declared type a cloned parameter receives.
 pub fn promotable_param_type() -> TypeExpr {
     TypeExpr::Array(Box::new(TypeExpr::Int))
+}
+
+/// Returns the declared type a float-list clone parameter receives.
+pub fn float_list_param_type() -> TypeExpr {
+    TypeExpr::Array(Box::new(TypeExpr::Float))
 }
 
 /// Returns `span` with the same coordinates under `source_id`.
@@ -175,6 +205,8 @@ fn clone_declaration(original: &Stmt, request: &PromotableCloneRequest) -> Optio
     for (position, (_, declared, default, _)) in params.iter_mut().enumerate() {
         if request.positions.contains(&position) {
             *declared = Some(promotable_param_type());
+        } else if request.float_positions.contains(&position) {
+            *declared = Some(float_list_param_type());
         }
         if let Some(value) = default.take() {
             *default = Some(retag_expr(value, request.source_id));

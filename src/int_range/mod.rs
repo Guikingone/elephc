@@ -19,7 +19,7 @@
 
 mod analyzer;
 mod domain;
-mod scan;
+pub(crate) mod scan;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -122,6 +122,8 @@ pub fn install(facts: OverflowFacts) {
 
 /// Returns `true` when the installed facts prove the site overflow-free.
 pub fn is_proven(span: Span, kind: ArithKind) -> bool {
+    // A typed clone's body carries the original's sites under a clone identity.
+    let span = crate::generics::promotable_clones::original_span(span).unwrap_or(span);
     ACTIVE.with(|active| {
         active
             .borrow()

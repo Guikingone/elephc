@@ -1053,6 +1053,25 @@ impl Checker {
         self.null_probe_scope_is_top_level && self.program_global_names.contains(name)
     }
 
+    /// Returns the `(callee, position)` pairs of the direct user-function calls in `body` that
+    /// bind that positional argument by value (see `packed_counter::call_may_alias_counter`).
+    pub(crate) fn by_value_user_call_args(&self, body: &[crate::parser::ast::Stmt]) -> HashSet<(String, usize)> {
+        let mut pairs = HashSet::new();
+        crate::int_range::scan::walk_stmts(body, true, &mut |node| {
+            if let crate::int_range::scan::Node::Expr(expr) = node {
+                if let crate::parser::ast::ExprKind::FunctionCall { name, args } = &expr.kind {
+                    let key = packed_counter::counter_callee_key(name.as_str());
+                    for position in 0..args.len() {
+                        if self.user_function_takes_by_value(&key, position) {
+                            pairs.insert((key.clone(), position));
+                        }
+                    }
+                }
+            }
+        });
+        pairs
+    }
+
     /// Returns `true` when no other frame can write the local `name`: it is neither a `global`
     /// or `static` binding, nor a by-reference parameter or capture, nor a top-level variable
     /// some function-like body declares `global`.
