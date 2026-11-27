@@ -214,6 +214,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
+    arrays::emit_nested_mixed_fast_get(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_reuse_int_cell(emitter);
     arrays::emit_mixed_from_owned_string(emitter);

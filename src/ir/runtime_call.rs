@@ -122,6 +122,9 @@ pub enum RuntimeCallTarget {
     PendingAppendFetchForWriteAlreadyDiagnosed,
     /// Retains the concrete cell behind PHP wrappers and boxed caller-reference markers.
     MixedCellResolveForWrite,
+    /// Reads `$a[$i][$k]` from a local `array<mixed>` without cloning the intermediate cell.
+    /// Returns an owned Mixed leaf, or zero when a guard fails and the ordinary chain must run.
+    NestedMixedArrayFastGet,
     /// Copies a public getter value for write while preserving explicit PHP reference wrappers.
     MixedCellCopyForWrite,
     /// Checks whether exactly one of the selected array cell and its payload survives beyond
@@ -282,6 +285,10 @@ impl RuntimeCallTarget {
                     result: IrType::Heap(IrHeapKind::Hash),
                 })
             }
+            RuntimeCallTarget::NestedMixedArrayFastGet => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Array), IrType::I64, IrType::I64],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
             RuntimeCallTarget::MixedCellClone
             | RuntimeCallTarget::MixedCellResolveForWrite
             | RuntimeCallTarget::MixedCellCopyForWrite
@@ -374,6 +381,7 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
+            RuntimeCallTarget::NestedMixedArrayFastGet => "array.nested_mixed_fast_get",
             RuntimeCallTarget::MixedCellCopyForWrite => "array.mixed_cell_copy_for_write",
             RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
             RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",

@@ -21,6 +21,93 @@ pub(super) fn lower_array_access(
     lower_array_access_with_missing_warning(ctx, array, index, expr, warn_on_missing)
 }
 
+/// Returns whether a subscript is an integer literal or a plain integer frame local: lowering it
+/// again on the ordinary path re-reads the same value and cannot warn or run PHP code.
+fn nested_fast_read_key_is_pure(ctx: &LoweringContext<'_, '_>, key: &Expr) -> bool {
+    match &key.kind {
+        ExprKind::IntLiteral(_) => true,
+        ExprKind::Variable(name) => ctx.is_plain_frame_local(name)
+            && ctx.local_type(name).codegen_repr() == PhpType::Int,
+        _ => false,
+    }
+}
+
+/// Reads `$local[$i][$k]` from a local `array<mixed>` through a guarded runtime fast path that
+/// borrows the intermediate cell instead of cloning it. Any guard failure (missing, null or
+/// non-array element, reference wrapper, hash storage) runs the ordinary read chain, which
+/// re-reads the pure operands and keeps every warning and handler behavior.
+fn lower_nested_mixed_fast_read(
+    ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::ArrayAccess { array: base, index: outer } = &array.kind else { return None };
+    let ExprKind::Variable(name) = &base.kind else { return None };
+    let mixed_list = |ty: PhpType| matches!(ty.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
+    if !ctx.is_plain_frame_local(name)
+        || !mixed_list(ctx.local_type(name))
+        || !mixed_list(ctx.local_mutation_type(name))
+        || !nested_fast_read_key_is_pure(ctx, outer)
+        || !nested_fast_read_key_is_pure(ctx, index)
+    {
+        return None;
+    }
+    let span = expr.span;
+    let root = lower_expr(ctx, base);
+    if !mixed_list(ctx.builder.value_php_type(root.value)) {
+        crate::ir_lower::ownership::release_if_owned(ctx, root, Some(span));
+        return None;
+    }
+    let outer_key = lower_expr(ctx, outer);
+    let inner_key = lower_expr(ctx, index);
+    let fast = ctx.emit_owned_value(Op::RuntimeCall, vec![root.value, outer_key.value, inner_key.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::NestedMixedArrayFastGet)), PhpType::Mixed,
+        crate::ir::Effects::READS_HEAP | crate::ir::Effects::ALLOC_HEAP | crate::ir::Effects::REFCOUNT_OP,
+        Some(span));
+    if ctx.value_needs_release_after_use(root) {
+        crate::ir_lower::ownership::release_if_owned(ctx, root, Some(span));
+    }
+    let missed = ctx.emit_value(Op::IsNull, vec![fast.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(span));
+    // Both arms publish their owned leaf into one hidden owner, read back after the merge as
+    // an owned temporary, exactly like the static-update parent selection.
+    let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    ctx.clear_owned_hidden_temp(&selected, Some(span));
+    let ordinary = ctx.builder.create_named_block("nested.read.ordinary", Vec::new());
+    let served = ctx.builder.create_named_block("nested.read.fast", Vec::new());
+    let done = ctx.builder.create_named_block("nested.read.done", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: missed.value, then_target: ordinary,
+        then_args: Vec::new(), else_target: served, else_args: Vec::new() });
+    ctx.builder.position_at_end(served);
+    ctx.store_call_argument_local(&selected, fast, PhpType::Mixed, Some(span));
+    ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
+    let fast_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(ordinary);
+    ctx.restore_initialized_slots(initialized.clone());
+    // A guard failure returns zero: nothing is owned, but the release keeps both edges balanced.
+    crate::ir_lower::ownership::release_if_owned(ctx, fast, Some(span));
+    let array_value = lower_element_receiver(ctx, array);
+    let value = lower_array_access_from_receiver(ctx, array_value, index, expr, true);
+    let value = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed {
+        value
+    } else {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
+    };
+    let value = if ctx.value_is_owning_temporary(value) {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
+    ctx.store_call_argument_local(&selected, value, PhpType::Mixed, Some(span));
+    ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
+    let ordinary_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(fast_slots.intersection(&ordinary_slots).copied().collect());
+    let result = ctx.load_local(&selected, Some(span));
+    ctx.clear_owned_hidden_temp(&selected, Some(span));
+    Some(result)
+}
+
 /// Lowers `$base[...][$index]` as the source of a by-reference `foreach`, separating the element
 /// for writing instead of reading a copy of it.
 ///
@@ -180,6 +267,11 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    if warn_on_missing {
+        if let Some(value) = lower_nested_mixed_fast_read(ctx, array, index, expr) {
+            return value;
+        }
+    }
     if !warn_on_missing {
         if let ExprKind::PropertyAccess { object, property } = &array.kind {
             if property_expr_can_be_uninitialized(ctx, object, property) {

@@ -110,6 +110,8 @@ mod scalar_mixed_cleanup;
 mod object_hook_cleanup;
 #[path = "runtime_gc/nested_local_update_cow.rs"]
 mod nested_local_update_cow;
+#[path = "runtime_gc/nested_mixed_fast_read.rs"]
+mod nested_mixed_fast_read;
 mod scalar_set_fast_path;
 mod heap_tail_scan;
 #[path = "runtime_gc/eval_constructor.rs"]

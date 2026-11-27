@@ -218,6 +218,7 @@ mod mixed_abs;
 mod mixed_bit_not;
 mod mixed_cast_array;
 mod mixed_clone;
+mod nested_mixed_fast_get;
 mod mixed_min_max;
 mod mixed_reuse_int_cell;
 mod mixed_reference;
@@ -581,6 +582,8 @@ pub(crate) use mixed_bit_not::{emit_mixed_bit_not, BIT_NOT_PREFIX, BIT_NOT_TYPE_
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
+/// Emit the guarded two-level `$a[$i][$k]` read over a local `array<mixed>`.
+pub use nested_mixed_fast_get::emit_nested_mixed_fast_get;
 /// Emit the two-operand `min()` / `max()` selection over Mixed-shaped cells.
 pub use mixed_min_max::emit_mixed_min_max;
 /// Emit the in-place integer boxing helper for a uniquely owned Mixed local cell.

@@ -111,6 +111,7 @@ pub(super) fn lower(
             store_if_result(ctx, inst)
         }
         RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
+        RuntimeCallTarget::NestedMixedArrayFastGet => lower_nested_mixed_array_fast_get(ctx, inst),
         RuntimeCallTarget::MixedCellCopyForWrite => lower_mixed_cell_copy_for_write(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
@@ -364,6 +365,24 @@ fn lower_mixed_cell_resolve_for_write(ctx: &mut FunctionContext<'_>, inst: &Inst
     ctx.emitter.label(&retain);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    store_if_result(ctx, inst)
+}
+
+/// Stages the array and both integer keys, then calls the guarded nested read helper.
+fn lower_nested_mixed_array_fast_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let target = ctx.emitter.target;
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    for (index, offset) in [(0usize, 0usize), (1, 8), (2, 16)] {
+        let operand = expect_operand(inst, index)?;
+        ctx.load_value_to_reg(operand, scratch)?;
+        abi::emit_store_to_sp(ctx.emitter, scratch, offset);
+    }
+    for (index, offset) in [(0usize, 0usize), (1, 8), (2, 16)] {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, index), offset);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_nested_mixed_fast_get");
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
 }
 

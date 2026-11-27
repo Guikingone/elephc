@@ -1884,6 +1884,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns true when a local is currently modeled as a by-reference alias.
+    /// Returns whether `name` is an ordinary frame slot: no global, static, eval-scope or
+    /// reference binding, so loading it twice reads the same value without side effects.
+    pub(crate) fn is_plain_frame_local(&self, name: &str) -> bool {
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::PhpLocal
+            && self.local_slots.contains_key(name)
+            && self.extern_global_type(name).is_none()
+            && !self.should_load_from_eval_scope(name)
+            && !self.uses_global_storage(name, kind)
+            && !self.is_ref_bound_local(name)
+            && !self.live_native_mutation_locals.contains_key(name)
+    }
+
     pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {
         self.ref_bound_locals.contains(name)
     }
