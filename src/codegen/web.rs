@@ -427,6 +427,10 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_call_label(emitter, "__rt_heap_bins_clear");
+    // Parked scalar Mixed cells point into the arena being reclaimed: forget them too, or the
+    // next request would hand out cells the bump allocator also hands out.
+    abi::emit_store_zero_to_symbol(emitter, "_mixed_cell_cache_head", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_mixed_cell_cache_count", 0);
     // A request that called `ini_set('memory_limit', …)` moved `_heap_limit`; the next
     // request must start from the compile-time ceiling again, exactly like PHP's INI reset.
     abi::emit_load_symbol_to_reg(
@@ -497,6 +501,9 @@ mod handler_reset_tests {
             assert!(startup_limit < reset_limit, "{name}: the startup ceiling must feed the reset");
             assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
             assert!(!asm.contains("__rt_heap_alloc"), "{name}");
+            // Parked scalar Mixed cells point into the reclaimed arena and must be forgotten.
+            assert!(asm.contains("_mixed_cell_cache_head"), "{name}: the cell reuse cache is reset");
+            assert!(asm.contains("_mixed_cell_cache_count"), "{name}: the cell reuse count is reset");
         }
     }
 

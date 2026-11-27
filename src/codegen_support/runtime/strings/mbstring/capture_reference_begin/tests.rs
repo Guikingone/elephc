@@ -63,4 +63,8 @@ fn adapters(emitter: &mut Emitter) {
         emitter.label_global(symbol);
         emitter.instruction(&format!("{} fixture_unsupported", if arm { "b" } else { "jmp" }));// reject unexpected string or resource boxing in this fixture
     }
+    // The x86_64 scalar-cell reuse cache and allocation counters `__rt_mixed_from_value` reads.
+    for symbol in ["_mixed_cell_cache_head", "_mixed_cell_cache_count", "_gc_allocs", "_gc_live", "_gc_peak"] {
+        emitter.raw(&crate::codegen_support::data_section::comm_directive(symbol, 8, emitter.target));
+    }
 }

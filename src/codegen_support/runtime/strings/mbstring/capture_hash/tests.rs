@@ -70,7 +70,8 @@ pub(in crate::codegen_support::runtime::strings::mbstring) fn adapters(emitter: 
         emitter.label_global(symbol);
         emitter.instruction(if arm { "brk #0" } else { "ud2" });                // invalid marker writes are outside this ownership fixture
     }
-    for symbol in ["_exc_value", "_rt_reference_validation_pins_top"] {
+    for symbol in ["_exc_value", "_rt_reference_validation_pins_top", "_mixed_cell_cache_head",
+        "_mixed_cell_cache_count", "_gc_allocs", "_gc_live", "_gc_peak"] {
         emitter.raw(&crate::codegen_support::data_section::comm_directive(
             symbol, 8, emitter.target,
         ));

@@ -319,8 +319,33 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_incref");                                    // retain the shared heap child for the new mixed owner
 
     emitter.label("__rt_mixed_from_value_alloc");
+    // -- reuse a parked scalar cell before asking the allocator (`decref_mixed` fills the cache) --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_mixed_cell_cache_head");
+    emitter.instruction("mov rax, QWORD PTR [r11]");                            // take the most recently parked cell, if any
+    emitter.instruction("test rax, rax");                                       // is the reuse cache empty?
+    emitter.instruction("jz __rt_mixed_from_value_heap_alloc");                 // allocate a fresh cell when nothing is parked
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // the next parked cell is threaded through payload word zero
+    emitter.instruction("mov QWORD PTR [r11], r10");                            // unlink the reused cell from the cache
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_mixed_cell_cache_count");
+    emitter.instruction("sub QWORD PTR [r11], 1");                              // account for the cell leaving the cache
+    emitter.instruction("mov DWORD PTR [rax - 12], 1");                         // the new box starts with exactly one owner
+    // -- account for the reuse exactly like an allocation --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_gc_allocs");
+    emitter.instruction("add QWORD PTR [r11], 1");                              // count the reused block as an allocation
+    emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // payload size of the reused block
+    emitter.instruction("add r10, 16");                                         // include the uniform header in the live footprint
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_gc_live");
+    emitter.instruction("add r10, QWORD PTR [r11]");                            // new live-byte total
+    emitter.instruction("mov QWORD PTR [r11], r10");                            // publish the live-byte total
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_gc_peak");
+    emitter.instruction("cmp r10, QWORD PTR [r11]");                            // did the reuse raise the peak watermark?
+    emitter.instruction("jbe __rt_mixed_from_value_stamp");                     // keep the previous peak otherwise
+    emitter.instruction("mov QWORD PTR [r11], r10");                            // record the new peak live-byte total
+    emitter.instruction("jmp __rt_mixed_from_value_stamp");                     // stamp and fill it like a fresh allocation
+    emitter.label("__rt_mixed_from_value_heap_alloc");
     emitter.instruction("mov rax, 24");                                         // mixed cells store tag plus two payload words in the owned heap allocation
     emitter.instruction("call __rt_heap_alloc");                                // allocate the mixed cell storage through the x86_64 heap wrapper
+    emitter.label("__rt_mixed_from_value_stamp");
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the mixed-cell heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a mixed cell in the uniform heap header
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the saved runtime value tag after helper-driven ownership normalization

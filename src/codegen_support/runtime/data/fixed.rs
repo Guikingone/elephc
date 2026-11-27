@@ -758,6 +758,9 @@ pub(crate) fn emit_runtime_data_fixed(
     }
     out.push_str(&comm_directive("_gc_collecting", 8, target));
     out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
+    // Scalar Mixed cell reuse cache (`decref_mixed` pushes, `mixed_from_value` pops; x86_64 only).
+    out.push_str(&comm_directive("_mixed_cell_cache_head", 8, target));
+    out.push_str(&comm_directive("_mixed_cell_cache_count", 8, target));
     out.push_str(&comm_directive("_gc_pin_head", 8, target));
     out.push_str(&comm_directive("_gc_pending_throw", 8, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
