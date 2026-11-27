@@ -1577,8 +1577,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // would keep reading it as `Void`.
             self.local_types.entry(name.to_string()).or_insert(php_type);
         }
+        if kind == LocalKind::PhpLocal && !name.contains(crate::optimize::foreach_webs_suffix()) {
+            self.declare_split_range_twins(name);
+        }
         slot
     }
+
+    /// Declares the fresh slots of `foreach` ranges split from `name` right after its own slot.
+    ///
+    /// Frame cleanup and unwinding release locals in slot order, and PHP destroys a variable's
+    /// value at that variable's position. Declaring the twins here keeps the later range's last
+    /// value at the original variable's position instead of after every later local.
+    fn declare_split_range_twins(&mut self, name: &str) {
+        let prefix = format!("{name}{}", crate::optimize::foreach_webs_suffix());
+        let mut twins: Vec<(String, PhpType)> = self.local_types.iter()
+            .filter(|(twin, _)| twin.starts_with(&prefix) && !self.local_slots.contains_key(*twin)
+                && crate::optimize::source_variable_name(twin) == name)
+            .map(|(twin, ty)| (twin.clone(), ty.clone()))
+            .collect();
+        twins.sort_by(|left, right| left.0.cmp(&right.0));
+        for (twin, ty) in twins {
+            self.declare_local_with_kind(&twin, ty, LocalKind::PhpLocal);
+        }
+    }
+
 
     /// Rebinds a by-value container or Mixed parameter to an owning copy-on-write shadow slot.
     ///
@@ -1895,6 +1917,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !self.uses_global_storage(name, kind)
             && !self.is_ref_bound_local(name)
             && !self.live_native_mutation_locals.contains_key(name)
+    }
+
+    /// Returns the frame slot already declared for a plain local, if it has one.
+    pub(crate) fn plain_frame_local_slot(&self, name: &str) -> Option<LocalSlotId> {
+        self.is_plain_frame_local(name).then(|| self.local_slots.get(name).copied()).flatten()
     }
 
     pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {

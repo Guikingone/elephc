@@ -30,15 +30,15 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::StringLiteral(value) => pass.transform_string(value),
 
         // Leaves with no Expr subtrees:
+        ExprKind::Variable(name) => ExprKind::Variable(pass.transform_variable(name)),
+        ExprKind::PreIncrement(name) => ExprKind::PreIncrement(pass.transform_variable(name)),
+        ExprKind::PostIncrement(name) => ExprKind::PostIncrement(pass.transform_variable(name)),
+        ExprKind::PreDecrement(name) => ExprKind::PreDecrement(pass.transform_variable(name)),
+        ExprKind::PostDecrement(name) => ExprKind::PostDecrement(pass.transform_variable(name)),
         kind @ (ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
-        | ExprKind::Variable(_)
-        | ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::This) => kind,
 
@@ -83,7 +83,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             value: Box::new(walk_expr(*value, pass)),
             result_target: result_target.map(|target| Box::new(walk_expr(*target, pass))),
             prelude: prelude.into_iter().map(|stmt| walk_stmt(stmt, pass)).collect(),
-            conditional_value_temp,
+            conditional_value_temp: conditional_value_temp.map(|name| pass.transform_variable(name)),
         },
         ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
             name: walk_function_name(name, pass, span),
@@ -198,7 +198,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(walk_expr(*inner, pass))),
         ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {
-            var,
+            var: pass.transform_variable(var),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::ExprCall { callee, args } => ExprKind::ExprCall {

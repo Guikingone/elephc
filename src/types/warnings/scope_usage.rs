@@ -27,12 +27,14 @@ pub(super) struct ScopeUsage {
 impl ScopeUsage {
     /// Records a variable declaration, keeping the first span encountered for each name.
     fn declare(&mut self, name: &str, span: Span) {
+        // A split `foreach` range counts as the variable it was split from.
+        let name = crate::optimize::source_variable_name(name);
         self.declared.entry(name.to_string()).or_insert(span);
     }
 
     /// Records a variable read (access) within the current scope.
     pub(super) fn read(&mut self, name: &str) {
-        self.reads.insert(name.to_string());
+        self.reads.insert(crate::optimize::source_variable_name(name).to_string());
     }
 }
 

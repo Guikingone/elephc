@@ -166,17 +166,20 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         StmtKind::ExprStmt(e) => StmtKind::ExprStmt(walk_expr(e, pass)),
         StmtKind::Return(e) => StmtKind::Return(e.map(|x| walk_expr(x, pass))),
         StmtKind::Assign { name, value } => StmtKind::Assign {
-            name,
+            name: pass.transform_variable(name),
             value: walk_expr(value, pass),
         },
-        StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
+        StmtKind::RefAssign { target, source } => StmtKind::RefAssign {
+            target: pass.transform_variable(target),
+            source,
+        },
         StmtKind::TypedAssign {
             type_expr,
             name,
             value,
         } => StmtKind::TypedAssign {
             type_expr: pass.transform_value_type(type_expr, span),
-            name,
+            name: pass.transform_variable(name),
             value: walk_expr(value, pass),
         },
         StmtKind::ConstDecl { name, value } => StmtKind::ConstDecl {
@@ -184,11 +187,11 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             value: walk_expr(value, pass),
         },
         StmtKind::ListUnpack { vars, value } => StmtKind::ListUnpack {
-            vars,
+            vars: vars.into_iter().map(|name| pass.transform_variable(name)).collect(),
             value: walk_expr(value, pass),
         },
         StmtKind::StaticVar { name, init } => StmtKind::StaticVar {
-            name,
+            name: pass.transform_variable(name),
             init: walk_expr(init, pass),
         },
         StmtKind::ArrayAssign {
@@ -196,7 +199,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             index,
             value,
         } => StmtKind::ArrayAssign {
-            array,
+            array: pass.transform_variable(array),
             index: walk_expr(index, pass),
             value: walk_expr(value, pass),
         },
@@ -205,7 +208,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             value: walk_expr(value, pass),
         },
         StmtKind::ArrayPush { array, value } => StmtKind::ArrayPush {
-            array,
+            array: pass.transform_variable(array),
             value: walk_expr(value, pass),
         },
         StmtKind::PropertyAssign {
@@ -316,8 +319,8 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             body,
         } => StmtKind::Foreach {
             array: walk_expr(array, pass),
-            key_var,
-            value_var,
+            key_var: key_var.map(|name| pass.transform_variable(name)),
+            value_var: pass.transform_variable(value_var),
             value_by_ref,
             body: walk_program(body, pass),
         },
@@ -355,7 +358,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                     CatchClause {
                         exception_types,
                         exception_type_args,
-                        variable: c.variable,
+                        variable: c.variable.map(|name| pass.transform_variable(name)),
                         body: walk_program(c.body, pass),
                     }
                 })

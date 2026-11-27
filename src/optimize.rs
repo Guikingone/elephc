@@ -26,6 +26,12 @@ mod effect_analysis;
 mod return_boundaries;
 mod effects;
 mod exception_flow;
+mod foreach_webs;
+/// Suffix that marks a split `foreach` range's fresh local name.
+pub fn foreach_webs_suffix() -> &'static str { foreach_webs::WEB_SUFFIX }
+pub use foreach_webs::{
+    released_at_iteration, source_variable_message, source_variable_name, split_foreach_webs,
+};
 pub(crate) mod fold;
 /// Keeps a declaration PHP calls a generator recognizable as one through the AST passes.
 mod generator_bodies;

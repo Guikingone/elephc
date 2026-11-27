@@ -95,6 +95,7 @@ mod checked_numeric_chain;
 mod integer_destinations;
 mod numeric_consumers;
 mod min_max_selection;
+mod foreach_live_ranges;
 mod min_max_comparison_modes;
 mod min_max_result_ownership;
 mod foreach_key_cells;

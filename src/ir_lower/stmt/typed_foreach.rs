@@ -482,6 +482,15 @@ fn lower_foreach_selected(
     super::foreach_bindings::bind_current(
         ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array_source, array.span,
     );
+    // A split live range: drop the earlier range's value where the original binding overwrote it.
+    if let Some(earlier) = crate::optimize::released_at_iteration(loop_span) {
+        if let Some(slot) = ctx.plain_frame_local_slot(&earlier) {
+            ctx.emit_void(
+                Op::ReleaseLocalSlot, Vec::new(), Some(crate::ir::Immediate::LocalSlot(slot)),
+                Op::ReleaseLocalSlot.default_effects(), Some(loop_span),
+            );
+        }
+    }
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     ctx.pop_loop_carried_missing_strings();

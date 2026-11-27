@@ -30,7 +30,8 @@ use super::{CompileError, CompileWarning};
 /// Recursively prints any related errors attached to the main error.
 pub fn print_error(error: &CompileError) {
     let file = diagnostic_file(&error.file, error.span);
-    let plain = format_diagnostic("error", &file, error.span, &error.message);
+    let message = crate::optimize::source_variable_message(&error.message);
+    let plain = format_diagnostic("error", &file, error.span, &message);
     if crate::progress::is_decorated() {
         eprintln!(
             "{} {}",
@@ -57,7 +58,8 @@ pub fn print_warning(warning: &CompileWarning) {
         crate::errors::WarningKind::Deprecation => "deprecated",
     };
     let file = diagnostic_file(&None, warning.span);
-    let plain = format_diagnostic(kind, &file, warning.span, &warning.message);
+    let message = crate::optimize::source_variable_message(&warning.message);
+    let plain = format_diagnostic(kind, &file, warning.span, &message);
     if crate::progress::is_decorated() {
         eprintln!(
             "{} {}",

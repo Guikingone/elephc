@@ -227,6 +227,15 @@ pub(crate) trait Pass {
         span
     }
 
+    /// Renames one local variable position: a variable read, an increment or decrement target,
+    /// an assignment or array-write destination, a `foreach` key/value binding, a `list()`
+    /// target, a `static` name or a `catch` variable. Default returns the name unchanged; the
+    /// renaming pass in `crate::optimize::foreach_webs` verifies afterwards that no position was
+    /// left behind before it keeps a renamed body.
+    fn transform_variable(&self, name: String) -> String {
+        name
+    }
+
     /// Transforms a magic constant node (e.g., `__FILE__`, `__LINE__`) into its
     /// substituted expression. Called for every `MagicConstant` encountered during the walk.
     fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind;

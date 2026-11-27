@@ -1002,6 +1002,10 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     let ast = optimize::fold_constants_for_target(ast, target);
     timings.record_since("opt-fold", phase_started);
 
+    // Give a trailing `foreach` binding that starts a new live range of a reused local its own
+    // name, so each range keeps its own type instead of sharing one boxed slot.
+    let ast = if ir_opt { optimize::split_foreach_webs(ast) } else { ast };
+
     // Prove which integer `+`/`-`/`*`/`++`/`--` sites can never overflow, so the checker and EIR
     // lowering keep them as native ints instead of the boxed "int or float" form. PHP semantics
     // are unchanged: only sites whose every integer execution stays in range are proven.
