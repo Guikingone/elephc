@@ -45,11 +45,16 @@ impl Checker {
             _ => true,
         };
         env.insert(value_name.to_string(), value_type);
+        // A foreach target is a binding this body created, conditionally (an empty source never
+        // assigns it), so it is recorded at depth one or more: a later unconditional
+        // reassignment may re-bind it (`local_binding_is_retypable`), never a kill.
+        self.local_binding_depth.entry(value_name.to_string()).or_insert(self.local_conditional_depth.max(1));
         self.definitely_bound_locals.insert(value_name.to_string());
         if can_iterate { self.record_binding_retirement_exception_flow(&retired, env); }
         if let Some((name, ty)) = &key {
             let retired = self.binding_retirement_type(name, env);
             env.insert((*name).to_string(), ty.clone());
+            self.local_binding_depth.entry((*name).to_string()).or_insert(self.local_conditional_depth.max(1));
             self.definitely_bound_locals.insert((*name).to_string());
             if can_iterate { self.record_binding_retirement_exception_flow(&retired, env); }
         }

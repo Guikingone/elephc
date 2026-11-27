@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- An unconditional reassignment may now give a new type to a local that only a loop, a branch, a `foreach`, a `catch` or a `list()` created (`foreach ($a as $w) {…} $w = [1];`), as PHP allows; it used to fail with `cannot reassign $w from string to array<int>`.
 - Object releases no longer install an exception boundary (a `setjmp`) for hooks that cannot run PHP code: the destructor dispatch of a class without `__destruct`, the eval child release when eval is unused, the WeakMap notification of an unobserved key, and any release that only drops one of several owners (oop benchmark 6.95G -> 6.23G instructions, nbody 29.5G -> 27.5G).
 - Fixed a leak of one boxed cell per use when a `mixed` temporary (a missing-element read such as `$list[$k]`) fed `print`, `sprintf`/`printf`/`fprintf`, `strval`/`intval`/`floatval`, a `match (true)` arm condition or a `switch` subject.
 - Fixed a warned read of a missing element of a local `bool` list under a key nothing bounds (`$b = [true]; var_dump($b[$i]); if ($b[$i])`) reading the null sentinel as `true`: value reads are now the boxed `?bool` PHP's `null` needs, and truth tests keep the raw slot.

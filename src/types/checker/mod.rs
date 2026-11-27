@@ -988,6 +988,28 @@ impl Checker {
             && !self.typed_local_names.contains_key(name)
     }
 
+    /// Authorizes the permissive re-bind of an incompatible statement-form reassignment.
+    ///
+    /// The same rule as [`Self::local_binding_is_killable`], except that the binding being
+    /// replaced may have been created at ANY conditional depth of this body — inside a loop, a
+    /// branch or as a `foreach` target — as long as THIS store runs unconditionally. A store
+    /// discards the old value whether or not the store that created it ran, so PHP's
+    /// `foreach ($a as $w) {…} $w = [1];` is valid. Lowering retires the abandoned slot through
+    /// the same liveness test `store_local` uses: a slot only a conditional arm or a loop wrote
+    /// starts at zero on the paths that never wrote it, so its release is a no-op there. Names a
+    /// body never bound itself (superglobals, `$argc`/`$argv`, extern globals, by-value closure
+    /// captures) still have no depth entry and stay ineligible.
+    pub(crate) fn local_binding_is_retypable(&self, name: &str) -> bool {
+        !self.body_contains_eval
+            && self.local_conditional_depth == 0
+            && self.local_binding_depth.contains_key(name)
+            && !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains_key(name)
+    }
+
     /// Authorizes reference-binding detachment outside conditional flow and name-addressed storage.
     /// The reference may be frame-owned or incoming from a caller/capture. `unset()` detaches the
     /// local name in both cases, while the external cell and its value remain owned by that scope.

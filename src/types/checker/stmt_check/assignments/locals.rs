@@ -1252,7 +1252,7 @@ fn merge_local_assignment_type(
                     return Ok(());
                 }
             }
-            if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
+            if !checker.strict_locals && stmt_form && checker.local_binding_is_retypable(name) {
                 let message = format!(
                     "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
                     name, existing, ty
@@ -1526,6 +1526,10 @@ pub(super) fn check_list_unpack(
     for var in vars {
         checker.record_loop_binding_end(var);
         checker.invalidate_local_flow_narrowing(var, env);
+        // A `list()` target is a body-created binding; recorded at depth one or more so a later
+        // unconditional reassignment may re-bind it (`local_binding_is_retypable`), never a kill.
+        checker.local_binding_depth.entry(var.clone())
+            .or_insert(checker.local_conditional_depth.max(1));
         env.insert(var.clone(), unpack_ty.clone());
         update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
         checker.reflection_class_targets.remove(var);

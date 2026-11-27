@@ -2741,3 +2741,44 @@ fn test_promoted_param_retype_leaves_the_property_alone() {
     );
     assert_eq!(out, "1");
 }
+
+/// An unconditional reassignment re-binds a local that only a loop, a branch, a `foreach`, a
+/// `catch` or a `list()` created, at any type: PHP discards the old value whether or not the
+/// store that created it ran (a zero-trip loop leaves the name unbound and the store binds it).
+#[test]
+fn test_unconditional_store_rebinds_conditionally_created_locals() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+foreach (["a", "b"] as $w) { echo $w; }
+$w = [1]; echo count($w), "\n";
+for ($i = 0; $i < $argc + 1; $i++) { $s = "s$i"; }
+$s = [1, 2]; echo count($s), "\n";
+function f($n) { for ($i = 0; $i < $n; $i++) { $w = "s$i"; } $w = [1]; return count($w); }
+echo f(0), f(2), "\n";
+function g(array $xs) { foreach ($xs as $k => $v) { echo $k, $v; } $v = ["x" => 1]; $k = 2.5; var_dump($v, $k); }
+g([]); g([3, 4]);
+try { throw new Exception("e"); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+$e = 5; var_dump($e);
+[$a, $b] = [1, "x"]; $a = "now a string"; $b = [1]; var_dump($a, $b);
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "ab1\n2\n11\narray(1) {\n  [\"x\"]=>\n  int(1)\n}\nfloat(2.5)\n0314array(1) {\n  [\"x\"]=>\n  int(1)\n}\nfloat(2.5)\ne\nint(5)\nstring(12) \"now a string\"\narray(1) {\n  [0]=>\n  int(1)\n}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Re-binding a `foreach` target releases the object it still holds at the store, exactly where
+/// PHP runs its destructor.
+#[test]
+fn test_rebinding_a_foreach_target_destructs_its_object_at_the_store() {
+    let out = compile_and_run(
+        r#"<?php
+class D { function __destruct() { echo "destruct\n"; } }
+function k() { foreach ([new D] as $d) { echo "in\n"; } echo "after loop\n"; $d = 7; echo "reassigned $d\n"; }
+k();
+"#,
+    );
+    assert_eq!(out, "in\nafter loop\ndestruct\nreassigned 7\n");
+}

@@ -1080,6 +1080,10 @@ impl Checker {
                     if let Some(variable) = &catch_clause.variable {
                         let retired = self.binding_retirement_type(variable, env);
                         self.definitely_bound_locals.insert(variable.clone());
+                        // A body-created binding that only an exception path assigns: a later
+                        // unconditional reassignment may re-bind it (`local_binding_is_retypable`).
+                        self.local_binding_depth.entry(variable.clone())
+                            .or_insert(self.local_conditional_depth.max(1));
                         self.record_loop_binding_end(variable);
                         self.invalidate_local_flow_narrowing(variable, env);
                         env.insert(
