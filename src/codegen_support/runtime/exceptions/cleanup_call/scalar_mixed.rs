@@ -69,13 +69,13 @@ fn emit_aarch64_gate(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x1, #-8]");                                  // load storage kind while retaining all collector flags
     emitter.instruction("and x10, x10, #0xff");                                 // collector metadata cannot change the underlying heap kind
     emitter.instruction("cmp x10, #5");                                         // only a Mixed cell has the runtime tag inspected below
-    emitter.instruction(&format!("b.ne {PROTECTED}"));                          // containers, objects, strings and reference cells stay protected
+    emitter.instruction(&format!("b.ne {}", super::object_hooks::SHARED));      // other kinds may still be a shared owner's plain decrement
     emitter.instruction("ldr x10, [x1]");                                       // borrow the canonical runtime value tag
     for ty in [PhpType::Int, PhpType::Float, PhpType::Bool, PhpType::Void] {
         emitter.instruction(&format!("cmp x10, #{}", runtime_value_tag(&ty)));  // admit only PHP scalar tags with no child ownership
         emitter.instruction(&format!("b.eq {DIRECT}"));                         // the original decref dispatcher can release this cell without PHP callbacks
     }
-    emitter.instruction(&format!("b {PROTECTED}"));                             // unknown and heap-backed tags keep full exception protection
+    emitter.instruction(&format!("b {}", super::object_hooks::SHARED));         // heap-backed tags qualify only as a shared owner's decrement
 }
 
 /// Validates System V inputs while preserving the callback, payload and pending-owner address.
@@ -105,11 +105,11 @@ fn emit_x86_gate(emitter: &mut Emitter) {
     emitter.instruction(&format!("jne {PROTECTED}"));                           // only stamped native allocations can qualify
     emitter.instruction("and r10d, 0xff");                                      // ignore transient marks and cached incoming counts
     emitter.instruction("cmp r10d, 5");                                         // only Mixed storage begins with this value-tag layout
-    emitter.instruction(&format!("jne {PROTECTED}"));                           // all other heap kinds remain protected
+    emitter.instruction(&format!("jne {}", super::object_hooks::SHARED));       // other kinds may still be a shared owner's plain decrement
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // borrow the current runtime tag before releasing the cell
     for ty in [PhpType::Int, PhpType::Float, PhpType::Bool, PhpType::Void] {
         emitter.instruction(&format!("cmp r10, {}", runtime_value_tag(&ty)));   // admit only scalars that cannot own a throwing child
         emitter.instruction(&format!("je {DIRECT}"));                           // use the same decref semantics without a fresh jump buffer
     }
-    emitter.instruction(&format!("jmp {PROTECTED}"));                           // strings, resources, containers and unknown tags stay protected
+    emitter.instruction(&format!("jmp {}", super::object_hooks::SHARED));       // heap-backed tags qualify only as a shared owner's decrement
 }

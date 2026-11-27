@@ -7,7 +7,8 @@
 //! Key details:
 //! - Only the exact __rt_decref_array callback and a live managed array qualify.
 //! - Logical length zero excludes child releases regardless of reserved capacity.
-//! - Hash-promoted storage, nonempty arrays and other callbacks retain protection.
+//! - Hash-promoted storage and nonempty arrays retain protection; other callbacks continue to
+//!   `super::object_hooks`.
 //! - The shared direct stub invokes the original callback and preserves GC semantics.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -28,7 +29,7 @@ fn emit_aarch64(emitter: &mut Emitter, protected: &str, direct: &str) {
     // -- authenticate the typed array callback before borrowing a header --
     abi::emit_symbol_address(emitter, "x9", "__rt_decref_array");
     emitter.instruction("cmp x0, x9");                                          // only the original typed indexed-array dispatcher has this proof
-    emitter.instruction(&format!("b.ne {protected}"));                          // arbitrary callbacks keep the protected path
+    emitter.instruction(&format!("b.ne {}", super::object_hooks::CANDIDATE));   // object release hooks carry their own proof
     abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("add x10, x9, #16");                                    // the first payload follows the uniform heap header
     emitter.instruction("cmp x1, x10");                                         // reject null, literals, sentinels and foreign payloads
@@ -46,9 +47,9 @@ fn emit_aarch64(emitter: &mut Emitter, protected: &str, direct: &str) {
     emitter.instruction("ldr x10, [x1, #-8]");                                  // retain all storage and collector flags in the actual header
     emitter.instruction("and x10, x10, #0xff");                                 // isolate the concrete storage kind
     emitter.instruction("cmp x10, #2");                                         // only indexed arrays use this length layout
-    emitter.instruction(&format!("b.ne {protected}"));                          // promoted hashes and all other kinds remain protected
+    emitter.instruction(&format!("b.ne {}", super::object_hooks::SHARED));      // other kinds may still be a shared owner's plain decrement
     emitter.instruction("ldr x10, [x1]");                                       // length counts owned children; capacity may already reserve four slots
-    emitter.instruction(&format!("cbnz x10, {protected}"));                     // any logical element may execute PHP cleanup
+    emitter.instruction(&format!("cbnz x10, {}", super::object_hooks::SHARED)); // a final release of elements may execute PHP cleanup
     emitter.instruction(&format!("b {direct}"));                                // invoke the authenticated dispatcher with its original GC behavior
 }
 
@@ -57,7 +58,7 @@ fn emit_x86(emitter: &mut Emitter, protected: &str, direct: &str) {
     // -- validate the exact typed callback and managed header --
     abi::emit_symbol_address(emitter, "r9", "__rt_decref_array");
     emitter.instruction("cmp rdi, r9");                                         // only the typed indexed-array dispatcher qualifies here
-    emitter.instruction(&format!("jne {protected}"));                           // other callbacks retain their existing handler
+    emitter.instruction(&format!("jne {}", super::object_hooks::CANDIDATE));    // object release hooks carry their own proof
     abi::emit_symbol_address(emitter, "r9", "_heap_buf");
     emitter.instruction("lea r10, [r9 + 16]");                                  // locate the first valid payload after the uniform header
     emitter.instruction("cmp rsi, r10");                                        // reject null, static and sentinel payloads
@@ -77,8 +78,8 @@ fn emit_x86(emitter: &mut Emitter, protected: &str, direct: &str) {
     emitter.instruction(&format!("jne {protected}"));                           // only managed indexed arrays can qualify
     emitter.instruction("and r10d, 0xff");                                      // ignore transient flags and cached incoming counts
     emitter.instruction("cmp r10d, 2");                                         // require actual indexed storage rather than a promoted hash
-    emitter.instruction(&format!("jne {protected}"));                           // other kinds retain the existing cleanup boundary
+    emitter.instruction(&format!("jne {}", super::object_hooks::SHARED));       // other kinds may still be a shared owner's plain decrement
     emitter.instruction("cmp QWORD PTR [rsi], 0");                              // only logical length matters, not reserved capacity
-    emitter.instruction(&format!("jne {protected}"));                           // nonempty arrays may own throwing child destructors
+    emitter.instruction(&format!("jne {}", super::object_hooks::SHARED));       // a final release of elements may run throwing destructors
     emitter.instruction(&format!("jmp {direct}"));                              // preserve original refcounts, retirement hooks and sweep suppression
 }

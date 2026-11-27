@@ -10,9 +10,11 @@
 //! - The caller's handler and active exception are restored before ordinary cleanup resumes.
 //! - The integer result reports a newly caught throw, independently of the pending owner slot.
 //! - Validated scalar Mixed and empty typed-array releases keep the original dispatcher without a new handler.
+//! - So do object release hooks (destructor, eval children, WeakMap) proven to return without PHP code.
 
 mod scalar_mixed;
 mod empty_array;
+mod object_hooks;
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{
@@ -89,6 +91,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
     empty_array::emit_candidate(emitter, scalar_mixed::PROTECTED, scalar_mixed::DIRECT);
+    object_hooks::emit_candidate(emitter, scalar_mixed::PROTECTED, scalar_mixed::DIRECT);
 }
 
 /// Passes one unary cleanup through the bounded helper, accumulating throws in a caller frame slot.

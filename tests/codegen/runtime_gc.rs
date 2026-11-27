@@ -106,6 +106,8 @@ mod argument_guards;
 mod deep_cleanup;
 #[path = "runtime_gc/scalar_mixed_cleanup.rs"]
 mod scalar_mixed_cleanup;
+#[path = "runtime_gc/object_hook_cleanup.rs"]
+mod object_hook_cleanup;
 mod scalar_set_fast_path;
 mod heap_tail_scan;
 #[path = "runtime_gc/eval_constructor.rs"]
