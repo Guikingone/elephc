@@ -574,7 +574,7 @@ fn lower_static_update_parent(
         if ctx.value_is_owning_temporary(probe) {
             crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
         }
-        let parent = lower_static_update_array_parent(ctx, pinned, read_array, write_key, read, span);
+        let parent = lower_static_update_array_parent(ctx, pinned, owner, read_array, write_key, read, span);
         let parent = retain_static_update_parent(ctx, parent, span);
         let ty = ctx.builder.value_php_type(parent.value);
         ctx.store_call_argument_local(&selected, parent, ty, Some(span));
@@ -617,10 +617,18 @@ fn retain_static_update_parent(
 
 /// Creates an array's writable child after its first read has diagnosed the dimension.
 fn lower_static_update_array_parent(
-    ctx: &mut LoweringContext<'_, '_>, pinned: LoweredValue, read_array: &Expr,
-    write_key: &Expr, read: &Expr, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, pinned: LoweredValue, owner: Option<crate::ir::LocalSlotId>,
+    read_array: &Expr, write_key: &Expr, read: &Expr, span: Span,
 ) -> LoweredValue {
     if let ExprKind::Variable(name) = &read_array.kind {
+        if let Some(owner) = owner.filter(|_| local_parent_fetch_for_write_applies(ctx, name, write_key)) {
+            // The local fetch reloads and separates the variable itself; the diagnosed read
+            // no longer needs the receiver pin. Dropping it here (the slot is cleared, so the
+            // merge's retirement is a no-op) keeps a sole owner from looking shared, which
+            // otherwise forced a full copy-on-write clone of the outer array on every update.
+            ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(owner)),
+                Op::ReleaseLocalSlot.default_effects(), Some(span));
+        }
         if let Some(parent) = lower_local_parent_fetch_for_write_inner(ctx, name, write_key, read, true) {
             return parent;
         }
@@ -1109,6 +1117,16 @@ fn lower_local_parent_fetch_for_write_inner(
             Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span, key_already_diagnosed))
         }
         _ => None,
+    }
+}
+
+/// Mirrors the arms of `lower_local_parent_fetch_for_write_inner` that return a parent.
+fn local_parent_fetch_for_write_applies(ctx: &LoweringContext<'_, '_>, name: &str, index: &Expr) -> bool {
+    match ctx.local_mutation_type(name).codegen_repr() {
+        PhpType::Array(_) => matches!(index_expr_key_type(ctx, index),
+            PhpType::Int | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Void),
+        PhpType::AssocArray { .. } => true,
+        _ => false,
     }
 }
 
