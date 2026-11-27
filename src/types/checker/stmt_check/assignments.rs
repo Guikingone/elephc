@@ -113,8 +113,7 @@ impl Checker {
         };
         self.packed_loop_counter.as_ref().is_some_and(|counter| {
             counter.name == *name
-                && counter.depth == self.local_conditional_depth
-                && !counter.rebound_locals.contains(array)
+                && counter.trusts_write(array, Some(self.local_conditional_depth))
         })
     }
 

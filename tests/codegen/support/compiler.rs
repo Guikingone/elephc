@@ -544,6 +544,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let instantiation_roots: HashSet<String> =
         elephc::generics::instantiation_roots(&check_result.requested_instantiations)
             .into_iter()
+            // A promotable clone is reachable the same way: only lowering's redirect names it.
+            .chain(elephc::generics::promotable_clones::promotable_clone_roots(
+                &check_result.requested_promotable_clones,
+            ))
             .collect();
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,

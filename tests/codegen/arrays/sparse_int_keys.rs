@@ -565,3 +565,156 @@ echo json_encode($r), "\n";
     assert_eq!(out.stdout, "{\"0\":1,\"3\":1,\"6\":1} {\"0\":2,\"4\":2,\"8\":2} [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]\n{\"0\":0.25,\"4\":0.25,\"8\":0.25}\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A float list stays off the typed float-list clone when a loop body that later writes a string key into the argument.
+#[test]
+fn test_float_list_clone_guard_c1() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sum($v) { $s = 0.0; foreach ($v as $x) { $s += $x; } return $s; }
+function run(int $n) {
+    $u = [1.5, 2.5];
+    for ($i = 0; $i < $n; $i++) { echo sum($u), "\n"; $u["k$i"] = 1.5; }
+}
+run(2);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "4\n5.5\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A float list stays off the typed float-list clone when a reference alias writing a string key into the argument.
+#[test]
+fn test_float_list_clone_guard_c2() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sum($v) { $s = 0.0; foreach ($v as $x) { $s += $x; } return $s; }
+function run() {
+    $u = [1.5, 2.5];
+    $r = &$u; $r["k"] = 4.0;
+    echo sum($u), "\n";
+}
+run();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "8\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A float list stays off the typed float-list clone when a by-reference closure capture writing a string key into the argument.
+#[test]
+fn test_float_list_clone_guard_c3() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sum($v) { $s = 0.0; foreach ($v as $x) { $s += $x; } return $s; }
+function run() {
+    $u = [1.5, 2.5];
+    $f = function() use (&$u) { $u["a"] = 4.0; }; $f();
+    echo sum($u), "\n";
+}
+run();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "8\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A float list stays off the typed float-list clone when a callee whose returned local a by-reference capture turned into a hash.
+#[test]
+fn test_float_list_clone_guard_d5() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sum($v) { $s = 0.0; foreach ($v as $k => $x) { $s += $x; echo $k, ","; } return $s; }
+function b3($v) { $o = [1.5]; $f = function() use (&$o) { $o["q"] = 2.0; }; $f(); return $o; }
+function run(int $n) { $u = [1.5, 2.5]; $r = b3($u); echo sum($r), "\n"; var_dump($r); echo sum(b3($u)), "\n"; }
+run(3);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0,q,3.5\narray(2) {\n  [0]=>\n  float(1.5)\n  [\"q\"]=>\n  float(2)\n}\n0,q,3.5\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A float list stays off the typed float-list clone when an argument rebound in the loop to a call result that later gets a string key.
+#[test]
+fn test_float_list_clone_guard_d9() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sum($v) { $s = 0.0; foreach ($v as $k => $x) { $s += $x; echo $k, ","; } return $s; }
+function b7($v) { $o = []; foreach ($v as $x) { $o[] = $x; } return $o; }
+function run(int $n) { $u = [1.5, 2.5]; for ($i = 0; $i < $n; $i++) { echo sum($u), "\n"; $u = b7($u); $u["x$i"] = 1.0; } }
+run(3);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0,1,4\n0,1,x0,5\n0,1,2,x1,6\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A float list stays off the typed float-list clone when a chained call whose argument later gets a string key in the loop.
+#[test]
+fn test_float_list_clone_guard_d10() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function sum($v) { $s = 0.0; foreach ($v as $k => $x) { $s += $x; echo $k, ","; } return $s; }
+function b8($v) { return $v; }
+function run(int $n) { $u = [1.5, 2.5]; for ($i = 0; $i < $n; $i++) { echo sum(b8($u)), "\n"; $u["x$i"] = 1.0; } }
+run(3);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0,1,4\n0,1,x0,5\n0,1,x0,x1,6\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A float list stays off the typed float-list clone when a callee with a by-reference capture returning a hash.
+#[test]
+fn test_float_list_clone_guard_m4() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function b3($v) { $o = [1.5]; $f = function() use (&$o) { $o["q"] = 2.0; }; $f(); return $o; }
+function run() { $u = [1.5, 2.5]; var_dump(b3($u)); }
+run();
+var_dump(b3([1, "a"]));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "array(2) {\n  [0]=>\n  float(1.5)\n  [\"q\"]=>\n  float(2)\n}\narray(2) {\n  [0]=>\n  float(1.5)\n  [\"q\"]=>\n  float(2)\n}\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A float list stays off the typed float-list clone when a bare `array` return of an int list that the caller extends with sparse and string keys.
+#[test]
+fn test_float_list_clone_guard_e5() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function c9(array $v): array { return [1, 2, 3]; }
+function run() {
+    $u = [1.5, 2.5];
+    $r = c9($u);
+    $r[10] = 5;
+    $r["s"] = "x";
+    var_dump($r);
+}
+run();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "array(5) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n  [10]=>\n  int(5)\n  [\"s\"]=>\n  string(1) \"x\"\n}\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A `for` counter write keeps packed storage only when every path to the next iteration writes
+/// the slot (both arms of an `if`, a `continue` after the write); a `continue` before it, a
+/// one-armed branch, a `continue 2` out of a nested loop or `switch`, and a `catch` that
+/// continues still produce PHP's sparse hash.
+#[test]
+fn test_packed_counter_writes_on_every_iteration_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function f(int $n) {
+  $a = []; for ($i = 0; $i < $n; $i++) { if ($i == 2) continue; $a[$i] = $i; }
+  $b = []; for ($i = 0; $i < $n; $i++) { if ($i % 2) { $b[$i] = 1; } }
+  $c = []; for ($i = 0; $i < $n; $i++) { $c[$i] = 0; if ($i == 1) continue; $c[$i] = 2; }
+  $d = []; for ($i = 0; $i < $n; $i++) { if ($i == 1) { $d[$i] = 5; continue; } elseif ($i == 3) { $d[$i] = 6; } else { $d[$i] = 7; } }
+  $e = []; for ($i = 0; $i < $n; $i++) { if ($i == 1) { $e[$i] = 5; } elseif ($i == 3) { $e[$i] = 6; } }
+  $g = []; for ($i = 0; $i < $n; $i++) { foreach ([1] as $x) { if ($i == 2) continue 2; } $g[$i] = $x; }
+  $h = []; for ($i = 0; $i < $n; $i++) { switch ($i) { case 2: continue 2; default: $h[$i] = 1; } }
+  $k = []; for ($i = 0; $i < $n; $i++) { if ($i == 3) break; if ($i == 1) { $k[$i] = 1; } else { $k[$i] = 2; } }
+  $m = []; for ($i = 0; $i < $n; $i++) { try { if ($i == 2) throw new Exception(); $m[$i] = 1; } catch (Exception $ex) { continue; } }
+  $p = []; for ($i = 0; $i < $n; $i++) { while (true) { if ($i == 2) { continue 2; } break; } $p[$i] = 1; }
+  $q = []; for ($i = 0; $i < $n; $i++) { if ($i == 2) { $q[$i + 1] = 9; } else { $q[$i] = 1; } }
+  return json_encode([$a, $b, $c, $d, $e, $g, $h, $k, $m, $p, $q]);
+}
+echo f(5), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"0\":0,\"1\":1,\"3\":3,\"4\":4},{\"1\":1,\"3\":1},[2,0,2,2,2],[7,5,7,6,7],{\"1\":5,\"3\":6},{\"0\":1,\"1\":1,\"3\":1,\"4\":1},{\"0\":1,\"1\":1,\"3\":1,\"4\":1},[2,1,2],{\"0\":1,\"1\":1,\"3\":1,\"4\":1},{\"0\":1,\"1\":1,\"3\":1,\"4\":1},{\"0\":1,\"1\":1,\"3\":1,\"4\":1}]\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

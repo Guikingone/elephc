@@ -998,10 +998,7 @@ impl Checker {
                     .filter(|counter| self.counter_storage_is_frame_private(&counter.name));
                 // Cloned first: the stabilizer takes `&mut Checker`, so the name cannot be
                 // borrowed out of `self` across the call.
-                let packed_counter_name = self
-                    .packed_loop_counter
-                    .as_ref()
-                    .map(|counter| counter.name.clone());
+                let packed_counter = self.packed_loop_counter.clone();
                 stabilize_loop_storage(
                     self,
                     stmt.span,
@@ -1009,7 +1006,7 @@ impl Checker {
                     update.as_deref(),
                     condition.as_ref(),
                     env,
-                    packed_counter_name.as_deref(),
+                    packed_counter.as_ref(),
                 );
                 super::loop_entry::prepare_for_update_reads(self, update.as_deref(), env);
                 // The rest of the arm re-walks this same body, so the counter stays registered

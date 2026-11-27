@@ -20,7 +20,7 @@
 //! - Syntactic apart from the callee declarations, which are fixed before any body is checked, so
 //!   every repeated checker walk of a body gets the same answer.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
@@ -284,6 +284,17 @@ impl Checker {
     ) -> Result<Option<String>, crate::errors::CompileError> {
         self.flush_promotable_reresolutions()?;
         let clone = self.promotable_clone_for_call(callee, args, env, call_span);
+        if clone.is_none() {
+            // An earlier walk of this body may have redirected the call under a narrower view of
+            // its arguments (a loop body walked before its storage contract widened a local to a
+            // hash). The walk that settles the body is the one lowering follows.
+            let key = (self.current_loop_storage_scope.clone(), call_span);
+            if self.generic_call_sites.get(&key).is_some_and(|target| {
+                crate::generics::promotable_clones::promotable_clone_source_name(target).is_some()
+            }) {
+                self.generic_call_sites.remove(&key);
+            }
+        }
         let callee = clone.as_deref().unwrap_or(callee);
         let mut activated = false;
         for (position, arg) in args.iter().enumerate() {
@@ -365,15 +376,28 @@ impl Checker {
             })
             .map(|(position, _)| position)
             .collect();
+        // A closure in the callee is checked once per declaration span family, and its
+        // by-reference captures are not modelled across the clone's retagged body.
+        let mut callee_has_closure = false;
+        crate::int_range::scan::walk_stmts(&decl.body, true, &mut |node| {
+            if let crate::int_range::scan::Node::Expr(expr) = node {
+                callee_has_closure |= matches!(expr.kind, ExprKind::Closure { .. });
+            }
+        });
         // A bare local the checker types as a packed `array<float>` is a float list at run time:
         // a non-promotable typed array never holds hash storage. A parameter the body only reads
         // (no reassignment, element write, reference, capture or by-reference pass) behaves the
         // same under `array<float>` as under the untyped or bare `array` contract, whose only
         // check (`is_array`) the argument already passes.
+        let float_args: Vec<bool> = args
+            .iter()
+            .map(|arg| self.is_typed_float_list_arg(arg, env))
+            .collect();
+        let decl = self.fn_decls.get(callee)?;
         let float_positions: Vec<usize> = args
             .iter()
             .enumerate()
-            .filter(|(position, arg)| {
+            .filter(|(position, _)| {
                 let position = *position;
                 position < decl.params.len()
                     && !positions.contains(&position)
@@ -383,7 +407,8 @@ impl Checker {
                     && decl.defaults.get(position).is_none_or(Option::is_none)
                     && !decl.ref_params.get(position).copied().unwrap_or(true)
                     && candidates.read_only_clonable_param(&decl.params[position])
-                    && self.is_typed_float_list_arg(arg, env)
+                    && !callee_has_closure
+                    && float_args[position]
             })
             .map(|(position, _)| position)
             .collect();
@@ -431,11 +456,26 @@ impl Checker {
     /// Returns whether a call argument is a typed packed `array<float>` at run time: a bare
     /// non-promotable local the checker types so, or a direct call an earlier walk of this body
     /// already redirected to a clone that returns a typed float list.
-    fn is_typed_float_list_arg(&self, arg: &Expr, env: &crate::types::TypeEnv) -> bool {
+    fn is_typed_float_list_arg(&mut self, arg: &Expr, env: &crate::types::TypeEnv) -> bool {
         let float_list = |ty: &PhpType| matches!(ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Float);
         match &arg.kind {
+            // The env type is a VIEW of the local: a reference alias, a by-reference capture or
+            // another frame (`global`, `static`, a by-reference parameter) can write a string key
+            // into the very same storage without this body's types noticing. Only a candidate of
+            // this body that no other binding reaches is the packed float list its type says.
             ExprKind::Variable(name) => {
-                !self.is_promotable_array_local(name) && env.get(name).is_some_and(float_list)
+                !self.is_promotable_array_local(name)
+                    && !self.ref_aliased_locals.contains(name)
+                    && self.counter_storage_is_frame_private(name)
+                    && env.get(name).is_some_and(float_list)
+                    && self.guarded_local_storage_type(arg, env).is_none_or(float_list)
+                    && {
+                        let candidates = self.promotable_array_candidates.clone();
+                        let function = self.current_function.clone();
+                        self.local_holds_packed_list(
+                            &candidates, function.as_deref(), name, PACKED_LIST_PROOF_DEPTH,
+                        )
+                    }
             }
             ExprKind::FunctionCall { .. } => self
                 .generic_call_sites
@@ -444,10 +484,87 @@ impl Checker {
                     crate::generics::promotable_clones::promotable_clone_source_name(target)
                         .is_some()
                 })
-                .and_then(|target| self.functions.get(target))
-                .is_some_and(|sig| float_list(&sig.return_type)),
+                .cloned()
+                .filter(|target| self.functions.get(target).is_some_and(|sig| float_list(&sig.return_type)))
+                .is_some_and(|target| self.returns_packed_list(&target, PACKED_LIST_PROOF_DEPTH)),
             _ => false,
         }
+    }
+
+    /// Returns whether local `name` of the body `candidates` scanned holds packed storage at
+    /// every point: no reference, capture or other frame reaches it, its element writes keep it
+    /// packed (`float_list_safe`), and each whole assignment stores an array literal or the result
+    /// of a function whose every `return` is such a packed list in turn.
+    ///
+    /// A parameter starts out holding its argument: only a float-list position of a typed clone
+    /// (every caller proved its argument) is such a list.
+    fn local_holds_packed_list(
+        &mut self,
+        candidates: &PromotableCandidates,
+        function: Option<&str>,
+        name: &str,
+        depth: u32,
+    ) -> bool {
+        let mut sources = candidates.assign_sources(name).to_vec();
+        if let Some(decl) = function.and_then(|function| self.fn_decls.get(function)) {
+            if let Some(position) = decl.params.iter().position(|param| param == name) {
+                let proven = function.is_some_and(|function| {
+                    clone_float_positions(function).contains(&position)
+                });
+                sources.push(if proven { AssignSource::Literal } else { AssignSource::Other });
+            }
+        }
+        candidates.float_list_safe(name)
+            && !sources.is_empty()
+            && sources.iter().all(|source| match source {
+                AssignSource::Literal => true,
+                AssignSource::Call(callee) => self.returns_packed_list(callee, depth),
+                AssignSource::Other => false,
+            })
+    }
+
+    /// Returns whether every `return` of user function `callee` yields packed list storage, so
+    /// the array type inferred for its result is that storage and not a view of a hash a
+    /// reference or a by-reference capture filled under the same local.
+    pub(crate) fn returns_packed_list(&mut self, callee: &str, depth: u32) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Some(decl) = self.fn_decls.get(callee) else {
+            return false;
+        };
+        if decl.by_ref_return || crate::types::checker::yield_validation::body_contains_yield(&decl.body) {
+            return false;
+        }
+        let body = decl.body.clone();
+        let mut returns = Vec::new();
+        let mut has_closure = false;
+        crate::int_range::scan::walk_stmts(&body, false, &mut |node| match node {
+            crate::int_range::scan::Node::Stmt(stmt) => {
+                if let StmtKind::Return(value) = &stmt.kind {
+                    returns.push(value.clone());
+                }
+            }
+            crate::int_range::scan::Node::Expr(expr) => {
+                has_closure |= matches!(expr.kind, ExprKind::Closure { .. });
+            }
+        });
+        if has_closure || returns.is_empty() {
+            return false;
+        }
+        let Some(candidates) = self.callee_promotable_candidates(callee) else {
+            return false;
+        };
+        returns.iter().all(|value| match value.as_ref().map(|value| &value.kind) {
+            Some(ExprKind::ArrayLiteral(_)) => true,
+            Some(ExprKind::Variable(local)) => {
+                self.local_holds_packed_list(&candidates, Some(callee), local, depth - 1)
+            }
+            Some(ExprKind::FunctionCall { name, .. }) => {
+                self.returns_packed_list(name.as_str(), depth - 1)
+            }
+            _ => false,
+        })
     }
 
     /// Returns the cached candidate scan of user function `callee`'s body.
@@ -684,6 +801,10 @@ pub(crate) struct PromotableCandidates {
     keyed: HashSet<String>,
     /// Locals the body writes by element at all (`Scan::written`).
     written: HashSet<String>,
+    /// Locals with an element write that may leave packed storage (`Scan::float_unsafe`).
+    float_unsafe: HashSet<String>,
+    /// What each whole assignment of a local stores (`Scan::assign_sources`).
+    assign_sources: HashMap<String, Vec<AssignSource>>,
     /// Whether the body holds a construct a typed clone would duplicate.
     clone_blocked: bool,
 }
@@ -712,6 +833,18 @@ impl PromotableCandidates {
         self.clonable_param(name) && !self.written.contains(name)
     }
 
+    /// Returns whether candidate `name` keeps packed storage through every element write of this
+    /// body, so the `array<float>` type the checker gives it is its storage and not a view an
+    /// enclosing loop's storage contract may widen to a hash later in the body.
+    pub(crate) fn float_list_safe(&self, name: &str) -> bool {
+        self.contains(name) && !self.float_unsafe.contains(name)
+    }
+
+    /// Returns what the whole assignments of `name` store.
+    pub(crate) fn assign_sources(&self, name: &str) -> &[AssignSource] {
+        self.assign_sources.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     /// Disqualifies more locals, such as those a reference reaches.
     pub(crate) fn disqualify<'a>(&mut self, names: impl IntoIterator<Item = &'a String>) {
         self.disqualified.extend(names.into_iter().cloned());
@@ -725,7 +858,11 @@ impl PromotableCandidates {
 /// function, and a builtin outside the read-only list all disqualify it.
 pub(crate) fn find_candidates(checker: &Checker, body: &[Stmt]) -> PromotableCandidates {
     let mut scan = Scan::default();
-    scan.stmts(body);
+    // The packed-counter proofs the scan runs need the same by-value call facts the checker's
+    // own `for` walk installs (see `packed_counter::with_by_value_counter_args`).
+    super::packed_counter::with_by_value_counter_args(checker.by_value_user_call_args(body), || {
+        scan.stmts(body)
+    });
     let mut disqualified = scan.disqualified;
     for (callee, position, local) in scan.user_call_args {
         if !checker.user_function_takes_by_value(&callee, position) {
@@ -739,6 +876,8 @@ pub(crate) fn find_candidates(checker: &Checker, body: &[Stmt]) -> PromotableCan
         assigned: scan.assigned,
         keyed: scan.keyed,
         written: scan.written,
+        float_unsafe: scan.float_unsafe,
+        assign_sources: scan.assign_sources,
         clone_blocked: scan.clone_blocked,
     }
 }
@@ -763,6 +902,22 @@ impl Checker {
     }
 }
 
+/// Returns the parameter positions a typed clone declares as float lists (`3f` in its name).
+fn clone_float_positions(function: &str) -> Vec<usize> {
+    function
+        .split_once("#__promotable_")
+        .map(|(_, positions)| {
+            positions
+                .split('_')
+                .filter_map(|position| position.strip_suffix('f')?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// How many call levels a packed-list proof follows through assignments and returns.
+const PACKED_LIST_PROOF_DEPTH: u32 = 4;
+
 /// Returns whether an element write's value may be an integer, the only value a promotable
 /// `array<int>` write stores: a string, float, bool, `null` or array literal, a concatenation and
 /// a cast to anything but `int` never are. Every other expression stays eligible, because its
@@ -785,6 +940,31 @@ fn value_may_stay_int(value: &Expr) -> bool {
     )
 }
 
+/// What a whole assignment `$a = …` stores, as far as a packed-list proof cares.
+#[derive(Clone, Debug)]
+pub(crate) enum AssignSource {
+    /// An array literal, whose storage the checker types exactly.
+    Literal,
+    /// The result of a direct call to this function name.
+    Call(String),
+    /// Anything else.
+    Other,
+}
+
+impl AssignSource {
+    fn of(value: &Expr) -> Self {
+        match &value.kind {
+            ExprKind::ArrayLiteral(_) => AssignSource::Literal,
+            ExprKind::FunctionCall { name, args }
+                if !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) =>
+            {
+                AssignSource::Call(name.as_str().to_string())
+            }
+            _ => AssignSource::Other,
+        }
+    }
+}
+
 /// What one walk of a body collects.
 #[derive(Default)]
 struct Scan {
@@ -798,6 +978,13 @@ struct Scan {
     foreach_keys: HashSet<String>,
     /// Locals some construct can reach outside the dispatched element operations.
     disqualified: HashSet<String>,
+    /// Locals with an element write that may leave packed storage: anything but an append or a
+    /// `$a[$i] = …` the packed-counter proof of an enclosing `for` covers (`must_written`).
+    float_unsafe: HashSet<String>,
+    /// The packed counters of the `for` loops enclosing the statement being walked.
+    for_counters: Vec<super::packed_counter::PackedLoopCounter>,
+    /// What each whole assignment of a local stores, outside closures.
+    assign_sources: HashMap<String, Vec<AssignSource>>,
     /// Set when a builtin can read or rebind every local of the body.
     scope_escape: bool,
     /// `(callee, argument position, local)` for each bare local passed to a function call that is
@@ -840,6 +1027,13 @@ impl Scan {
         match &stmt.kind {
             StmtKind::ArrayAssign { array, index, value } => {
                 self.written.insert(array.clone());
+                let counter_write = matches!(&index.kind, ExprKind::Variable(key)
+                    if self.for_counters.iter().any(|counter| {
+                        counter.name == *key && counter.must_written.contains(array)
+                    }));
+                if !counter_write {
+                    self.float_unsafe.insert(array.clone());
+                }
                 if self.key_may_skip(index) && value_may_stay_int(value) {
                     self.keyed.insert(array.clone());
                 }
@@ -872,6 +1066,7 @@ impl Scan {
             }
             StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
                 self.assigned.insert(name.clone());
+                self.assign_sources.entry(name.clone()).or_default().push(AssignSource::of(value));
                 self.foreach_keys.remove(name);
                 self.expr(value);
             }
@@ -973,7 +1168,15 @@ impl Scan {
                 if let Some(update) = update {
                     self.stmt(update);
                 }
+                let counter = super::packed_counter::packed_for_counter(
+                    init.as_deref(), condition.as_ref(), update.as_deref(), body, 0,
+                );
+                let pushed = counter.is_some();
+                self.for_counters.extend(counter);
                 self.stmts(body);
+                if pushed {
+                    self.for_counters.pop();
+                }
             }
             StmtKind::Switch {
                 subject,
@@ -1059,6 +1262,8 @@ impl Scan {
             ExprKind::Assignment { target, .. } => match &target.kind {
                 ExprKind::Variable(name) => {
                     self.assigned.insert(name.clone());
+                    // The stored value is not tracked through an expression-form assignment.
+                    self.assign_sources.entry(name.clone()).or_default().push(AssignSource::Other);
                     self.foreach_keys.remove(name);
                 }
                 _ => self.disqualify_root(target),

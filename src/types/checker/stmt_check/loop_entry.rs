@@ -26,7 +26,7 @@ pub(super) fn stabilize_loop_storage(
     update: Option<&Stmt>,
     condition: Option<&Expr>,
     env: &mut TypeEnv,
-    packed_counter: Option<&str>,
+    packed_counter: Option<&crate::types::checker::packed_counter::PackedLoopCounter>,
 ) {
     let key = (checker.current_loop_storage_scope.clone(), loop_span);
     let snapshot = env.clone();

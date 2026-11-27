@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 
 /// The `for` counter a still-empty array may be indexed by while staying on packed storage.
+#[derive(Clone)]
 pub(crate) struct PackedLoopCounter {
     /// The counter local, which is `0` at the first write and advances one slot per iteration.
     pub name: String,
@@ -30,6 +31,23 @@ pub(crate) struct PackedLoopCounter {
     /// local reassigned in the body (`$a = [];`) starts over at length 0 while the counter runs
     /// on, so the very next write leaves a gap and the exception must not cover it.
     pub rebound_locals: HashSet<String>,
+    /// Whether some `continue` in the body restarts THIS loop. It can skip a write the depth
+    /// rule would otherwise trust, so only `must_written` arrays stay covered then.
+    pub has_loop_continue: bool,
+    /// Arrays the body writes as `$a[$counter] = …` on EVERY path that reaches the next
+    /// iteration (the fallthrough and each `continue` of this loop). Such an array has exactly
+    /// `$counter` entries when an iteration starts, so any write at that key — however deeply
+    /// nested under a branch — appends or overwrites and never leaves a gap.
+    pub must_written: HashSet<String>,
+}
+
+impl PackedLoopCounter {
+    /// Returns whether a `$array[$counter]` write at `depth` keeps packed storage.
+    pub(crate) fn trusts_write(&self, array: &str, depth: Option<u32>) -> bool {
+        !self.rebound_locals.contains(array)
+            && (self.must_written.contains(array)
+                || (!self.has_loop_continue && depth.is_none_or(|depth| depth == self.depth)))
+    }
 }
 
 /// Returns the counter of a `for` loop whose `$a[$i] = …` writes may stay on packed storage.
@@ -73,7 +91,16 @@ pub(super) fn packed_for_counter(
         // is as rebound as one the body assigns.
         collect_rebound_locals_from_expr(condition, &mut rebound_locals);
     }
+    let has_loop_continue = body.iter().any(|stmt| stmt_continues_loop(stmt, 0));
+    let mut candidates = HashSet::new();
+    collect_counter_written_arrays(body, &name, &mut candidates);
+    let must_written = candidates
+        .into_iter()
+        .filter(|array| must_write(body, array, &name, false) == Some(true))
+        .collect();
     Some(PackedLoopCounter {
+        has_loop_continue,
+        must_written,
         literal_max: condition.and_then(|condition| match &condition.kind {
             ExprKind::BinaryOp { left, op: crate::parser::ast::BinOp::Lt, right }
                 if matches!(&left.kind, ExprKind::Variable(variable) if variable == &name) =>
@@ -84,6 +111,84 @@ pub(super) fn packed_for_counter(
         depth,
         rebound_locals,
     })
+}
+
+/// Collects the arrays written as `$a[$counter] = …` anywhere in the body.
+fn collect_counter_written_arrays(body: &[Stmt], counter: &str, out: &mut HashSet<String>) {
+    for stmt in body {
+        if let StmtKind::ArrayAssign { array, index, .. } = &stmt.kind {
+            if matches!(&index.kind, ExprKind::Variable(name) if name == counter) {
+                out.insert(array.clone());
+            }
+        }
+        for nested in nested_bodies(stmt) {
+            collect_counter_written_arrays(nested, counter, out);
+        }
+    }
+}
+
+/// Walks one statement list of the loop body and reports whether `$array[$counter] = …` has run
+/// on every path that leaves it normally: `Some(true)` when it has (or the list never falls
+/// through), `Some(false)` when some fallthrough path skips it, and `None` when a `continue` of
+/// this loop is reachable before the write, or sits inside a construct this walk does not model.
+///
+/// `break`, `return` and `throw` leave the loop, and a loop that stops early ends the array at a
+/// shorter length rather than leaving a hole, so those paths need no write.
+fn must_write(stmts: &[Stmt], array: &str, counter: &str, mut written: bool) -> Option<bool> {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ArrayAssign { array: target, index, .. }
+                if target == array
+                    && matches!(&index.kind, ExprKind::Variable(name) if name == counter) =>
+            {
+                written = true;
+            }
+            StmtKind::Continue(1) => return written.then_some(true),
+            StmtKind::Break(_) | StmtKind::Return(_) | StmtKind::Throw(_) => return Some(true),
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                let mut all = must_write(then_body, array, counter, written)?;
+                for (_, clause) in elseif_clauses {
+                    all &= must_write(clause, array, counter, written)?;
+                }
+                all &= match else_body {
+                    Some(stmts) => must_write(stmts, array, counter, written)?,
+                    None => written,
+                };
+                written = all;
+            }
+            StmtKind::Synthetic(stmts) => {
+                written = must_write(stmts, array, counter, written)?;
+            }
+            _ if stmt_continues_loop(stmt, 0) => return None,
+            _ => {}
+        }
+    }
+    Some(written)
+}
+
+/// Returns whether a `continue` inside this statement restarts the loop `inner` levels out.
+///
+/// `switch` counts as a level for `continue`, as in PHP.
+fn stmt_continues_loop(stmt: &Stmt, inner: usize) -> bool {
+    let nested = |bodies: Vec<&[Stmt]>, inner: usize| {
+        bodies
+            .into_iter()
+            .any(|body| body.iter().any(|stmt| stmt_continues_loop(stmt, inner)))
+    };
+    match &stmt.kind {
+        StmtKind::Continue(levels) => *levels == inner + 1,
+        StmtKind::While { .. }
+        | StmtKind::DoWhile { .. }
+        | StmtKind::Foreach { .. }
+        | StmtKind::For { .. }
+        | StmtKind::Switch { .. } => nested(nested_bodies(stmt), inner + 1),
+        _ => nested(nested_bodies(stmt), inner),
+    }
 }
 
 /// Collects every local the loop body rebinds, at any depth, including nested loops.
@@ -256,7 +361,8 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
         return false;
     }
     match &stmt.kind {
-        StmtKind::Continue(levels) => *levels <= loop_depth,
+        // A `continue` of THIS loop is allowed: `must_write` decides which arrays it can skip.
+        StmtKind::Continue(levels) => *levels <= loop_depth + 1,
         // A catch binding reassigns its exception variable when its body runs.
         StmtKind::Try { catches, .. }
             if catches

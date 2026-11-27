@@ -300,7 +300,9 @@ impl Checker {
                 && matches!(inferred_specific_array_type_from_infos(&all_return_infos), Some(_))
             {
                 inferred_specific_array_type_from_infos(&all_return_infos).unwrap()
-            } else if let Some(typed) = float_list_clone_return(name, &declared_ret, &all_return_infos) {
+            } else if let Some(typed) = float_list_clone_return(name, &declared_ret, &all_return_infos)
+                .filter(|_| self.returns_packed_list(name, 4))
+            {
                 typed
             } else {
                 declared_ret
@@ -477,7 +479,7 @@ fn float_list_clone_return(
             return None;
         }
         match &return_info.ty {
-            PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Float | PhpType::Int) => {}
+            PhpType::Array(elem) if elem.as_ref() == &PhpType::Float => {}
             _ => return None,
         }
         match typed {

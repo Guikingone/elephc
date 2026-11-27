@@ -73,7 +73,7 @@ fn loop_carried_storage_types(
     body: &[Stmt],
     update: Option<&Stmt>,
     entry: &TypeEnv,
-    packed_counter: Option<&str>,
+    packed_counter: Option<&super::packed_counter::PackedLoopCounter>,
     tagged_integer_locals: &HashSet<String>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
@@ -143,7 +143,7 @@ pub(super) struct ObjectRelations<'a> {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn analyze_loop_storage<'a>(
     body: &'a [Stmt], update: Option<&'a Stmt>, condition: Option<&'a Expr>,
-    entry: &TypeEnv, packed_counter: Option<&str>, tagged_integer_locals: &HashSet<String>,
+    entry: &TypeEnv, packed_counter: Option<&super::packed_counter::PackedLoopCounter>, tagged_integer_locals: &HashSet<String>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     element_storage: &ElementStorageFacts,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
@@ -294,7 +294,7 @@ fn join_tagged_numeric_flow_type(left: &PhpType, right: &PhpType) -> Option<PhpT
 fn apply_array_write_evidence(
     writes: &[ArrayWrite<'_>],
     env: &mut TypeEnv,
-    packed_counter: Option<&str>,
+    packed_counter: Option<&super::packed_counter::PackedLoopCounter>,
     foreach_keys: &HashSet<&str>,
     foreach_values: &HashSet<&str>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
@@ -345,7 +345,7 @@ fn apply_array_write_evidence(
                 && !write.skippable)
                 || foreach_value_key)
                 && array_is_still_empty
-                && !index_is_trusted_counter(index, packed_counter, foreach_keys)
+                && !index_is_trusted_counter(index, write.name, packed_counter, foreach_keys)
                 && array_key_contiguity_is_unproven(index);
             literal_string_key || unbounded_integer_key
         });
@@ -1137,13 +1137,16 @@ fn collect_array_writes<'a>(
 /// its storage at run time and this pass must not pin it.
 fn index_is_trusted_counter(
     index: &Expr,
-    packed_counter: Option<&str>,
+    array: &str,
+    packed_counter: Option<&super::packed_counter::PackedLoopCounter>,
     foreach_keys: &HashSet<&str>,
 ) -> bool {
     let ExprKind::Variable(name) = &index.kind else {
         return false;
     };
-    foreach_keys.contains(name.as_str()) || packed_counter == Some(name.as_str())
+    foreach_keys.contains(name.as_str())
+        || packed_counter
+            .is_some_and(|counter| counter.name == *name && counter.trusts_write(array, None))
 }
 
 /// Collects every local bound as a `foreach` VALUE anywhere in a loop body.
