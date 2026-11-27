@@ -47,6 +47,9 @@ pub(super) fn lower_match(
                 Op::StrictEq.default_effects(),
                 Some(expr.span),
             );
+            if ctx.value_needs_release_after_use(condition) {
+                crate::ir_lower::ownership::release_if_owned(ctx, condition, Some(expr.span));
+            }
             let hit_block = match hits {
                 Some(_) => ctx.builder.create_named_block("match.hit", Vec::new()),
                 None => result_block,

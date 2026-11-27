@@ -610,6 +610,7 @@ fn emit_builtin_call_value_with_target(
                 .filter(|(index, _)| !roots.iter().any(|(root, _)| root == index))
                 .filter(|(index, _)| !builtin_consumes_mutating_ref_operand(def, *index))
                 .map(|(_, value)| *value).collect::<Vec<_>>();
+            let unrooted = release_detached_mixed_operands(ctx, def, call.value, unrooted, span);
             release_owned_call_arg_temporaries(
                 ctx,
                 &unrooted,
@@ -872,4 +873,55 @@ pub(super) fn resolve_registry_builtin_result_type(
         crate::builtins::semantics::BuiltinResultType::Shared(resolve) => resolve(&input),
     };
     Some(normalize_value_php_type(resolved))
+}
+
+/// Retires owning boxed-Mixed operands whose payload the builtin result can never alias.
+///
+/// The formatters copy every boxed conversion into fresh output, and a scalar cast of a
+/// boxed cell persists or converts its payload. Their `MayAliasArguments` contract would
+/// otherwise keep the box alive past the call and leak it (one cell per `sprintf("%d",
+/// $list[$k])` or `strval($list[$k])` over a missing-element read).
+fn release_detached_mixed_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    def: &crate::builtins::registry::BuiltinDef,
+    result: crate::ir::ValueId,
+    operands: Vec<crate::ir::ValueId>,
+    span: Span,
+) -> Vec<crate::ir::ValueId> {
+    let formatter = matches!(
+        def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::Sprintf | crate::ir::RuntimeFnId::Printf
+                    | crate::ir::RuntimeFnId::Fprintf
+            ) | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                target: crate::ir::RuntimeFnId::Sprintf | crate::ir::RuntimeFnId::Printf
+                    | crate::ir::RuntimeFnId::Fprintf,
+                ..
+            },
+        )
+    );
+    let scalar_cast_source = ctx.builder.value_defining_instruction(result).and_then(|inst| {
+        (inst.op == Op::Cast && matches!(
+            inst.immediate,
+            Some(Immediate::CastTarget(IrType::Str | IrType::I64 | IrType::F64))
+        )).then(|| inst.operands.first().copied()).flatten()
+    });
+    if !formatter && scalar_cast_source.is_none() {
+        return operands;
+    }
+    let mut kept = Vec::with_capacity(operands.len());
+    for operand in operands {
+        let value = LoweredValue { value: operand, ir_type: ctx.builder.value_type(operand) };
+        let detached = (formatter || scalar_cast_source == Some(operand))
+            && operand != result
+            && value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            && ctx.value_is_owning_temporary(value);
+        if detached {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        } else {
+            kept.push(operand);
+        }
+    }
+    kept
 }

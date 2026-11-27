@@ -168,7 +168,13 @@ pub(super) fn lower_error_suppress(ctx: &mut LoweringContext<'_, '_>, inner: &Ex
 /// Lowers `print`.
 pub(super) fn lower_print(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if ctx.builder.insertion_block_is_terminated() {
+        return value;
+    }
     ctx.emit_void(Op::PrintValue, vec![value.value], None, Op::PrintValue.default_effects(), Some(expr.span));
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    }
     lower_int_literal(ctx, 1, expr)
 }
 

@@ -818,3 +818,24 @@ l(50,3); l(1,3);
     );
     assert_eq!(out, "array(3) {\n  [0]=>\n  bool(false)\n  [2]=>\n  bool(true)\n  [3]=>\n  bool(false)\n}\n0,2,3,\narray(3) {\n  [0]=>\n  bool(false)\n  [7]=>\n  bool(true)\n  [8]=>\n  bool(false)\n}\n0,7,8,\narray(3) {\n  [0]=>\n  bool(false)\n  [2]=>\n  bool(true)\n  [\"k\"]=>\n  bool(false)\n}\n0,1,2,50,51,int(5)\n{\"0\":true,\"1\":false,\"2\":false,\"50\":true,\"51\":false}\n0,1,2,3,int(4)\n[true,true,false,false]\n");
 }
+
+/// Boxed missing-element reads consumed by `print`, the formatters, scalar casts, `match`
+/// conditions and `switch` subjects are released once the consumer is done with them.
+#[test]
+fn test_boxed_list_reads_release_through_output_and_dispatch_consumers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f(int $b) { $d = [true, false];
+  print $d[$b]; echo "|";
+  echo sprintf("%d %s", $d[$b], $d[$b]), "|", strval($d[$b]), "|";
+  echo match(true) { $d[$b] => "t", default => "d" }, "|";
+  switch ($d[$b]) { case false: echo "f"; break; case true: echo "t"; break; default: echo "n"; }
+  echo "\n"; }
+f(0); f(1); f(7);
+function m(int $b) { $d = ["a", 1, 2.5]; echo sprintf("%s", $d[$b]), strval($d[$b]); print $d[$b]; echo "\n"; }
+m(0); m(2); m(9);
+"#,
+    );
+    assert_eq!(out.stdout, "1|1 1|1|t|t\n|0 ||d|f\n|0 ||d|f\naaa\n2.52.52.5\n\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

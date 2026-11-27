@@ -50,6 +50,7 @@ pub(super) fn lower_switch(
         }
         let (subject, owner) = if preserve_subject
             || ctx.builder.value_defining_op(subject.value) == Some(Op::StrCharAt)
+            || ctx.value_is_owning_temporary(subject)
         {
             crate::ir_lower::expr::root_owned_call_operand(ctx, subject, span)
         } else { (subject, None) };
