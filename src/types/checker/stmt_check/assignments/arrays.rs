@@ -123,6 +123,8 @@ pub(super) fn check_array_assign(
         // only when the key really skips a slot, so the loop keeps raw integer slots where
         // widening to `Array(Mixed)` would box every one of them.
         let promotable = !forces_hash
+            && (elem_ty.codegen_repr() != PhpType::Bool
+                || crate::types::checker::promotable_arrays::bool_slot_value(value))
             && checker.promotable_array_write(
                 array, index, elem_ty, &idx_ty, &normalized_idx_ty, index_is_foreach_key, &val_ty,
             );
@@ -166,7 +168,12 @@ pub(super) fn check_array_assign(
                 .insert(array.to_string());
         }
         if promotable {
-            // The local keeps its `array<int>` storage; nothing in its static type changes.
+            // The local keeps its typed storage; only a `false` list written `true` widens its
+            // view to the `array<bool>` the same slots hold.
+            if elem_ty.codegen_repr() == PhpType::Bool && **elem_ty != PhpType::Bool {
+                reject_declared_element_widening(checker, array, &arr_ty, value, &val_ty, span)?;
+                env.insert(array.to_string(), PhpType::Array(Box::new(PhpType::Bool)));
+            }
         } else if forces_hash || skips_nonempty_slot {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
@@ -577,9 +584,18 @@ pub(super) fn check_array_push(
     let val_ty = checker.element_storage_type(value, val_ty);
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
-            let merged_ty = checker
-                .merge_array_element_type(elem_ty, &val_ty)
-                .unwrap_or(PhpType::Mixed);
+            // A promotable `bool` local keeps its one-word slots whichever `bool` it appends:
+            // boxing them here would leave the promoted storage behind a `mixed` view.
+            let bool_slots = checker.is_promotable_array_local(array)
+                && elem_ty.codegen_repr() == PhpType::Bool
+                && val_ty.codegen_repr() == PhpType::Bool;
+            let merged_ty = if bool_slots {
+                PhpType::Bool
+            } else {
+                checker
+                    .merge_array_element_type(elem_ty, &val_ty)
+                    .unwrap_or(PhpType::Mixed)
+            };
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
     } else if let PhpType::AssocArray {

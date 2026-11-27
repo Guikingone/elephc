@@ -1075,7 +1075,7 @@ pub(super) fn lower_count_args(
     if let [Expr { kind: ExprKind::Variable(name), span, .. }] = pruned.as_slice() {
         if ctx.is_promotable_array_local(name)
             && matches!(ctx.local_type(name).codegen_repr(),
-                PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+                PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Int | PhpType::Bool))
         {
             return vec![ctx.load_local(name, Some(*span)).value];
         }

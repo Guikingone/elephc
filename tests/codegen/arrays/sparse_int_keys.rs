@@ -718,3 +718,103 @@ echo f(5), "\n";
     assert_eq!(out.stdout, "[{\"0\":0,\"1\":1,\"3\":3,\"4\":4},{\"1\":1,\"3\":1},[2,0,2,2,2],[7,5,7,6,7],{\"1\":5,\"3\":6},{\"0\":1,\"1\":1,\"3\":1,\"4\":1},{\"0\":1,\"1\":1,\"3\":1,\"4\":1},[2,1,2],{\"0\":1,\"1\":1,\"3\":1,\"4\":1},{\"0\":1,\"1\":1,\"3\":1,\"4\":1},{\"0\":1,\"1\":1,\"3\":1,\"4\":1}]\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+
+/// A `bool` list written under an unbounded key stays typed and promotes to a hash only when
+/// the key really skips a slot.
+#[test]
+fn test_promotable_bool_list_keeps_slots_through_sparse_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n, int $u) { $d = []; for ($i = 0; $i < $n; $i++) { $d[$i] = false; }
+  for ($k = 0; $k < 3; $k++) { $d[$u + $k] = true; }
+  return $d; }
+echo json_encode(f(4, 1)), "\n"; echo json_encode(f(4, 3)), "\n"; echo json_encode(f(2, 7)), "\n"; echo json_encode(f(3, -2)), "\n";
+function g(int $n) { $d = []; for ($i = 0; $i < $n; $i++) { $d[$i] = false; }
+  $u = $n * 2; for ($k = 0; $k < 2; $k++) { $d[$u] = true; $u++; }
+  $c = 0; for ($i = 0; $i < $n * 3; $i++) { if (isset($d[$i])) { $c++; } if (!empty($d[$i])) $c += 10; }
+  var_dump(count($d), $c, $d[$n*2] ?? "dflt", $d[1] ?? "dflt");
+  foreach ($d as $k => $v) echo $k, "=", var_export($v, true), " "; echo "\n";
+  $copy = $d; $copy[100] = true; echo count($d), count($copy), "\n";
+  var_dump(array_keys($d), in_array(true, $d, true));
+  return $d; }
+var_dump(g(3));
+function h(int $n) { $seen = []; for ($i = 0; $i < $n; $i++) { $seen[$i] = false; }
+  $x = 5; $seen[$x] = true; $seen["k"] = true; var_dump($seen); }
+h(2);
+"#,
+    );
+    assert_eq!(out, "[false,true,true,true]\n[false,false,false,true,true,true]\n{\"0\":false,\"1\":false,\"7\":true,\"8\":true,\"9\":true}\n{\"0\":true,\"1\":false,\"2\":false,\"-2\":true,\"-1\":true}\nint(5)\nint(25)\nbool(true)\nbool(false)\n0=false 1=false 2=false 6=true 7=true \n56\narray(5) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n  [2]=>\n  int(2)\n  [3]=>\n  int(6)\n  [4]=>\n  int(7)\n}\nbool(true)\narray(5) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [2]=>\n  bool(false)\n  [6]=>\n  bool(true)\n  [7]=>\n  bool(true)\n}\narray(4) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [5]=>\n  bool(true)\n  [\"k\"]=>\n  bool(true)\n}\n");
+}
+
+/// A warned read of a missing `bool` list element is PHP's `null`, in value position and in
+/// truth tests alike (the slot's null sentinel word read as `true` before).
+#[test]
+fn test_missing_bool_list_element_reads_null() {
+    let out = compile_and_run(
+        r#"<?php
+$i = 7; $b = [true];
+if ($b[$i]) echo "T\n"; else echo "F\n";
+echo $b[$i] ? "t" : "f", "\n";
+var_dump(!$b[$i], $b[$i] == false, $b[$i] === true, $b[$i] ?? "dflt", isset($b[$i]), empty($b[$i]));
+function g(array $x, int $j) { return $x[$j]; }
+var_dump(g([true, true], 5));
+echo "[", $b[$i], "]\n";
+"#,
+    );
+    assert_eq!(out, "F\nf\nbool(true)\nbool(true)\nbool(false)\nstring(4) \"dflt\"\nbool(false)\nbool(true)\nNULL\n[]\n");
+}
+
+/// A missed `bool` list read written into another slot stores PHP's `null`, not the sentinel.
+#[test]
+fn test_bool_list_missing_read_written_back_stays_null() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n, int $u) { $d = []; for ($i = 0; $i < $n; $i++) { $d[$i] = false; }
+  $d[$u] = $d[$u + 20]; var_dump($d); $d[$u+1] = !$d[$u + 30]; var_dump($d); }
+f(2, 2); f(2, 6);
+"#,
+    );
+    assert_eq!(out, "array(3) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [2]=>\n  NULL\n}\narray(4) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [2]=>\n  NULL\n  [3]=>\n  bool(true)\n}\narray(3) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [6]=>\n  NULL\n}\narray(4) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [6]=>\n  NULL\n  [7]=>\n  bool(true)\n}\n");
+}
+
+/// Visited-set and sieve loops over a promotable `bool` list read missing slots as `null`.
+#[test]
+fn test_promotable_bool_list_visited_set_walks() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $n) { $seen = []; for ($i = 0; $i < $n; $i++) { $seen[$i] = false; }
+  $x = 1; $cnt = 0;
+  while (!$seen[$x]) { $seen[$x] = true; $x = ($x * 3 + 1) % $n; $cnt++; }
+  return $cnt . ":" . json_encode($seen); }
+echo f(10), "\n", f(7), "\n", f(1), "\n";
+function sieve(int $n) { $c = []; for ($i = 0; $i <= $n; $i++) $c[$i] = false; $r = [];
+  for ($i = 2; $i <= $n; $i++) { if (!$c[$i]) { $r[] = $i; for ($j = $i * $i; $j <= $n; $j += $i) $c[$j] = true; } } return $r; }
+echo implode(",", sieve(60)), "\n";
+function sieve2(int $n) { $c = []; $r = [];
+  for ($i = 2; $i <= $n; $i++) { if (!isset($c[$i])) { $r[] = $i; for ($j = $i * $i; $j <= $n * 2; $j += $i) $c[$j] = true; } } echo count($c), "\n"; return $r; }
+echo implode(",", sieve2(60)), "\n";
+function sieve3(int $n) { $c = [false, false]; $r = [];
+  for ($i = 2; $i <= $n; $i++) { if (empty($c[$i])) { $r[] = $i; for ($j = $i * $i; $j <= $n * 2; $j += $i) $c[$j] = true; } } echo count($c), json_encode($c), "\n"; return $r; }
+echo implode(",", sieve3(30)), "\n";
+"#,
+    );
+    assert_eq!(out, "4:[true,true,false,true,true,false,false,false,false,false]\n6:[true,true,true,false,true,true,true]\n2:[true,true]\n2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59\n89\n2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59\n44{\"0\":false,\"1\":false,\"4\":true,\"6\":true,\"8\":true,\"10\":true,\"12\":true,\"14\":true,\"16\":true,\"18\":true,\"20\":true,\"22\":true,\"24\":true,\"26\":true,\"28\":true,\"30\":true,\"32\":true,\"34\":true,\"36\":true,\"38\":true,\"40\":true,\"42\":true,\"44\":true,\"46\":true,\"48\":true,\"50\":true,\"52\":true,\"54\":true,\"56\":true,\"58\":true,\"60\":true,\"9\":true,\"15\":true,\"21\":true,\"27\":true,\"33\":true,\"39\":true,\"45\":true,\"51\":true,\"57\":true,\"25\":true,\"35\":true,\"55\":true,\"49\":true}\n2,3,5,7,11,13,17,19,23,29\n");
+}
+
+/// An append or string-key write after a sparse write of a promotable `bool` list keeps PHP's
+/// keys, and copies of the promoted storage stay intact.
+#[test]
+fn test_promotable_bool_list_append_after_sparse_write() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $u){ $h=[false]; $h[$u]=true; $h[]=false; var_dump($h); foreach ($h as $k => $v) echo $k, ","; echo "\n"; }
+f(2); f(7);
+function g(int $u){ $h=[false]; $h[$u]=true; $h["k"]=false; var_dump($h); }
+g(2);
+function l(int $u,int $n){ $h=[]; for($i=0;$i<$n;$i++){$h[$i]=false;} $h[$u]=true; $h[]=false; foreach($h as $k=>$v){echo $k,",";} $x=$h; $x[0]=true; var_dump(count($x)); echo json_encode($x),"\n"; }
+l(50,3); l(1,3);
+"#,
+    );
+    assert_eq!(out, "array(3) {\n  [0]=>\n  bool(false)\n  [2]=>\n  bool(true)\n  [3]=>\n  bool(false)\n}\n0,2,3,\narray(3) {\n  [0]=>\n  bool(false)\n  [7]=>\n  bool(true)\n  [8]=>\n  bool(false)\n}\n0,7,8,\narray(3) {\n  [0]=>\n  bool(false)\n  [2]=>\n  bool(true)\n  [\"k\"]=>\n  bool(false)\n}\n0,1,2,50,51,int(5)\n{\"0\":true,\"1\":false,\"2\":false,\"50\":true,\"51\":false}\n0,1,2,3,int(4)\n[true,true,false,false]\n");
+}

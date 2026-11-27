@@ -68,6 +68,31 @@ pub(crate) fn promotable_element(elem_ty: &PhpType) -> bool {
     elem_ty.codegen_repr() == PhpType::Int
 }
 
+/// Returns whether a candidate local's typed packed storage may be promoted to a hash at run
+/// time with its raw one-word slots kept: `int` (the nullable-read view above) and `bool`.
+///
+/// A `bool` local only keeps its storage local: its reads stay `bool` (a missed key reads as
+/// `false`, as an out-of-range read of any typed `bool` list does), and every whole-value read,
+/// call argument and `return` takes the kind-aware `array<mixed>` view.
+pub(crate) fn promotable_storage_element(elem_ty: &PhpType) -> bool {
+    matches!(elem_ty.codegen_repr(), PhpType::Int | PhpType::Bool)
+}
+
+/// Returns whether a value written into a promotable `bool` slot is a genuine `bool`.
+///
+/// A missed element read has no nullable `bool` representation (it materializes the null
+/// sentinel word), so only values that cannot be one keep the slot: literals, operators and
+/// locals. Anything else keeps the hash storage the write took before.
+pub(crate) fn bool_slot_value(value: &Expr) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::BoolLiteral(_)
+            | ExprKind::Not(_)
+            | ExprKind::BinaryOp { .. }
+            | ExprKind::Variable(_)
+    )
+}
+
 /// Returns whether a boxed or counter key type reads a promotable local as its element type.
 fn promotable_read_key(idx_ty: &PhpType) -> bool {
     matches!(idx_ty, PhpType::Mixed) || idx_ty.is_int_float_union()
@@ -88,7 +113,9 @@ impl Checker {
     ) -> bool {
         if !self.promotable_array_candidates.contains(array)
             || self.ref_aliased_locals.contains(array)
-            || !promotable_element(elem_ty)
+            || !promotable_storage_element(elem_ty)
+            || (elem_ty.codegen_repr() == PhpType::Bool
+                && !self.promotable_array_candidates.bool_slot_safe(array))
             || index_is_foreach_key
         {
             return false;
@@ -101,10 +128,15 @@ impl Checker {
             || promotable_read_key(idx_ty);
         // A `?int` value keeps the slots typed too: codegen stores an integer in its slot and
         // PHP's `null` as a null entry of the promoted hash.
-        let nullable_int = val_ty.codegen_repr() == PhpType::TaggedScalar;
+        let nullable_int = val_ty.codegen_repr() == PhpType::TaggedScalar
+            && elem_ty.codegen_repr() == PhpType::Int;
+        // `false` and `bool` share the slot: the write widens the view to `array<bool>`.
+        let bool_slot = elem_ty.codegen_repr() == PhpType::Bool
+            && val_ty.codegen_repr() == PhpType::Bool;
         key_qualifies
             && (elem_ty == val_ty
                 || nullable_int
+                || bool_slot
                 || self
                     .merge_array_element_type(elem_ty, val_ty)
                     .is_some_and(|merged| &merged == elem_ty))
@@ -198,7 +230,7 @@ impl Checker {
     /// read a promotable sink receives raw keeps the typed view.
     pub(crate) fn promotable_array_value_view(&mut self, name: &str, span: Span, ty: PhpType) -> PhpType {
         let promotable = self.is_promotable_array_local(name)
-            && matches!(&ty, PhpType::Array(elem) if promotable_element(elem));
+            && matches!(&ty, PhpType::Array(elem) if promotable_storage_element(elem));
         if !promotable || !span.identifies_a_node() || self.promotable_raw_sites.contains(&span) {
             return ty;
         }
@@ -803,6 +835,8 @@ pub(crate) struct PromotableCandidates {
     written: HashSet<String>,
     /// Locals with an element write that may leave packed storage (`Scan::float_unsafe`).
     float_unsafe: HashSet<String>,
+    /// Locals with a write a promotable `bool` slot cannot take (`Scan::bool_unsafe`).
+    bool_unsafe: HashSet<String>,
     /// What each whole assignment of a local stores (`Scan::assign_sources`).
     assign_sources: HashMap<String, Vec<AssignSource>>,
     /// Whether the body holds a construct a typed clone would duplicate.
@@ -838,6 +872,12 @@ impl PromotableCandidates {
     /// enclosing loop's storage contract may widen to a hash later in the body.
     pub(crate) fn float_list_safe(&self, name: &str) -> bool {
         self.contains(name) && !self.float_unsafe.contains(name)
+    }
+
+    /// Returns whether every element write and append of candidate `name` can keep a promotable
+    /// `bool` slot: genuine `bool` values under keys that are not syntactically strings.
+    pub(crate) fn bool_slot_safe(&self, name: &str) -> bool {
+        self.contains(name) && !self.bool_unsafe.contains(name)
     }
 
     /// Returns what the whole assignments of `name` store.
@@ -877,6 +917,7 @@ pub(crate) fn find_candidates(checker: &Checker, body: &[Stmt]) -> PromotableCan
         keyed: scan.keyed,
         written: scan.written,
         float_unsafe: scan.float_unsafe,
+        bool_unsafe: scan.bool_unsafe,
         assign_sources: scan.assign_sources,
         clone_blocked: scan.clone_blocked,
     }
@@ -983,6 +1024,9 @@ struct Scan {
     float_unsafe: HashSet<String>,
     /// The packed counters of the `for` loops enclosing the statement being walked.
     for_counters: Vec<super::packed_counter::PackedLoopCounter>,
+    /// Locals with an element write or append a promotable `bool` slot cannot take: a value
+    /// that may be a missed read (`bool_slot_value`) or a key that is syntactically a string.
+    bool_unsafe: HashSet<String>,
     /// What each whole assignment of a local stores, outside closures.
     assign_sources: HashMap<String, Vec<AssignSource>>,
     /// Set when a builtin can read or rebind every local of the body.
@@ -1034,6 +1078,17 @@ impl Scan {
                 if !counter_write {
                     self.float_unsafe.insert(array.clone());
                 }
+                if !bool_slot_value(value)
+                    || matches!(
+                        &index.kind,
+                        ExprKind::StringLiteral(_)
+                            | ExprKind::Null
+                            | ExprKind::Cast { target: CastType::String, .. }
+                            | ExprKind::BinaryOp { op: BinOp::Concat, .. }
+                    )
+                {
+                    self.bool_unsafe.insert(array.clone());
+                }
                 if self.key_may_skip(index) && value_may_stay_int(value) {
                     self.keyed.insert(array.clone());
                 }
@@ -1042,6 +1097,9 @@ impl Scan {
             }
             StmtKind::ArrayPush { array, value } => {
                 self.written.insert(array.clone());
+                if !bool_slot_value(value) {
+                    self.bool_unsafe.insert(array.clone());
+                }
                 self.expr(value);
             }
             StmtKind::NestedArrayAssign { target, value } => {

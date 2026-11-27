@@ -93,6 +93,16 @@ impl Checker {
                     // already produces that representation, and an `int` view would turn a
                     // stored `null` into zero the next time the value is written back.
                     Ok(PhpType::Union(vec![PhpType::Int, PhpType::Void]))
+                } else if !for_write
+                    && matches!(&array.kind, ExprKind::Variable(_))
+                    && elem_ty.codegen_repr() == PhpType::Bool
+                    && !crate::types::nonempty_array_key_stays_in_range(index)
+                {
+                    // A `bool` slot has no nullable one-word form: a missed key materializes the
+                    // null sentinel word, which every `bool` consumer would read as `true`. A
+                    // read nothing bounds is the boxed `?bool` PHP's miss (`null`) needs; truth
+                    // tests keep the raw slot (`ir_lower::expr::lower_promotable_bool_read_truth`).
+                    Ok(PhpType::Union(vec![PhpType::Bool, PhpType::Void]))
                 } else {
                     Ok(*elem_ty.clone())
                 }

@@ -198,6 +198,19 @@ pub(super) fn lower_array_access_with_missing_warning(
         ctx.end_quiet_undefined_reads();
         value
     };
+    // A local `bool` list read under a key nothing bounds reads as the boxed `?bool` the checker
+    // typed: `bool` has no nullable one-word form, and a missed key must read as PHP's `null`.
+    if warn_on_missing
+        && matches!(&array.kind, ExprKind::Variable(_))
+        && !crate::types::nonempty_array_key_stays_in_range(index)
+        && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Bool)
+        && !value_is_nullable(ctx, array_value.value)
+    {
+        return lower_array_access_from_value_with_null_preservation(
+            ctx, array_value, index, expr, true, true,
+        );
+    }
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
 }
 
@@ -964,4 +977,37 @@ pub(super) fn array_access_expr_satisfies_array_access(
 ) -> bool {
     let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, array);
     type_satisfies_array_access_for_ir(ctx, &ty)
+}
+
+/// Lowers the truth value of a warned element read of a local `bool` list without boxing.
+///
+/// Its value reads are the boxed `?bool` (a missed key is PHP's `null`), but a truth test only
+/// needs the slot: a stored `bool` is exactly 0 or 1, and the miss materializes the null
+/// sentinel word, which is never 1, so `slot == 1` is PHP's truthiness of the read, `null`
+/// included. `None` leaves every other expression to ordinary lowering.
+pub(crate) fn lower_promotable_bool_read_truth(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::ArrayAccess { array, index } = &expr.kind else { return None; };
+    let ExprKind::Variable(name) = &array.kind else { return None; };
+    if !matches!(ctx.local_type(name).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Bool)
+    {
+        return None;
+    }
+    let array_value = lower_element_receiver(ctx, array);
+    let read = lower_array_access_from_receiver(ctx, array_value, index, expr, true);
+    if ctx.builder.value_php_type(read.value).codegen_repr() != PhpType::Bool {
+        return Some(ctx.truthy_consuming(read, Some(expr.span)));
+    }
+    let one = lower_int_literal(ctx, 1, expr);
+    Some(ctx.emit_value(
+        Op::ICmp,
+        vec![read.value, one.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(expr.span),
+    ))
 }

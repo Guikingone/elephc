@@ -352,10 +352,16 @@ fn apply_array_write_evidence(
         // `check_array_assign` keeps a promotable candidate's `array<int>` storage under a boxed
         // or unbounded key when the value is an integer or `?int` (codegen promotes the storage at
         // run time instead), so this pass must not widen the loop's contract to `mixed` either.
+        // A `bool` (or `false`) list written a `bool` keeps its one-word slots the same way.
+        let bool_slots = matches!(&current, PhpType::Array(element) if element.codegen_repr() == PhpType::Bool)
+            && incoming.codegen_repr() == PhpType::Bool
+            && super::promotable_arrays::bool_slot_value(write.value)
+            && promotable_candidates.bool_slot_safe(write.name);
         let promotable_keep = !forces_hash
             && promotable_candidates.contains(write.name)
-            && matches!(&current, PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
-            && matches!(incoming.codegen_repr(), PhpType::Int | PhpType::TaggedScalar)
+            && ((matches!(&current, PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+                && matches!(incoming.codegen_repr(), PhpType::Int | PhpType::TaggedScalar))
+                || bool_slots)
             && write.index.is_some_and(|index| {
                 !matches!(&index.kind, ExprKind::Variable(name) if foreach_keys.contains(name.as_str()))
                     && !crate::types::nonempty_array_key_stays_in_range(index)
@@ -364,6 +370,9 @@ fn apply_array_write_evidence(
                     })
             });
         if promotable_keep {
+            if bool_slots {
+                env.insert(write.name.to_string(), PhpType::Array(Box::new(PhpType::Bool)));
+            }
             continue;
         }
         let updated = match current {

@@ -35,7 +35,7 @@ pub(super) fn lower_local_value(
     }
     if ctx.is_promotable_array_value_read(name, span)
         && matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
-            PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+            PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Int | PhpType::Bool))
     {
         return promotable_array_value_view(ctx, value, span);
     }

@@ -74,8 +74,13 @@ fn lower_condition_tree(
         ExprKind::Not(inner) =>
             lower_condition_tree(ctx, inner, else_target, then_target, continuations),
         _ => {
-            let value = lower_expr_inner(ctx, condition);
-            let value = ctx.truthy_consuming(value, Some(condition.span));
+            let value = match super::array_access::lower_promotable_bool_read_truth(ctx, condition) {
+                Some(truth) => truth,
+                None => {
+                    let value = lower_expr_inner(ctx, condition);
+                    ctx.truthy_consuming(value, Some(condition.span))
+                }
+            };
             ctx.builder.terminate(Terminator::CondBr {
                 cond: value.value,
                 then_target,

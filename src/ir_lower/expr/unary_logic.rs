@@ -117,8 +117,13 @@ pub(super) fn lower_tagged_scalar_to_int(
 
 /// Lowers logical negation.
 pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
-    let value = lower_expr(ctx, inner);
-    let value = ctx.truthy_consuming(value, Some(expr.span));
+    let value = match super::array_access::lower_promotable_bool_read_truth(ctx, inner) {
+        Some(truth) => truth,
+        None => {
+            let value = lower_expr(ctx, inner);
+            ctx.truthy_consuming(value, Some(expr.span))
+        }
+    };
     let zero = lower_int_literal(ctx, 0, expr);
     ctx.emit_value(
         Op::ICmp,

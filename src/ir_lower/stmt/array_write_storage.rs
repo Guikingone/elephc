@@ -125,7 +125,7 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
         // integer under its own tag, as the typed reads of the promoted hash expect.
         let promotable = ctx.is_promotable_array_local(array)
             && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
-                PhpType::Array(element) if element.codegen_repr() == PhpType::Int);
+                PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Int | PhpType::Bool));
         ctx.emit_void(
             op,
             vec![array_value.value, value.value],
@@ -398,6 +398,14 @@ pub(in crate::ir_lower) fn ref_bound_mixed_indexed_array_write(
 
 /// Returns the refined array type after writing a value into an indexed array.
 pub(super) fn indexed_array_write_updated_type(current_ty: PhpType, value_ty: PhpType) -> Option<PhpType> {
+    // A `false` list written a `bool` keeps its slots, but its element view widens: reads must
+    // not keep the constant `false` type the list had.
+    if matches!(&current_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::False)
+        && value_ty.codegen_repr() == PhpType::Bool
+        && value_ty != PhpType::False
+    {
+        return Some(PhpType::Array(Box::new(PhpType::Bool)));
+    }
     match current_ty.codegen_repr() {
         PhpType::Array(elem_ty) if is_empty_indexed_array_element(elem_ty.as_ref()) => Some(
             PhpType::Array(Box::new(normalize_empty_array_write_element_type(value_ty))),
