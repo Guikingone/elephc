@@ -112,6 +112,8 @@ mod object_hook_cleanup;
 mod nested_local_update_cow;
 #[path = "runtime_gc/nested_mixed_fast_read.rs"]
 mod nested_mixed_fast_read;
+#[path = "runtime_gc/hash_counter_updates.rs"]
+mod hash_counter_updates;
 mod scalar_set_fast_path;
 mod heap_tail_scan;
 #[path = "runtime_gc/eval_constructor.rs"]

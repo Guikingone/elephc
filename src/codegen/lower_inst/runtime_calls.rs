@@ -112,6 +112,7 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
         RuntimeCallTarget::NestedMixedArrayFastGet => lower_nested_mixed_array_fast_get(ctx, inst),
+        RuntimeCallTarget::HashAddIntInPlace => lower_hash_add_int_in_place(ctx, inst),
         RuntimeCallTarget::MixedCellCopyForWrite => lower_mixed_cell_copy_for_write(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
@@ -383,6 +384,55 @@ fn lower_nested_mixed_array_fast_get(ctx: &mut FunctionContext<'_>, inst: &Instr
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_nested_mixed_fast_get");
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    store_if_result(ctx, inst)
+}
+
+/// Reads the named slot's raw storage, normalizes the key like every hash access, then calls the
+/// guarded in-place integer add matching the slot's final representation.
+///
+/// The slot is read here rather than through an EIR load because its storage is decided for the
+/// whole function: a typed load from a slot later widened to Mixed would unbox and retain the
+/// hash, which both defeats the owner check and leaks that reference.
+fn lower_hash_add_int_in_place(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot_operand = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let addend = expect_operand(inst, 2)?;
+    let slot = ctx.const_i64_value(slot_operand)
+        .and_then(|raw| u32::try_from(raw).ok())
+        .map(crate::ir::LocalSlotId::from_raw);
+    let helper = slot.and_then(|slot| {
+        if ctx.emitter.target.arch != crate::codegen::platform::Arch::X86_64
+            || ctx.local_slot_ever_stores_ref_cell_pointer(slot)
+            || ctx.has_dynamic_ref_cell_state(slot)
+        {
+            return None;
+        }
+        match ctx.local_php_type(slot).ok()?.codegen_repr() {
+            PhpType::Mixed => Some("__rt_hash_add_int_in_place_boxed"),
+            PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+                Some("__rt_hash_add_int_in_place")
+            }
+            _ => None,
+        }
+    });
+    let (Some(slot), Some(helper)) = (slot, helper) else {
+        // No fast path for this storage: report "not done" so the ordinary statement runs.
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return store_if_result(ctx, inst);
+    };
+    super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+    ctx.emitter.instruction("push rsi");                                        // keep the normalized key low word across operand loads
+    ctx.emitter.instruction("push rdx");                                        // keep the normalized key high word across operand loads
+    ctx.load_value_to_reg(addend, "rcx")?;
+    ctx.emitter.instruction("push rcx");                                        // keep the addend across the raw slot load
+    ctx.emitter.instruction("sub rsp, 8");                                      // keep the slot load's stack use aligned
+    ctx.load_raw_local_to_result(slot)?;
+    ctx.emitter.instruction("add rsp, 8");                                      // drop the alignment pad
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the slot's raw storage word
+    ctx.emitter.instruction("pop rcx");                                         // restore the addend
+    ctx.emitter.instruction("pop rdx");                                         // restore the normalized key high word
+    ctx.emitter.instruction("pop rsi");                                         // restore the normalized key low word
+    abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
 }
 

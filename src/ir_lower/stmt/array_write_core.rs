@@ -138,6 +138,23 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    // A counter update of an existing integer element first tries the in-place add.
+    if super::hash_int_updates::lower(ctx, array, index, value, span,
+        |ctx| lower_array_assign_ordinary(ctx, array, index, value, span)).is_ok()
+    {
+        return;
+    }
+    lower_array_assign_ordinary(ctx, array, index, value, span);
+}
+
+/// Lowers an indexed array assignment through the general read/convert/write paths.
+fn lower_array_assign_ordinary(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) {
     let update = desugared_element_update(value, span, |read| {
         reads_local_array_element(read, array, index)
     });

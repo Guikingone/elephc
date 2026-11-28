@@ -125,6 +125,10 @@ pub enum RuntimeCallTarget {
     /// Reads `$a[$i][$k]` from a local `array<mixed>` without cloning the intermediate cell.
     /// Returns an owned Mixed leaf, or zero when a guard fails and the ordinary chain must run.
     NestedMixedArrayFastGet,
+    /// Adds an integer literal to an existing integer element of a local `array<..., mixed>`
+    /// in place. Operands: the local's slot index (codegen reads its raw storage), the key and
+    /// the addend. Returns 1 when done, or 0 when nothing changed and the ordinary statement runs.
+    HashAddIntInPlace,
     /// Copies a public getter value for write while preserving explicit PHP reference wrappers.
     MixedCellCopyForWrite,
     /// Checks whether exactly one of the selected array cell and its payload survives beyond
@@ -285,6 +289,10 @@ impl RuntimeCallTarget {
                     result: IrType::Heap(IrHeapKind::Hash),
                 })
             }
+            RuntimeCallTarget::HashAddIntInPlace => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 3,
+                max_operands: Some(3),
+            }),
             RuntimeCallTarget::NestedMixedArrayFastGet => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Array), IrType::I64, IrType::I64],
                 result: IrType::Heap(IrHeapKind::Mixed),
@@ -382,6 +390,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
             RuntimeCallTarget::NestedMixedArrayFastGet => "array.nested_mixed_fast_get",
+            RuntimeCallTarget::HashAddIntInPlace => "array.hash_add_int_in_place",
             RuntimeCallTarget::MixedCellCopyForWrite => "array.mixed_cell_copy_for_write",
             RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
             RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",

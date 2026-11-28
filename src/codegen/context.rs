@@ -1528,6 +1528,16 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Returns the integer a value was defined with when it comes straight from `const_i64`.
+    pub(super) fn const_i64_value(&self, value: ValueId) -> Option<i64> {
+        let ValueDef::Instruction { inst, .. } = self.function.value(value)?.def else { return None };
+        let inst = self.function.instruction(inst)?;
+        match (inst.op, &inst.immediate) {
+            (Op::ConstI64, Some(crate::ir::Immediate::I64(raw))) => Some(*raw),
+            _ => None,
+        }
+    }
+
     /// After an in-place hash/array mutation whose runtime helper returns the
     /// possibly-reallocated container pointer in `value`'s register (already
     /// persisted via `store_result_value`), writes that pointer back to global
